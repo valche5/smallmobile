@@ -80,6 +80,33 @@ impl Searcher for crate::mcts::Mcts {
     }
 }
 
+/// L'IA du jeu comme « recherche » : une seule visite, sur son coup. Ses parties ne coûtent presque
+/// rien : elles apprennent au réseau à juger une position, et donnent un premier a priori des coups.
+/// Sa fin de tour est le coup `Auto`, sa défense le premier plan.
+impl Searcher for crate::agent::KernelAi {
+    fn name(&self) -> String {
+        crate::agent::Agent::name(self)
+    }
+
+    fn iterations(&self) -> usize {
+        1
+    }
+
+    fn search(&self, g: &Game, k: &Knowledge, rng: &mut Rng, _: usize, _: bool) -> Searched {
+        let legal = moves::legal(g);
+        let chosen = match g.state.phase {
+            Phase::Redeploy => legal.iter().find(|c| c.mv == moves::Move::Auto),
+            Phase::Defend => legal.first(),
+            _ => {
+                let mv = crate::agent::Agent::act(self, g, k, rng);
+                legal.iter().find(|c| c.mv == mv)
+            }
+        };
+        let c = chosen.expect("le coup de l'IA du jeu est parmi les coups possibles");
+        Searched { mv: c.mv, visits: vec![(c.key, 1)], details: vec![], value: f32::NAN }
+    }
+}
+
 struct Pending {
     enc: Encoded,
     actor: usize,

@@ -26,6 +26,8 @@ fn main() {
         "selfplay" => selfplay_cmd(&opts),
         "check-net" => check_net_cmd(&opts),
         "analyze" => analyze_cmd(&opts),
+        "agree" => agree_cmd(&opts),
+        "trace" => trace_cmd(&opts),
         _ => usage(),
     }
 }
@@ -198,4 +200,64 @@ fn analyze_cmd(opts: &HashMap<String, String>) {
         let mv = legal.iter().find(|c| c.key == *key).map(|c| moves::describe(&g, &c.mv)).unwrap_or_default();
         println!("{n:>8}  {:>7.1} %  {:>7.1} %  {mv}", 100.0 * q, 100.0 * prior);
     }
+}
+
+/// Deux recherches indépendantes sur les mêmes positions choisissent-elles le même coup ?
+/// (positions prises dans des parties de l'IA Normal, là où il y a plus d'un coup possible)
+fn agree_cmd(opts: &HashMap<String, String>) {
+    use smallmobile_lab::{know::Knowledge, moves, rand::Rng};
+    let name = opts.get("agent").unwrap_or_else(|| usage());
+    let searcher = agent::searcher_by_name(name).unwrap_or_else(|| usage());
+    let positions: usize = get(opts, "positions", 60);
+    let normal = agent::by_name("normal").unwrap();
+    let mut rng = Rng::new(get(opts, "seed", 5));
+    let (mut same, mut total) = (0, 0);
+    let mut game = 0u64;
+    while total < positions {
+        game += 1;
+        let table = Table::new(2 + game as usize % 4, 7000 + game);
+        let mut g = table.game(game as u32);
+        let k = Knowledge::default();
+        while g.state.phase != smallmobile_kernel::Phase::GameOver && total < positions {
+            let legal = moves::legal(&g);
+            if legal.len() > 1 && rng.below(8) == 0 {
+                let n = searcher.iterations();
+                let a = searcher.search(&g, &k, &mut rng.fork(), n, false).mv;
+                let b = searcher.search(&g, &k, &mut rng.fork(), n, false).mv;
+                same += usize::from(a == b);
+                total += 1;
+            }
+            let m = normal.act(&g, &k, &mut rng);
+            moves::play(&mut g, &m, &mut smallmobile_kernel::NoJournal).unwrap();
+        }
+    }
+    println!("{}: même coup {same}/{total} ({:.0} %)", searcher.name(), 100.0 * same as f64 / total as f64);
+}
+
+/// Une partie du joueur testé (place 0) contre le reste de la table, coup par coup.
+fn trace_cmd(opts: &HashMap<String, String>) {
+    use smallmobile_lab::{
+        know::{Knowledge, Returns},
+        moves,
+        rand::Rng,
+    };
+    let hero = agent(opts, "hero");
+    let field = agent(opts, "field");
+    let n: usize = get(opts, "players", 2);
+    let table = Table::new(n, get(opts, "map", 3));
+    let mut g = table.game(get(opts, "seed", 1));
+    let mut k = Knowledge::default();
+    let mut rng = Rng::new(1);
+    while g.state.phase != smallmobile_kernel::Phase::GameOver {
+        let pid = g.state.actor().unwrap();
+        let a: &dyn Agent = if pid == 0 { hero.as_ref() } else { field.as_ref() };
+        let m = a.act(&g, &k, &mut rng.fork());
+        let coins: Vec<i32> = g.state.players.iter().map(|p| p.coins).collect();
+        println!("m{} j{} {:?} {:?} : {}", g.state.round, pid + 1, g.state.phase, coins, moves::describe(&g, &m));
+        let mut ret = Returns::default();
+        moves::play(&mut g, &m, &mut ret).unwrap();
+        k.observe(ret.0, &g.state);
+    }
+    let coins: Vec<i32> = g.state.players.iter().map(|p| p.coins).collect();
+    println!("fin : {coins:?}");
 }

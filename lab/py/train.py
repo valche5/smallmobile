@@ -19,12 +19,15 @@ from data import ILLEGAL, load
 from model import GAIN_SCALE, Net, export, unpack_adj
 
 
-def batches(recs, idx, size, device):
+def batches(recs, idx, size, device, temp=1.0):
     for start in range(0, len(idx), size):
         r = recs[np.sort(idx[start : start + size])]
         visits = torch.from_numpy(r["visits"].astype(np.int32)).to(device)
         legal = visits != ILLEGAL
         visits = torch.where(legal, visits, 0).float()
+        if temp != 1.0:
+            # cibles aiguisées : visites^(1/T), le coup le plus visité pèse davantage
+            visits = (visits / visits.amax(1, keepdim=True).clamp(min=1)) ** (1.0 / temp)
         yield dict(
             node=torch.from_numpy(r["node"]).to(device),
             glob=torch.from_numpy(r["glob"]).to(device),
@@ -66,6 +69,7 @@ def main():
     ap.add_argument("--wd", type=float, default=1e-4)
     ap.add_argument("--gain-weight", type=float, default=0.25)
     ap.add_argument("--val-share", type=float, default=0.05)
+    ap.add_argument("--policy-temp", type=float, default=1.0, help="cible de politique : visites^(1/T)")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -91,7 +95,7 @@ def main():
         start = time.time()
         sums = np.zeros(5)
         count = 0
-        for b in batches(recs, rng.permutation(train_idx), args.batch, device):
+        for b in batches(recs, rng.permutation(train_idx), args.batch, device, args.policy_temp):
             pol, val, gain, acc, brier = losses(net, b)
             loss = pol + val + args.gain_weight * gain
             opt.zero_grad(set_to_none=True)
@@ -105,7 +109,7 @@ def main():
         vs = np.zeros(5)
         vc = 0
         with torch.no_grad():
-            for b in batches(recs, val_idx, 2048, device):
+            for b in batches(recs, val_idx, 2048, device, args.policy_temp):
                 vs += [x.item() for x in losses(net, b)]
                 vc += 1
         t, v = sums / count, vs / vc

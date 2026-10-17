@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use smallmobile_kernel::ids::MAX_PLAYERS;
-use smallmobile_kernel::{Game, Phase};
+use smallmobile_kernel::{Ai, Game, Level, Phase, Tuning};
 
 use crate::agent::Agent;
 use crate::encode::encode;
@@ -27,11 +27,31 @@ pub struct Config {
     /// Bruit de Dirichlet à la racine (auto-apprentissage) : part et concentration.
     pub noise: f32,
     pub alpha: f32,
+    /// Poids de la probabilité de victoire dans la valeur ; le reste vient de l'avance en pièces
+    /// prévue (pièces actuelles + pièces que le réseau prévoit d'ici la fin), sigmoïde d'échelle `scale`.
+    pub win_weight: f32,
+    pub scale: f32,
+    /// Part d'une fin de partie jouée par l'IA Normal dans la valeur d'une position nouvelle (le
+    /// reste vient du réseau), comme le premier AlphaGo. 0 : réseau seul.
+    pub rollout: f32,
+    /// Valeurs des coups ramenées entre 0 et 1 dans chaque nœud (comme MuZero) : les petits écarts
+    /// de valeur comptent autant que l'a priori.
+    pub normalize: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { iterations: 200, c_puct: 1.5, fpu: 0.2, noise: 0.0, alpha: 0.3 }
+        Config {
+            iterations: 200,
+            c_puct: 1.5,
+            fpu: 0.2,
+            noise: 0.0,
+            alpha: 0.3,
+            win_weight: 1.0,
+            scale: 8.0,
+            rollout: 0.0,
+            normalize: true,
+        }
     }
 }
 
@@ -47,6 +67,10 @@ impl Config {
                 "fpu" => cfg.fpu = v.parse().ok()?,
                 "noise" => cfg.noise = v.parse().ok()?,
                 "alpha" => cfg.alpha = v.parse().ok()?,
+                "w" => cfg.win_weight = v.parse().ok()?,
+                "s" => cfg.scale = v.parse().ok()?,
+                "roll" => cfg.rollout = v.parse().ok()?,
+                "norm" => cfg.normalize = v != "0",
                 _ => return None,
             }
         }
@@ -85,6 +109,7 @@ pub struct Searched {
 
 pub struct Az {
     pub cfg: Config,
+    tuning: Tuning,
     pub net: Arc<Net>,
     /// Nom affiché (le fichier de poids).
     pub label: String,
@@ -125,7 +150,7 @@ fn dirichlet(rng: &mut Rng, alpha: f32, n: usize) -> Vec<f32> {
 
 impl Az {
     pub fn new(cfg: Config, net: Arc<Net>, label: String) -> Self {
-        Az { cfg, net, label }
+        Az { cfg, tuning: Tuning::default(), net, label }
     }
 
     /// Valeur et a priori d'une position (le nœud n'a pas encore d'arêtes).
@@ -142,7 +167,51 @@ impl Az {
             .map(|(c, &e)| Edge { key: c.key, prior: e / sum, child: NO_CHILD, visits: 0, total: [0.0; 5] })
             .collect();
         node.expanded = true;
-        absolute(&eval.win, me, s.player_count())
+        let n = s.player_count();
+        let mut finals = [0.0f32; MAX_PLAYERS];
+        for r in 0..n {
+            let q = (me + r) % n;
+            finals[q] = s.players[q].coins as f32 + eval.gain[r];
+        }
+        let v = self.blend(&absolute(&eval.win, me, n), &finals, n);
+        let lambda = self.cfg.rollout;
+        if lambda <= 0.0 {
+            return v;
+        }
+        let mut end = *w;
+        for p in end.state.players.as_mut_slice() {
+            p.level = Level::Normal;
+        }
+        Ai::new(&self.tuning).play(&mut end, 50_000).expect("l'IA du jeu finit la partie");
+        let r = self.terminal(&end);
+        let mut out = [0.0; MAX_PLAYERS];
+        for q in 0..n {
+            out[q] = (1.0 - lambda) * v[q] + lambda * r[q];
+        }
+        out
+    }
+
+    /// La valeur d'une partie finie.
+    fn terminal(&self, g: &Game) -> Value {
+        let o = Outcome::of(g);
+        let (mut win, mut finals) = ([0.0; MAX_PLAYERS], [0.0; MAX_PLAYERS]);
+        for q in 0..o.players {
+            win[q] = o.win[q] as f32;
+            finals[q] = o.coins[q] as f32;
+        }
+        self.blend(&win, &finals, o.players)
+    }
+
+    /// La valeur de chaque joueur : victoire et avance en pièces (finales ou prévues) mêlées.
+    fn blend(&self, win: &Value, finals: &[f32; MAX_PLAYERS], n: usize) -> Value {
+        let w = self.cfg.win_weight;
+        let mut v = [0.0; MAX_PLAYERS];
+        for q in 0..n {
+            let rival = (0..n).filter(|&o| o != q).map(|o| finals[o]).fold(f32::NEG_INFINITY, f32::max);
+            let lead = 1.0 / (1.0 + (-(finals[q] - rival) / self.cfg.scale).exp());
+            v[q] = w * win[q] + (1.0 - w) * lead;
+        }
+        v
     }
 
     pub fn search(&self, root: &Game, k: &Knowledge, rng: &mut Rng) -> Searched {
@@ -174,12 +243,7 @@ impl Az {
             let mut node = 0u32;
             let value: Value = loop {
                 if w.state.phase == Phase::GameOver {
-                    let o = Outcome::of(&w);
-                    let mut v = [0.0; MAX_PLAYERS];
-                    for (x, y) in v.iter_mut().zip(o.win) {
-                        *x = y as f32;
-                    }
-                    break v;
+                    break self.terminal(&w);
                 }
                 let legal = moves::legal(&w);
                 if legal.len() == 1 {
@@ -210,11 +274,28 @@ impl Az {
                 let prior_sum: f32 = seen.iter().map(|&(_, ei)| n.edges[ei].prior).sum::<f32>().max(1e-6);
                 let parent_q = n.total[pid] / n.visits.max(1) as f32;
                 let sqrt_n = (visits as f32 + 1.0).sqrt();
+                let (mut lo, mut hi) = (parent_q, parent_q);
+                if self.cfg.normalize {
+                    for &(_, ei) in &seen {
+                        let e = &n.edges[ei];
+                        if e.visits > 0 {
+                            let q = e.total[pid] / e.visits as f32;
+                            lo = lo.min(q);
+                            hi = hi.max(q);
+                        }
+                    }
+                }
+                let norm = |q: f32| if hi - lo > 1e-6 { (q - lo) / (hi - lo) } else { 0.5 };
                 let mut best = 0;
                 let mut best_score = f32::NEG_INFINITY;
                 for (si, &(_, ei)) in seen.iter().enumerate() {
                     let e = &n.edges[ei];
-                    let q = if e.visits > 0 { e.total[pid] / e.visits as f32 } else { parent_q - self.cfg.fpu };
+                    let q = match (e.visits > 0, self.cfg.normalize) {
+                        (true, true) => norm(e.total[pid] / e.visits as f32),
+                        (true, false) => e.total[pid] / e.visits as f32,
+                        (false, true) => (norm(parent_q) - self.cfg.fpu).max(0.0),
+                        (false, false) => parent_q - self.cfg.fpu,
+                    };
                     let u = self.cfg.c_puct * e.prior / prior_sum * sqrt_n / (1.0 + e.visits as f32);
                     if q + u > best_score {
                         best_score = q + u;
@@ -261,7 +342,8 @@ impl Az {
 
 impl Agent for Az {
     fn name(&self) -> String {
-        format!("az({}, n={}, c={})", self.label, self.cfg.iterations, self.cfg.c_puct)
+        let c = &self.cfg;
+        format!("az({}, n={}, c={}, w={}, roll={})", self.label, c.iterations, c.c_puct, c.win_weight, c.rollout)
     }
 
     fn act(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Move {

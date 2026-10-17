@@ -114,8 +114,11 @@ fn az_named(name: &str) -> Option<crate::az::Az> {
     Some(crate::az::Az::new(cfg, std::sync::Arc::new(loaded), label))
 }
 
-/// Une IA qui cherche, pour l'auto-apprentissage (`mcts:…` ou `az:…`).
+/// Une IA qui cherche, pour l'auto-apprentissage (`mcts:…`, `az:…`, ou `normal` : l'IA du jeu).
 pub fn searcher_by_name(name: &str) -> Option<Box<dyn crate::selfplay::Searcher>> {
+    if let Some(level) = level_named(name) {
+        return Some(Box::new(KernelAi::new(level)));
+    }
     if let Some(opts) = name.strip_prefix("mcts") {
         let cfg = crate::mcts::Config::parse(opts.strip_prefix(':').unwrap_or(opts))?;
         return Some(Box::new(crate::mcts::Mcts::new(cfg)));
