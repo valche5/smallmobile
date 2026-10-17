@@ -1,0 +1,9 @@
+[package]
+name = "smallmobile-lab"
+version = "0.1.0"
+edition = "2024"
+description = "Laboratoire hors jeu : une IA de SmallMobile aussi forte que possible, sans limite de temps."
+publish = false
+
+[dependencies]
+smallmobile-kernel = { path = "../kernel" }

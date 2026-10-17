@@ -1,6 +1,7 @@
 [workspace]
 # kernel : le jeu (règles, IA, cartes), compilé en WebAssembly pour le téléphone et le serveur.
-members = ["kernel"]
+# lab : l'IA hors jeu (recherche et apprentissage), voir lab/JOURNAL.md.
+members = ["kernel", "lab"]
 resolver = "3"
 
 [profile.release]

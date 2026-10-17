@@ -5,3 +5,10 @@ version = 4
 [[package]]
 name = "smallmobile-kernel"
 version = "0.1.0"
+
+[[package]]
+name = "smallmobile-lab"
+version = "0.1.0"
+dependencies = [
+ "smallmobile-kernel",
+]
