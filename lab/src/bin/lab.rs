@@ -5,6 +5,7 @@
 //! lab bench --agent random [--players 2] [--games 20]
 //! lab selfplay --agent mcts:n=200 --games 1000 --out lab/data/gen0 [--players 2,3,4,5] [--sample-rounds 2]
 //! lab check-net --net poids.bin --data parties.bin [--count 5]   (comparaison avec lab/py/check.py)
+//! lab analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par lab/tools/export-room.ts)
 //! ```
 
 use std::collections::HashMap;
@@ -24,6 +25,7 @@ fn main() {
         "bench" => bench_cmd(&opts),
         "selfplay" => selfplay_cmd(&opts),
         "check-net" => check_net_cmd(&opts),
+        "analyze" => analyze_cmd(&opts),
         _ => usage(),
     }
 }
@@ -32,6 +34,8 @@ fn usage() -> ! {
     eprintln!("usage : lab arena --hero A --field B [--players 2,3,4,5] [--deals N] [--threads N] [--seed S]");
     eprintln!("        lab bench --agent A [--players N] [--games N]");
     eprintln!("        lab selfplay --agent A --games N --out DIR [--players 2,3,4,5] [--sample-rounds R] [--seed S]");
+    eprintln!("            [--full-share 0.25 --fast 50]   (part des recherches complètes, itérations des autres)");
+    eprintln!("        lab analyze --game partie.smk --agent az:net=poids.bin,n=20000");
     std::process::exit(2)
 }
 
@@ -115,7 +119,11 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
         games: get(opts, "games", 100),
         threads: get(opts, "threads", threads()),
         seed: get(opts, "seed", 1),
-        opts: selfplay::Options { sample_rounds: get(opts, "sample-rounds", 2) },
+        opts: selfplay::Options {
+            sample_rounds: get(opts, "sample-rounds", 2),
+            full_share: get(opts, "full-share", 1.0),
+            fast: get(opts, "fast", 50),
+        },
     };
     let out = opts.get("out").unwrap_or_else(|| usage());
     let start = Instant::now();
@@ -146,4 +154,48 @@ fn check_net_cmd(opts: &HashMap<String, String>) {
         println!("win {:?} gain {:?} logits {}", ev.win, ev.gain, legal.join(" "));
     }
     eprintln!("{:.1} µs par évaluation", 1e6 * start.elapsed().as_secs_f64() / evals.max(1) as f64);
+}
+
+/// Le meilleur coup d'une vraie partie, avec ce que la recherche pense de chaque coup.
+fn analyze_cmd(opts: &HashMap<String, String>) {
+    use smallmobile_lab::moves;
+    let words: Vec<u32> = std::fs::read(opts.get("game").unwrap_or_else(|| usage()))
+        .expect("fichier de partie")
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    let (map, state) =
+        smallmobile_kernel::wire::decode_game(&words).unwrap_or_else(|e| panic!("partie illisible : {e:?}"));
+    let g = smallmobile_kernel::Game::new(&map, state);
+    let Some(me) = g.state.actor() else {
+        println!("La partie est finie.");
+        return;
+    };
+    let name = opts.get("agent").unwrap_or_else(|| usage());
+    let Some(az) = name.strip_prefix("az:").and(agent::searcher_by_name(name)) else {
+        eprintln!("l'analyse demande une IA az:…");
+        std::process::exit(2)
+    };
+    // l'ordre des cartes rendues sous la pioche n'est pas sauvegardé : on le suppose inconnu
+    let k = smallmobile_lab::know::Knowledge::default();
+    let mut rng = smallmobile_lab::rand::Rng::new(get(opts, "seed", 1));
+    let start = Instant::now();
+    let s = az.search(&g, &k, &mut rng, az.iterations(), false);
+    let legal = moves::legal(&g);
+    println!(
+        "Joueur {} à jouer, manche {}/{} ({:.0} s de recherche)",
+        me + 1,
+        g.state.round,
+        g.state.max_rounds,
+        start.elapsed().as_secs_f64()
+    );
+    println!("Chance de victoire estimée : {:.1} %", 100.0 * s.value);
+    let mut rows: Vec<_> =
+        s.details.iter().zip(&s.visits).map(|(&(key, prior, q), &(_, n))| (n, key, prior, q)).collect();
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    println!("{:>8}  {:>7}  {:>8}  coup", "visites", "victoire", "a priori");
+    for (n, key, prior, q) in rows.iter().take(get(opts, "top", 12)) {
+        let mv = legal.iter().find(|c| c.key == *key).map(|c| moves::describe(&g, &c.mv)).unwrap_or_default();
+        println!("{n:>8}  {:>7.1} %  {:>7.1} %  {mv}", 100.0 * q, 100.0 * prior);
+    }
 }

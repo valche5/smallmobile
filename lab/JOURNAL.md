@@ -79,3 +79,55 @@ Constats :
 
 Prochaine étape : recherche (MCTS) sur mondes possibles, sans réseau, avec l'IA Normal pour finir
 les parties simulées. Premier but : battre nettement l'IA Difficile.
+
+## 2026-10-17 — Étape 1 : recherche sans réseau (MCTS)
+
+`mcts` : recherche Monte-Carlo sur mondes possibles « en boucle ouverte ». Chaque itération tire
+un monde (ordre caché des pioches, dés), descend l'arbre des suites de coups, essaie un coup
+nouveau, puis finit la partie avec l'IA Normal pour tout le monde. Plusieurs joueurs : chacun
+maximise sa propre récompense (max^n), et un coup possible dans certains mondes seulement est jugé
+sur ces mondes-là (UCB avec disponibilité). Un coup en plus à la fin de tour : « finir comme l'IA
+Normal » (son placement appris), en plus des 6 plans.
+
+Premier essai, 500 itérations par décision contre l'IA Difficile (100 donnes) :
+
+| | 2 j. | 3 j. | 4 j. | 5 j. | écart total |
+| --- | --- | --- | --- | --- | --- |
+| MCTS n=500 contre Difficile | 60 % (50) | 35 % (33) | 40 % (25) | 36 % (20) | +12 pts |
+
+Réglages, 300 itérations contre l'IA Normal (100 donnes, ± 4 à 5 points) — c : exploration,
+w : poids de la victoire dans la récompense (le reste : avance en pièces, sigmoïde d'échelle 8) :
+
+| c \ w | 0 | 0,5 | 1 |
+| --- | --- | --- | --- |
+| 0,3 | **79 %** (+51 pts) | 72 % (+44) | 65 % (+36) |
+| 0,7 | 74 % (+46) | | |
+
+Constats :
+- la recherche bat déjà l'IA Difficile, surtout à 4-5 joueurs, où l'IA du jeu est la plus faible ;
+- récompenser l'avance en pièces plutôt que la seule victoire rend les simulations bien plus
+  informatives (la victoire seule est trop bruitée sur des fins de partie jouées par l'IA Normal) ;
+- peu d'exploration (c=0,3) vaut mieux.
+
+Coût : une décision à 200 itérations prend ~50 ms à 2 joueurs, plus à 5.
+
+## 2026-10-17 — Étape 2 : réseau de neurones et auto-apprentissage (mise en place)
+
+- `encode` : la position vue du joueur qui agit, 77 entrées par région et 700 pour la partie,
+  toutes de petits entiers (un octet). Test : deux mondes possibles donnent exactement le même
+  encodage, le réseau ne peut donc rien savoir de caché ;
+- réseau sur le graphe des régions (`lab/py/model.py`, recalculé à l'identique en Rust par
+  `net.rs`, vérifié par `lab/py/check.py` : écart 5·10⁻⁵) : chaque région échange avec ses
+  voisines et avec un résumé de la partie, 4 couches de 64 ; sorties : a priori de chaque coup
+  (448 clés), probabilité de victoire de chaque joueur, pièces qu'il gagnera encore ;
+- calcul en Rust sur le processeur (AVX2/FMA) : ~85 µs par position pour 64 × 4 couches, soit
+  moins qu'une fin de partie jouée par l'IA Normal (~250 µs) ;
+- `az` : recherche guidée par le réseau (PUCT, comme AlphaZero), même arbre en boucle ouverte ;
+- `selfplay` : parties d'entraînement, 5,7 Ko par position ; tirage des coups selon les visites
+  pendant les 2 premières manches ; « playout cap randomization » de KataGo disponible ;
+- `lab analyze` : le meilleur coup d'une vraie partie (exportée du serveur par
+  `lab/tools/export-room.ts`), avec la chance de victoire estimée de chaque coup ;
+- PyTorch 2.14 pour ROCm 7.14 sur la RX 9070 XT (16 TFLOPS fp32) : `lab/py/setup.sh`.
+
+Génération 0 : 6 000 parties de MCTS (n=200, c=0,3, w=0) contre lui-même, toutes tables,
+~250 000 positions par heure.

@@ -13,3 +13,5 @@ public/game-kernel.wasm
 /lab/runs/
 /lab/py/.venv/
 __pycache__/
+/lab/data/
+/lab/nets/*.pt

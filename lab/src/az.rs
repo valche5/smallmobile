@@ -77,6 +77,8 @@ struct Node {
 pub struct Searched {
     pub mv: Move,
     pub visits: Vec<(Key, u32)>,
+    /// Pour chaque coup de la racine : a priori du réseau et valeur moyenne pour le joueur qui agit.
+    pub details: Vec<(Key, f32, f32)>,
     /// Valeur de la racine pour le joueur qui agit.
     pub value: f32,
 }
@@ -144,23 +146,28 @@ impl Az {
     }
 
     pub fn search(&self, root: &Game, k: &Knowledge, rng: &mut Rng) -> Searched {
+        self.search_with(root, k, rng, self.cfg.iterations, self.cfg.noise)
+    }
+
+    /// Une recherche de `iterations` itérations ; `noise` : part du bruit de Dirichlet à la racine.
+    pub fn search_with(&self, root: &Game, k: &Knowledge, rng: &mut Rng, iterations: usize, noise: f32) -> Searched {
         let legal = moves::legal(root);
         let me = root.state.actor().expect("un joueur doit agir");
         if legal.len() == 1 {
-            return Searched { mv: legal[0].mv, visits: vec![(legal[0].key, 1)], value: f32::NAN };
+            return Searched { mv: legal[0].mv, visits: vec![(legal[0].key, 1)], details: vec![], value: f32::NAN };
         }
         let mut nodes: Vec<Node> = vec![Node::default()];
         let root_value = self.expand(&mut nodes[0], root, k, &legal);
         nodes[0].visits = 1;
         nodes[0].total = root_value;
-        if self.cfg.noise > 0.0 {
-            let noise = dirichlet(rng, self.cfg.alpha, legal.len());
-            for (e, n) in nodes[0].edges.iter_mut().zip(noise) {
-                e.prior = (1.0 - self.cfg.noise) * e.prior + self.cfg.noise * n;
+        if noise > 0.0 {
+            let dir = dirichlet(rng, self.cfg.alpha, legal.len());
+            for (e, d) in nodes[0].edges.iter_mut().zip(dir) {
+                e.prior = (1.0 - noise) * e.prior + noise * d;
             }
         }
         let mut path: Vec<(u32, usize)> = Vec::new();
-        for _ in 0..self.cfg.iterations {
+        for _ in 0..iterations {
             let mut w = determinize(root, k, rng);
             let mut kw = *k;
             path.clear();
@@ -245,9 +252,10 @@ impl Az {
         }
         let root_node = &nodes[0];
         let visits: Vec<(Key, u32)> = root_node.edges.iter().map(|e| (e.key, e.visits)).collect();
+        let details = root_node.edges.iter().map(|e| (e.key, e.prior, e.total[me] / e.visits.max(1) as f32)).collect();
         let best = root_node.edges.iter().max_by_key(|e| (e.visits, (e.prior * 1e6) as u64)).expect("des coups").key;
         let mv = legal.iter().find(|c| c.key == best).expect("coup de la racine").mv;
-        Searched { mv, visits, value: root_node.total[me] / root_node.visits as f32 }
+        Searched { mv, visits, details, value: root_node.total[me] / root_node.visits as f32 }
     }
 }
 

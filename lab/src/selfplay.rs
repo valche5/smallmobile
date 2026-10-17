@@ -37,7 +37,10 @@ pub const ILLEGAL: u16 = u16::MAX;
 /// Une IA qui cherche, et rend les visites de la racine.
 pub trait Searcher: Sync {
     fn name(&self) -> String;
-    fn search(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Searched;
+    /// Itérations d'une recherche complète.
+    fn iterations(&self) -> usize;
+    /// `explore` : recherche complète d'auto-apprentissage (bruit à la racine si l'IA en a).
+    fn search(&self, g: &Game, k: &Knowledge, rng: &mut Rng, iterations: usize, explore: bool) -> Searched;
 }
 
 impl Searcher for crate::az::Az {
@@ -45,8 +48,13 @@ impl Searcher for crate::az::Az {
         crate::agent::Agent::name(self)
     }
 
-    fn search(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Searched {
-        crate::az::Az::search(self, g, k, rng)
+    fn iterations(&self) -> usize {
+        self.cfg.iterations
+    }
+
+    fn search(&self, g: &Game, k: &Knowledge, rng: &mut Rng, iterations: usize, explore: bool) -> Searched {
+        let noise = if explore { self.cfg.noise } else { 0.0 };
+        self.search_with(g, k, rng, iterations, noise)
     }
 }
 
@@ -55,8 +63,12 @@ impl Searcher for crate::mcts::Mcts {
         crate::agent::Agent::name(self)
     }
 
-    fn search(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Searched {
-        let (mv, stats) = crate::mcts::Mcts::search(self, g, k, rng);
+    fn iterations(&self) -> usize {
+        self.cfg.iterations
+    }
+
+    fn search(&self, g: &Game, k: &Knowledge, rng: &mut Rng, iterations: usize, _: bool) -> Searched {
+        let (mv, stats) = self.search_with(g, k, rng, iterations);
         let total: u32 = stats.iter().map(|s| s.1).sum();
         let value = stats.iter().map(|s| s.2 * s.1 as f64).sum::<f64>() / total.max(1) as f64;
         let visits = if stats.is_empty() {
@@ -64,7 +76,7 @@ impl Searcher for crate::mcts::Mcts {
         } else {
             stats.iter().map(|s| (s.0, s.1)).collect()
         };
-        Searched { mv, visits, value: value as f32 }
+        Searched { mv, visits, details: vec![], value: value as f32 }
     }
 }
 
@@ -79,6 +91,10 @@ struct Pending {
 pub struct Options {
     /// Les coups sont tirés au sort selon les visites jusqu'à cette manche comprise (exploration).
     pub sample_rounds: i32,
+    /// Part des coups cherchés à fond (et enregistrés) ; les autres le sont en `fast` itérations
+    /// (« playout cap randomization » de KataGo : plus de parties pour le même calcul).
+    pub full_share: f64,
+    pub fast: usize,
 }
 
 /// Joue une partie ; écrit un enregistrement par position cherchée (plus d'un coup possible).
@@ -95,10 +111,13 @@ pub fn play(
     let mut pending: Vec<Pending> = Vec::new();
     while g.state.phase != Phase::GameOver {
         let legal = moves::legal(&g);
+        let full = rng.unit() < opts.full_share;
         let mv = if legal.len() == 1 {
             legal[0].mv
+        } else if !full {
+            searcher.search(&g, &k, rng, opts.fast, false).mv
         } else {
-            let s = searcher.search(&g, &k, rng);
+            let s = searcher.search(&g, &k, rng, searcher.iterations(), true);
             let actor = g.state.actor().expect("un joueur doit agir");
             let mut visits = [ILLEGAL; KEYS];
             for c in &legal {

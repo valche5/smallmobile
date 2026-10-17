@@ -305,3 +305,51 @@ pub fn play(g: &mut Game, m: &Move, journal: &mut impl Journal) -> Result<(), Re
         }
     }
 }
+
+/// Le coup en clair, pour l'analyse (régions désignées par leur numéro dans la carte).
+pub fn describe(g: &Game, m: &Move) -> String {
+    let s = &g.state;
+    let region = |r: usize| format!("région {r} ({:?})", g.map.regions[r].terrain);
+    match m {
+        Move::Act(a) => match *a {
+            Action::Pick { index } => {
+                let c = s.market[index];
+                format!("prendre {:?} {:?} (place {index}, {} pièces dessus)", c.race, c.power, c.coins)
+            }
+            Action::SkipPick => "passer (marché vide)".into(),
+            Action::Conquer { region: r } => format!("conquérir la {}", region(r)),
+            Action::Reinforce { region: r } => format!("tenter la {} au dé", region(r)),
+            Action::BerserkRoll => "lancer le dé des Berserks".into(),
+            Action::Dragon { region: r } => format!("lâcher le dragon sur la {}", region(r)),
+            Action::Sorcery { region: r } => format!("ensorceler la {}", region(r)),
+            Action::Abandon { region: r } => format!("abandonner la {}", region(r)),
+            Action::Decline => "passer en déclin".into(),
+            Action::EndConquest => "finir les conquêtes".into(),
+            other => format!("{other:?}"),
+        },
+        Move::Finish(f) => {
+            let mut out = String::from("fin de tour");
+            if let Some(p) = f.placement {
+                let army = s.turn.army.expect("peuple en action");
+                let tokens: Vec<String> = g.owned(army).iter().map(|r| format!("{r}:{}", p.0[r])).collect();
+                out += &format!(", jetons {}", tokens.join(" "));
+            }
+            for (what, r) in f.specials.iter() {
+                out += &format!(", {what:?} en {r}");
+            }
+            if let Some(q) = f.peace {
+                out += &format!(", paix imposée au joueur {}", q + 1);
+            }
+            if f.stout {
+                out += ", déclin (Robustes)";
+            }
+            out
+        }
+        Move::Defend(plan) => {
+            let added: Vec<String> =
+                plan.iter().enumerate().filter(|(_, n)| **n > 0).map(|(r, n)| format!("+{n} en {r}")).collect();
+            format!("défense : {}", if added.is_empty() { "rien".into() } else { added.join(", ") })
+        }
+        Move::Auto => "fin de tour à la manière de l'IA Normal".into(),
+    }
+}

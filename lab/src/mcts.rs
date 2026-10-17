@@ -104,6 +104,16 @@ impl Mcts {
 
     /// Le coup choisi et, pour chaque coup de la racine, (clé, visites, récompense moyenne du joueur).
     pub fn search(&self, root: &Game, k: &Knowledge, rng: &mut Rng) -> (Move, Vec<(Key, u32, f64)>) {
+        self.search_with(root, k, rng, self.cfg.iterations)
+    }
+
+    pub fn search_with(
+        &self,
+        root: &Game,
+        k: &Knowledge,
+        rng: &mut Rng,
+        iterations: usize,
+    ) -> (Move, Vec<(Key, u32, f64)>) {
         let legal = moves::legal(root);
         if legal.len() == 1 {
             return (legal[0].mv, vec![]);
@@ -111,7 +121,7 @@ impl Mcts {
         let me = root.state.actor().expect("un joueur doit agir");
         let mut nodes: Vec<Node> = vec![Node::default()];
         let mut path: Vec<(u32, usize)> = Vec::new();
-        for _ in 0..self.cfg.iterations {
+        for _ in 0..iterations {
             let mut w = determinize(root, k, rng);
             path.clear();
             let mut node = 0u32;
