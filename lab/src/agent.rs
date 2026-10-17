@@ -54,12 +54,21 @@ impl Agent for Random {
 
     fn act(&self, g: &Game, _: &Knowledge, rng: &mut Rng) -> Move {
         let legal = moves::legal(g);
-        legal[rng.below(legal.len())]
+        legal[rng.below(legal.len())].mv
     }
 }
 
-/// Un joueur d'après son nom (`easy`, `normal`, `hard`, `random` ; `hard!` : voit tout).
+/// Un joueur d'après son nom (`easy`, `normal`, `hard`, `random` ; `hard!` : voit tout ;
+/// `mcts:n=1000,c=0.7` : recherche, voir `mcts::Config::parse` ; `az:net=poids.bin,n=400` : recherche
+/// guidée par le réseau, voir `az::Config::parse`).
 pub fn by_name(name: &str) -> Option<Box<dyn Agent>> {
+    if let Some(opts) = name.strip_prefix("mcts") {
+        let cfg = crate::mcts::Config::parse(opts.strip_prefix(':').unwrap_or(opts))?;
+        return Some(Box::new(crate::mcts::Mcts::new(cfg)));
+    }
+    if name.starts_with("az") {
+        return Some(Box::new(az_named(name)?));
+    }
     if let Some(level) = name.strip_suffix('!') {
         return Some(Box::new(KernelAi { sees_all: true, ..KernelAi::new(level_named(level)?) }));
     }
@@ -79,4 +88,37 @@ fn level_named(name: &str) -> Option<Level> {
         "hard" => Level::Hard,
         _ => return None,
     })
+}
+
+/// `az:net=chemin,n=400,c=1.5,…`
+fn az_named(name: &str) -> Option<crate::az::Az> {
+    let opts = name.strip_prefix("az:")?;
+    let mut net = None;
+    let rest: Vec<&str> = opts
+        .split(',')
+        .filter(|p| match p.strip_prefix("net=") {
+            Some(path) => {
+                net = Some(path.to_string());
+                false
+            }
+            None => true,
+        })
+        .collect();
+    let net = net?;
+    let cfg = crate::az::Config::parse(&rest.join(","))?;
+    let loaded = crate::net::Net::load(std::path::Path::new(&net)).unwrap_or_else(|e| {
+        eprintln!("réseau illisible ({net}) : {e}");
+        std::process::exit(2)
+    });
+    let label = std::path::Path::new(&net).file_stem().map_or(net.clone(), |s| s.to_string_lossy().into_owned());
+    Some(crate::az::Az::new(cfg, std::sync::Arc::new(loaded), label))
+}
+
+/// Une IA qui cherche, pour l'auto-apprentissage (`mcts:…` ou `az:…`).
+pub fn searcher_by_name(name: &str) -> Option<Box<dyn crate::selfplay::Searcher>> {
+    if let Some(opts) = name.strip_prefix("mcts") {
+        let cfg = crate::mcts::Config::parse(opts.strip_prefix(':').unwrap_or(opts))?;
+        return Some(Box::new(crate::mcts::Mcts::new(cfg)));
+    }
+    Some(Box::new(az_named(name)?))
 }

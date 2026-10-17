@@ -1,0 +1,127 @@
+"""Entraîne le réseau sur des parties d'entraînement (`lab selfplay`), puis l'exporte pour Rust.
+
+    python train.py --data ../data/gen0 --out ../nets/gen1.bin [--init ../nets/gen0.pt] [--epochs 10]
+
+Cibles : la politique (visites de la recherche à la racine), la victoire (part de chaque joueur à la
+fin) et, en appoint, les pièces gagnées d'ici la fin. Les positions sont vues du joueur qui agit.
+"""
+
+import argparse
+import math
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+from data import ILLEGAL, load
+from model import GAIN_SCALE, Net, export, unpack_adj
+
+
+def batches(recs, idx, size, device):
+    for start in range(0, len(idx), size):
+        r = recs[np.sort(idx[start : start + size])]
+        visits = torch.from_numpy(r["visits"].astype(np.int32)).to(device)
+        legal = visits != ILLEGAL
+        visits = torch.where(legal, visits, 0).float()
+        yield dict(
+            node=torch.from_numpy(r["node"]).to(device),
+            glob=torch.from_numpy(r["glob"]).to(device),
+            adj=unpack_adj(torch.from_numpy(r["adj"].astype(np.int64)).to(device)),
+            regions=torch.from_numpy(r["regions"].astype(np.int64)).to(device),
+            players=torch.from_numpy(r["players"].astype(np.int64)).to(device),
+            legal=legal,
+            policy=visits / visits.sum(1, keepdim=True).clamp(min=1),
+            win=torch.from_numpy(r["win"]).to(device),
+            gain=torch.from_numpy(r["gain"]).to(device) / GAIN_SCALE,
+        )
+
+
+def losses(net, b):
+    logits, value = net(b["node"], b["glob"], b["adj"], b["regions"])
+    logits = logits.masked_fill(~b["legal"], -1e9)
+    pol = -(b["policy"] * F.log_softmax(logits, 1)).sum(1).mean()
+    present = torch.arange(5, device=value.device)[None] < b["players"][:, None]
+    vlog = value[:, :5].masked_fill(~present, -1e9)
+    val = -(b["win"] * F.log_softmax(vlog, 1)).sum(1).mean()
+    gain = (((value[:, 5:] - b["gain"]) ** 2) * present).sum(1).mean()
+    # précision : le coup le plus visité est-il le préféré du réseau ?
+    acc = (logits.argmax(1) == b["policy"].argmax(1)).float().mean()
+    # la victoire prédite du joueur qui agit, comparée au résultat (erreur quadratique, « Brier »)
+    brier = ((torch.softmax(vlog, 1) - b["win"]) ** 2).sum(1).mean()
+    return pol, val, gain, acc, brier
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--data", nargs="+", required=True)
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--init")
+    ap.add_argument("--hidden", type=int, default=64)
+    ap.add_argument("--layers", type=int, default=4)
+    ap.add_argument("--epochs", type=int, default=10)
+    ap.add_argument("--batch", type=int, default=512)
+    ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--wd", type=float, default=1e-4)
+    ap.add_argument("--gain-weight", type=float, default=0.25)
+    ap.add_argument("--val-share", type=float, default=0.05)
+    args = ap.parse_args()
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    recs = load(args.data)
+    print(f"{len(recs)} positions")
+    rng = np.random.default_rng(0)
+    perm = rng.permutation(len(recs))
+    nval = max(1, int(len(recs) * args.val_share))
+    val_idx, train_idx = perm[:nval], perm[nval:]
+
+    net = Net(args.hidden, args.layers)
+    if args.init:
+        state = torch.load(args.init, map_location="cpu")
+        net = Net(state["hidden"], state["layers"])
+        net.load_state_dict(state["weights"])
+    net.to(device)
+    opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=args.wd)
+    steps = args.epochs * math.ceil(len(train_idx) / args.batch)
+    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=steps, pct_start=0.1)
+
+    for epoch in range(args.epochs):
+        net.train()
+        start = time.time()
+        sums = np.zeros(5)
+        count = 0
+        for b in batches(recs, rng.permutation(train_idx), args.batch, device):
+            pol, val, gain, acc, brier = losses(net, b)
+            loss = pol + val + args.gain_weight * gain
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 5.0)
+            opt.step()
+            sched.step()
+            sums += [pol.item(), val.item(), gain.item(), acc.item(), brier.item()]
+            count += 1
+        net.eval()
+        vs = np.zeros(5)
+        vc = 0
+        with torch.no_grad():
+            for b in batches(recs, val_idx, 2048, device):
+                vs += [x.item() for x in losses(net, b)]
+                vc += 1
+        t, v = sums / count, vs / vc
+        print(
+            f"époque {epoch + 1}/{args.epochs} ({time.time() - start:.0f} s) | entraînement : politique {t[0]:.3f} "
+            f"valeur {t[1]:.3f} pièces {t[2]:.3f} précision {t[3]:.1%} | validation : politique {v[0]:.3f} "
+            f"valeur {v[1]:.3f} pièces {v[2]:.3f} précision {v[3]:.1%} brier {v[4]:.3f}",
+            flush=True,
+        )
+
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    export(net, out)
+    torch.save({"hidden": net.hidden, "layers": len(net.layers), "weights": net.state_dict()}, out.with_suffix(".pt"))
+    print(f"écrit : {out} et {out.with_suffix('.pt')}")
+
+
+if __name__ == "__main__":
+    main()

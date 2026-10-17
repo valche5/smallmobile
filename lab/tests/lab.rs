@@ -18,11 +18,17 @@ fn every_legal_move_can_be_played() {
         while g.state.phase != Phase::GameOver {
             let legal = moves::legal(&g);
             assert!(!legal.is_empty());
-            for m in &legal {
+            let mut keys: Vec<_> = legal.iter().map(|c| c.key).collect();
+            keys.sort();
+            keys.dedup();
+            assert_eq!(keys.len(), legal.len(), "deux coups de même clé");
+            assert!(keys.iter().all(|&k| (k as usize) < moves::KEYS));
+            for c in &legal {
                 let mut w = g;
-                moves::play(&mut w, m, &mut Returns::default()).unwrap_or_else(|e| panic!("{m:?} : {e:?}"));
+                let m = c.mv;
+                moves::play(&mut w, &m, &mut Returns::default()).unwrap_or_else(|e| panic!("{m:?} : {e:?}"));
             }
-            let m = legal[rng.below(legal.len())];
+            let m = legal[rng.below(legal.len())].mv;
             moves::play(&mut g, &m, &mut Returns::default()).unwrap();
         }
     }
@@ -40,7 +46,7 @@ fn known_deck_bottom_is_exact() {
         let mut seen: Vec<Race> = Vec::new();
         while g.state.phase != Phase::GameOver {
             let legal = moves::legal(&g);
-            let m = legal[rng.below(legal.len())];
+            let m = legal[rng.below(legal.len())].mv;
             let mut events: Vec<Logged> = Vec::new();
             moves::play(&mut g, &m, &mut events).unwrap();
             let returns: usize = events
@@ -70,4 +76,29 @@ fn known_deck_bottom_is_exact() {
         }
     }
     assert!(checked > 0, "aucune carte rendue dans ces parties : le test ne vérifie rien");
+}
+
+#[test]
+fn the_network_sees_only_what_the_player_knows() {
+    use smallmobile_lab::encode::encode;
+    let mut rng = Rng::new(11);
+    for game in 0..40u64 {
+        let table = Table::new(2 + game as usize % 4, 1300 + game);
+        let mut g = table.game(game as u32);
+        let mut k = Knowledge::default();
+        while g.state.phase != Phase::GameOver {
+            // deux mondes possibles donnent exactement la même entrée au réseau
+            let a = encode(&determinize(&g, &k, &mut rng), k.race_tail);
+            let b = encode(&determinize(&g, &k, &mut rng), k.race_tail);
+            assert!(a.node == b.node && a.global == b.global, "l'encodage dépend de ce qui est caché");
+            // « moi » est le joueur qui agit : ses pièces sont en tête des joueurs
+            let me = g.state.actor().unwrap();
+            assert_eq!(a.global[67 + 1] as i32, g.state.players[me].coins.clamp(0, 255));
+            let legal = moves::legal(&g);
+            let m = legal[rng.below(legal.len())].mv;
+            let mut ret = Returns::default();
+            moves::play(&mut g, &m, &mut ret).unwrap();
+            k.observe(ret.0, &g.state);
+        }
+    }
 }

@@ -5,7 +5,12 @@
 //! - choix du peuple, déclin, chaque conquête, dé, abandon, fin des conquêtes : une action chacun ;
 //! - fin de tour : héros, forteresse et campements (placés selon la menace), placement complet des
 //!   jetons parmi quelques plans, paix des Diplomates, déclin des Robustes, en un seul coup ;
+//!   La fin de tour de l'IA Normal du jeu (placement appris) est proposée en plus ;
 //! - défense : un plan pour les jetons rendus, puis la fin de la défense.
+//!
+//! Chaque coup porte une clé (`Key`) qui le désigne indépendamment des détails : « le 3e plan de
+//! placement » plutôt que le nombre exact de jetons par région. La recherche s'en sert pour
+//! reconnaître le même choix d'un monde possible à l'autre.
 
 use smallmobile_kernel::action::{Journal, Placement};
 use smallmobile_kernel::collections::ArrayVec;
@@ -13,7 +18,7 @@ use smallmobile_kernel::deploy::Plan;
 use smallmobile_kernel::ids::{MAX_REGIONS, Power, Race};
 use smallmobile_kernel::rules::TargetKind;
 use smallmobile_kernel::state::Stage;
-use smallmobile_kernel::{Action, Game, Phase, Reason};
+use smallmobile_kernel::{Action, Ai, Game, Level, Phase, Reason, Restrictions, Tuning};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Move {
@@ -23,6 +28,40 @@ pub enum Move {
     Finish(Finish),
     /// Jetons rendus replacés (ajouts par région), puis fin de la défense.
     Defend(Plan),
+    /// Fin de tour jouée par l'IA Normal du jeu.
+    Auto,
+}
+
+/// Désigne un coup d'un monde possible à l'autre ; moins de `KEYS`.
+pub type Key = u16;
+pub const KEYS: usize = 448;
+
+const PICK: Key = 0;
+const SKIP_PICK: Key = 6;
+const DECLINE: Key = 7;
+const END_CONQUEST: Key = 8;
+const BERSERK: Key = 9;
+const AUTO: Key = 10;
+/// + plan × 12 + paix × 2 + Robustes.
+const FINISH: Key = 16;
+const DEFEND: Key = 96;
+/// + sorte × 64 + région.
+const REGION: Key = 128;
+const CONQUER: Key = 0;
+const REINFORCE: Key = 1;
+const DRAGON: Key = 2;
+const SORCERY: Key = 3;
+const ABANDON: Key = 4;
+
+fn region_key(kind: Key, region: usize) -> Key {
+    REGION + kind * 64 + region as Key
+}
+
+/// Un coup possible et sa clé.
+#[derive(Clone, Copy, Debug)]
+pub struct Choice {
+    pub key: Key,
+    pub mv: Move,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,7 +93,11 @@ fn special_action((what, region): (Special, u8)) -> Action {
     }
 }
 
-pub type Moves = Vec<Move>;
+pub type Moves = Vec<Choice>;
+
+fn push(out: &mut Moves, key: Key, mv: Move) {
+    out.push(Choice { key, mv });
+}
 
 /// Les coups possibles du joueur qui doit agir (vide en fin de partie).
 pub fn legal(g: &Game) -> Moves {
@@ -62,11 +105,11 @@ pub fn legal(g: &Game) -> Moves {
     let s = &g.state;
     match s.phase {
         Phase::GameOver => {}
-        Phase::Pick if s.market.is_empty() => out.push(Move::Act(Action::SkipPick)),
+        Phase::Pick if s.market.is_empty() => push(&mut out, SKIP_PICK, Move::Act(Action::SkipPick)),
         Phase::Pick => {
             let coins = s.players[s.current].coins;
             for index in 0..s.market.len().min(coins.max(0) as usize + 1) {
-                out.push(Move::Act(Action::Pick { index }));
+                push(&mut out, PICK + index as Key, Move::Act(Action::Pick { index }));
             }
         }
         Phase::Conquest => conquest(g, &mut out),
@@ -81,36 +124,36 @@ fn conquest(g: &Game, out: &mut Moves) {
     let army = s.turn.army.expect("peuple en action");
     let rs = *s.race(army);
     if g.can_decline().is_ok() {
-        out.push(Move::Act(Action::Decline));
+        push(out, DECLINE, Move::Act(Action::Decline));
     }
     let t = &s.turn;
     if t.conquests == 0 && !t.die_rolled && t.berserk_die.is_none() {
         for region in g.owned(army).iter() {
             if g.can_abandon(region).is_ok() {
-                out.push(Move::Act(Action::Abandon { region }));
+                push(out, region_key(ABANDON, region), Move::Act(Action::Abandon { region }));
             }
         }
     }
     if rs.has(Power::Berserk) && t.berserk_die.is_none() && rs.hand >= 1 {
-        out.push(Move::Act(Action::BerserkRoll));
+        push(out, BERSERK, Move::Act(Action::BerserkRoll));
     }
     for x in g.targets().iter().filter(|x| x.reachable()) {
         let region = x.region;
         if x.sorcery.allowed() {
-            out.push(Move::Act(Action::Sorcery { region }));
+            push(out, region_key(SORCERY, region), Move::Act(Action::Sorcery { region }));
         }
         if x.dragon.allowed() {
-            out.push(Move::Act(Action::Dragon { region }));
+            push(out, region_key(DRAGON, region), Move::Act(Action::Dragon { region }));
         }
         if rs.hand >= 1 {
             match x.kind {
-                TargetKind::Normal => out.push(Move::Act(Action::Conquer { region })),
-                TargetKind::Die => out.push(Move::Act(Action::Reinforce { region })),
+                TargetKind::Normal => push(out, region_key(CONQUER, region), Move::Act(Action::Conquer { region })),
+                TargetKind::Die => push(out, region_key(REINFORCE, region), Move::Act(Action::Reinforce { region })),
                 TargetKind::None => {}
             }
         }
     }
-    out.push(Move::Act(Action::EndConquest));
+    push(out, END_CONQUEST, Move::Act(Action::EndConquest));
 }
 
 /// Héros, forteresse et campements, aux endroits les plus menacés (comme l'IA du jeu).
@@ -177,13 +220,14 @@ fn finishes(g: &Game, out: &mut Moves) {
     for &x in specials.iter() {
         w.apply(&special_action(x), &mut smallmobile_kernel::NoJournal).expect("action spéciale déjà vérifiée");
     }
-    let mut placements: ArrayVec<Option<Placement>, 6> = ArrayVec::new();
+    // (numéro du plan, plan) ; un plan identique à un précédent n'est pas repris
+    let mut placements: ArrayVec<(Key, Option<Placement>), 6> = ArrayVec::new();
     if w.owned(army).is_empty() {
-        placements.push(None);
+        placements.push((0, None));
     } else {
-        for p in w.placement_candidates(army) {
-            if !placements.contains(&Some(p)) {
-                placements.push(Some(p));
+        for (i, p) in w.placement_candidates(army).into_iter().enumerate() {
+            if !placements.iter().any(|&(_, q)| q == Some(p)) {
+                placements.push((i as Key, Some(p)));
             }
         }
     }
@@ -198,27 +242,29 @@ fn finishes(g: &Game, out: &mut Moves) {
         }
     }
     let stouts: &[bool] = if active && rs.has(Power::Stout) { &[false, true] } else { &[false] };
-    for &placement in placements.iter() {
+    for &(plan, placement) in placements.iter() {
         for &peace in peaces.iter() {
             for &stout in stouts {
-                out.push(Move::Finish(Finish { specials, placement, peace, stout }));
+                let key = FINISH + plan * 12 + peace.map_or(0, |q| q as Key + 1) * 2 + Key::from(stout);
+                push(out, key, Move::Finish(Finish { specials, placement, peace, stout }));
             }
         }
     }
+    push(out, AUTO, Move::Auto);
 }
 
 fn defenses(g: &Game, out: &mut Moves) {
     let race = g.state.defense[0].race;
     let pending = g.state.races[race.index()].is_some_and(|rs| rs.hand > 0) && !g.owned(race).is_empty();
     if !pending {
-        out.push(Move::Defend([0; MAX_REGIONS]));
+        push(out, DEFEND, Move::Defend([0; MAX_REGIONS]));
         return;
     }
     let a = g.plan_deployment(race, false);
     let b = g.plan_deployment(race, true);
-    out.push(Move::Defend(a));
+    push(out, DEFEND, Move::Defend(a));
     if b != a {
-        out.push(Move::Defend(b));
+        push(out, DEFEND + 1, Move::Defend(b));
     }
 }
 
@@ -243,6 +289,19 @@ pub fn play(g: &mut Game, m: &Move, journal: &mut impl Journal) -> Result<(), Re
                 }
             }
             g.apply(&Action::EndDefense, journal)
+        }
+        Move::Auto => {
+            let tuning = Tuning::default();
+            let ai = Ai::new(&tuning);
+            let pid = g.state.current;
+            let level = g.state.players[pid].level;
+            g.state.players[pid].level = Level::Normal;
+            let mut result = Ok(());
+            while result.is_ok() && g.state.phase == Phase::Redeploy {
+                result = ai.decide(g, Restrictions::default()).and_then(|a| g.apply(&a, journal));
+            }
+            g.state.players[pid].level = level;
+            result
         }
     }
 }

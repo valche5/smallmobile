@@ -8,3 +8,8 @@ output/illustrations-preview/
 # compilations Rust et module WebAssembly du jeu (bun run kernel:build)
 /target/
 public/game-kernel.wasm
+
+# sorties du labo de l'IA (résumées dans lab/JOURNAL.md)
+/lab/runs/
+/lab/py/.venv/
+__pycache__/

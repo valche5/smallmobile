@@ -3,6 +3,8 @@
 //! ```text
 //! lab arena --hero hard --field normal [--players 2,3,4,5] [--deals 100] [--threads N] [--seed 1]
 //! lab bench --agent random [--players 2] [--games 20]
+//! lab selfplay --agent mcts:n=200 --games 1000 --out lab/data/gen0 [--players 2,3,4,5] [--sample-rounds 2]
+//! lab check-net --net poids.bin --data parties.bin [--count 5]   (comparaison avec lab/py/check.py)
 //! ```
 
 use std::collections::HashMap;
@@ -10,6 +12,7 @@ use std::time::Instant;
 
 use smallmobile_lab::agent::{self, Agent};
 use smallmobile_lab::arena::{self, Config, play_game};
+use smallmobile_lab::selfplay;
 use smallmobile_lab::table::Table;
 
 fn main() {
@@ -19,6 +22,8 @@ fn main() {
     match cmd.as_str() {
         "arena" => arena_cmd(&opts),
         "bench" => bench_cmd(&opts),
+        "selfplay" => selfplay_cmd(&opts),
+        "check-net" => check_net_cmd(&opts),
         _ => usage(),
     }
 }
@@ -26,6 +31,7 @@ fn main() {
 fn usage() -> ! {
     eprintln!("usage : lab arena --hero A --field B [--players 2,3,4,5] [--deals N] [--threads N] [--seed S]");
     eprintln!("        lab bench --agent A [--players N] [--games N]");
+    eprintln!("        lab selfplay --agent A --games N --out DIR [--players 2,3,4,5] [--sample-rounds R] [--seed S]");
     std::process::exit(2)
 }
 
@@ -96,4 +102,48 @@ fn bench_cmd(opts: &HashMap<String, String>) {
             1e6 * secs / moves as f64
         );
     }
+}
+
+fn selfplay_cmd(opts: &HashMap<String, String>) {
+    let name = opts.get("agent").unwrap_or_else(|| usage());
+    let searcher = agent::searcher_by_name(name).unwrap_or_else(|| {
+        eprintln!("IA de recherche inconnue : {name}");
+        std::process::exit(2)
+    });
+    let cfg = selfplay::Config {
+        players: players(opts, "2,3,4,5"),
+        games: get(opts, "games", 100),
+        threads: get(opts, "threads", threads()),
+        seed: get(opts, "seed", 1),
+        opts: selfplay::Options { sample_rounds: get(opts, "sample-rounds", 2) },
+    };
+    let out = opts.get("out").unwrap_or_else(|| usage());
+    let start = Instant::now();
+    if let Err(e) = selfplay::run(&cfg, searcher.as_ref(), std::path::Path::new(out)) {
+        eprintln!("échec : {e}");
+        std::process::exit(1)
+    }
+    println!("{} parties en {:.0} s", cfg.games, start.elapsed().as_secs_f64());
+}
+
+/// Évalue les premières positions d'un fichier de parties : mêmes nombres attendus qu'en Python.
+fn check_net_cmd(opts: &HashMap<String, String>) {
+    let net = smallmobile_lab::net::Net::load(std::path::Path::new(opts.get("net").unwrap_or_else(|| usage())))
+        .unwrap_or_else(|e| panic!("réseau illisible : {e}"));
+    let data = std::fs::read(opts.get("data").unwrap_or_else(|| usage())).expect("fichier de parties");
+    let count: usize = get(opts, "count", 5);
+    let start = Instant::now();
+    let mut evals = 0;
+    for rec in data.chunks_exact(selfplay::RECORD).take(count) {
+        let (e, adj) = selfplay::read_record(rec);
+        let ev = net.eval_with(&e, |i| &adj[i]);
+        evals += 1;
+        let legal: Vec<String> = (0..smallmobile_lab::moves::KEYS)
+            .filter(|&k| ev.logits[k].is_finite())
+            .take(8)
+            .map(|k| format!("{k}:{:.4}", ev.logits[k]))
+            .collect();
+        println!("win {:?} gain {:?} logits {}", ev.win, ev.gain, legal.join(" "));
+    }
+    eprintln!("{:.1} µs par évaluation", 1e6 * start.elapsed().as_secs_f64() / evals.max(1) as f64);
 }
