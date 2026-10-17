@@ -167,3 +167,34 @@ Corrections, mesurées contre l'IA Normal (40 donnes, même graine, ± 8 points)
   de partie jouée par l'IA Normal. Avec un réseau encore jeune, ça aide beaucoup.
 
 La recherche hybride égale déjà MCTS, avec un réseau qui ne fera que progresser.
+
+## 2026-10-18 — Le jugement du réseau est le maillon faible
+
+Génération 1 : l'hybride (a priori du réseau + fins simulées) joue contre lui-même. Premier
+réseau gen1 : gen0 (2 000 parties MCTS) appris en partant du réseau pré-entraîné.
+
+Mesures contre l'IA Normal (60 donnes, graine 21, ± 7 points) ; « profondeur » : la fin simulée
+s'arrête après ce nombre de tours de joueur et le réseau juge la suite :
+
+| réseau | fin simulée complète | profondeur 5 | profondeur 2 | réseau seul |
+| --- | --- | --- | --- | --- |
+| pré-entraîné (IA Normal) | | +33 | +26 | +17 (100 donnes) |
+| gen1 (MCTS seul) | **+51** | +20 | −3 | −11 (100 donnes) |
+| gen1b (MCTS + 30 % Normal, 2 passes) | +45 (100 donnes) | | +24 | +13 |
+
+- gen1 a appris par cœur ses 2 000 parties : ~130 positions par partie partagent le même
+  résultat, le réseau retient les parties au lieu de juger. La validation tirait des positions au
+  hasard, donc dans les mêmes parties : elle ne le voyait pas. Elle se fait maintenant par blocs de
+  parties entières ;
+- mêler des parties de l'IA Normal (100 000 parties différentes) évite l'apprentissage par cœur
+  (gen1b), mais le jugement reste « de niveau Normal » ;
+- pour guider l'hybride, les a priori appris sur des recherches (gen1, plus ouverts) valent mieux
+  que l'imitation de l'IA Normal (gen1b) : plus d'exploration, et les fins simulées font le reste.
+
+Correctif de fond : des cibles moins bruitées. La recherche suit maintenant aussi les pièces
+finales attendues de chaque joueur (moyenne sur ses ~200 simulations), enregistrées avec chaque
+position (format `*.v2.bin`). Le réseau apprend sur un mélange du résultat réel et de cette
+attente (`--q-weight 0.5`), bien plus stable qu'une partie unique (exemple : attendu 116 et 98,
+réel 119 et 93).
+
+En cours : 5 000 parties de l'hybride (gen1, fins complètes) au nouveau format.

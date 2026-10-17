@@ -3,6 +3,7 @@
     python check.py parties.bin   → écrit /tmp/smallmobile-check.bin, puis compare avec `lab check-net`
 """
 
+import os
 import re
 import subprocess
 import sys
@@ -20,7 +21,7 @@ with torch.no_grad():
         p.add_(torch.randn_like(p) * 0.1)  # aucune branche nulle : tout le calcul compte
 export(net, "/tmp/smallmobile-check.bin")
 
-recs = load([sys.argv[1]])[:5]
+recs = load([sys.argv[1]])[0][:5]
 node = torch.from_numpy(recs["node"].copy())
 glob = torch.from_numpy(recs["glob"].copy())
 adj = unpack_adj(torch.from_numpy(recs["adj"].astype(np.int64)))
@@ -29,7 +30,7 @@ with torch.no_grad():
     logits, value = net(node, glob, adj, regions)
 
 out = subprocess.run(
-    ["../../target/release/lab", "check-net", "--net", "/tmp/smallmobile-check.bin", "--data", sys.argv[1]],
+    [os.environ.get("LAB", "../../target/release/lab"), "check-net", "--net", "/tmp/smallmobile-check.bin", "--data", sys.argv[1]],
     capture_output=True,
     text=True,
     check=True,

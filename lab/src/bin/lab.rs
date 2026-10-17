@@ -144,7 +144,9 @@ fn check_net_cmd(opts: &HashMap<String, String>) {
     let count: usize = get(opts, "count", 5);
     let start = Instant::now();
     let mut evals = 0;
-    for rec in data.chunks_exact(selfplay::RECORD).take(count) {
+    let path = opts.get("data").unwrap();
+    let size = if path.ends_with(".v2.bin") { selfplay::RECORD } else { selfplay::RECORD_V1 };
+    for rec in data.chunks_exact(size).take(count) {
         let (e, adj) = selfplay::read_record(rec);
         let ev = net.eval_with(&e, |i| &adj[i]);
         evals += 1;

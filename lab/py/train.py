@@ -1,6 +1,8 @@
 """Entraîne le réseau sur des parties d'entraînement (`lab selfplay`), puis l'exporte pour Rust.
 
-    python train.py --data ../data/gen0 --out ../nets/gen1.bin [--init ../nets/gen0.pt] [--epochs 10]
+    python train.py --data ../data/gen1 ../data/normal@0.2 --out ../nets/gen2.bin [--init ../nets/gen1.pt]
+
+`dossier@0.2` : n'en prendre que 20 % (par blocs de parties).
 
 Cibles : la politique (visites de la recherche à la racine), la victoire (part de chaque joueur à la
 fin) et, en appoint, les pièces gagnées d'ici la fin. Les positions sont vues du joueur qui agit.
@@ -38,17 +40,23 @@ def batches(recs, idx, size, device, temp=1.0):
             policy=visits / visits.sum(1, keepdim=True).clamp(min=1),
             win=torch.from_numpy(r["win"]).to(device),
             gain=torch.from_numpy(r["gain"]).to(device) / GAIN_SCALE,
+            qgain=torch.from_numpy(r["qgain"]).to(device) / GAIN_SCALE,
         )
 
 
-def losses(net, b):
+def losses(net, b, q_weight=0.0):
     logits, value = net(b["node"], b["glob"], b["adj"], b["regions"])
     logits = logits.masked_fill(~b["legal"], -1e9)
     pol = -(b["policy"] * F.log_softmax(logits, 1)).sum(1).mean()
     present = torch.arange(5, device=value.device)[None] < b["players"][:, None]
     vlog = value[:, :5].masked_fill(~present, -1e9)
     val = -(b["win"] * F.log_softmax(vlog, 1)).sum(1).mean()
-    gain = (((value[:, 5:] - b["gain"]) ** 2) * present).sum(1).mean()
+    # pièces : le résultat de la partie, mêlé à ce qu'attendait la recherche quand elle le sait
+    target = b["gain"]
+    if q_weight > 0:
+        known = ~torch.isnan(b["qgain"])
+        target = torch.where(known, (1 - q_weight) * target + q_weight * torch.nan_to_num(b["qgain"]), target)
+    gain = (((value[:, 5:] - target) ** 2) * present).sum(1).mean()
     # précision : le coup le plus visité est-il le préféré du réseau ?
     acc = (logits.argmax(1) == b["policy"].argmax(1)).float().mean()
     # la victoire prédite du joueur qui agit, comparée au résultat (erreur quadratique, « Brier »)
@@ -69,16 +77,18 @@ def main():
     ap.add_argument("--wd", type=float, default=1e-4)
     ap.add_argument("--gain-weight", type=float, default=0.25)
     ap.add_argument("--val-share", type=float, default=0.05)
+    ap.add_argument("--q-weight", type=float, default=0.5, help="part des pièces attendues par la recherche")
     ap.add_argument("--policy-temp", type=float, default=1.0, help="cible de politique : visites^(1/T)")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    recs = load(args.data)
-    print(f"{len(recs)} positions")
+    recs, blocks = load(args.data)
     rng = np.random.default_rng(0)
-    perm = rng.permutation(len(recs))
-    nval = max(1, int(len(recs) * args.val_share))
-    val_idx, train_idx = perm[:nval], perm[nval:]
+    # validation sur des blocs entiers : pas de position d'une partie vue à l'entraînement
+    val_blocks = rng.random(int(blocks.max()) + 1) < args.val_share
+    is_val = val_blocks[blocks]
+    val_idx, train_idx = np.flatnonzero(is_val), np.flatnonzero(~is_val)
+    print(f"{len(recs)} positions ({len(val_idx)} pour la validation)")
 
     net = Net(args.hidden, args.layers)
     if args.init:
@@ -96,7 +106,7 @@ def main():
         sums = np.zeros(5)
         count = 0
         for b in batches(recs, rng.permutation(train_idx), args.batch, device, args.policy_temp):
-            pol, val, gain, acc, brier = losses(net, b)
+            pol, val, gain, acc, brier = losses(net, b, args.q_weight)
             loss = pol + val + args.gain_weight * gain
             opt.zero_grad(set_to_none=True)
             loss.backward()
@@ -110,7 +120,7 @@ def main():
         vc = 0
         with torch.no_grad():
             for b in batches(recs, val_idx, 2048, device, args.policy_temp):
-                vs += [x.item() for x in losses(net, b)]
+                vs += [x.item() for x in losses(net, b, args.q_weight)]
                 vc += 1
         t, v = sums / count, vs / vc
         print(

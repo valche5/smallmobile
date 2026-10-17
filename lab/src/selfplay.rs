@@ -13,7 +13,11 @@
 //! u8 × REGIONS × 8  voisines (un bit par région, 64 bits par région)
 //! u8 × REGIONS × NODE  entrées par région
 //! u8 × GLOBAL  entrées de la partie
+//! f32 × 5  pièces que la recherche attendait encore pour chaque joueur relatif (NaN : inconnu)
 //! ```
+//!
+//! La dernière ligne n'existe que dans les fichiers `*.v2.bin` ; les `*.bin` plus anciens s'arrêtent
+//! avant.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -31,7 +35,8 @@ use crate::moves::{self, KEYS};
 use crate::rand::{Rng, mix};
 use crate::table::{Outcome, Table};
 
-pub const RECORD: usize = 4 + 20 + 20 + KEYS * 2 + REGIONS * 8 + REGIONS * NODE + GLOBAL;
+pub const RECORD_V1: usize = 4 + 20 + 20 + KEYS * 2 + REGIONS * 8 + REGIONS * NODE + GLOBAL;
+pub const RECORD: usize = RECORD_V1 + 20;
 pub const ILLEGAL: u16 = u16::MAX;
 
 /// Une IA qui cherche, et rend les visites de la racine.
@@ -76,7 +81,7 @@ impl Searcher for crate::mcts::Mcts {
         } else {
             stats.iter().map(|s| (s.0, s.1)).collect()
         };
-        Searched { mv, visits, details: vec![], value: value as f32 }
+        Searched { mv, visits, finals: [f32::NAN; MAX_PLAYERS], details: vec![], value: value as f32 }
     }
 }
 
@@ -103,7 +108,13 @@ impl Searcher for crate::agent::KernelAi {
             }
         };
         let c = chosen.expect("le coup de l'IA du jeu est parmi les coups possibles");
-        Searched { mv: c.mv, visits: vec![(c.key, 1)], details: vec![], value: f32::NAN }
+        Searched {
+            mv: c.mv,
+            visits: vec![(c.key, 1)],
+            finals: [f32::NAN; MAX_PLAYERS],
+            details: vec![],
+            value: f32::NAN,
+        }
     }
 }
 
@@ -112,6 +123,8 @@ struct Pending {
     actor: usize,
     coins: [i32; MAX_PLAYERS],
     visits: [u16; KEYS],
+    /// Pièces finales attendues par la recherche (joueurs réels).
+    finals: [f32; MAX_PLAYERS],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -159,7 +172,7 @@ pub fn play(
             for (q, c) in coins.iter_mut().enumerate().take(g.state.player_count()) {
                 *c = g.state.players[q].coins;
             }
-            pending.push(Pending { enc: encode(&g, k.race_tail), actor, coins, visits });
+            pending.push(Pending { enc: encode(&g, k.race_tail), actor, coins, visits, finals: s.finals });
             if g.state.round <= opts.sample_rounds {
                 let total: u32 = s.visits.iter().map(|v| v.1).sum();
                 let mut pick = rng.below(total.max(1) as usize) as u32;
@@ -211,6 +224,11 @@ pub fn play(
             buf.extend_from_slice(row);
         }
         buf.extend_from_slice(&p.enc.global);
+        for r in 0..MAX_PLAYERS {
+            let q = (p.actor + r) % n;
+            let gain = if r < n { p.finals[q] - p.coins[q] as f32 } else { f32::NAN };
+            buf.extend_from_slice(&gain.to_le_bytes());
+        }
         debug_assert_eq!(buf.len(), RECORD);
         out.write_all(&buf)?;
     }
@@ -236,7 +254,7 @@ pub fn run(cfg: &Config, searcher: &dyn Searcher, dir: &Path) -> std::io::Result
         for t in 0..cfg.threads {
             let (next, positions) = (&next, &positions);
             handles.push(scope.spawn(move || -> std::io::Result<()> {
-                let path = dir.join(format!("s{:x}-{t:02}.bin", cfg.seed));
+                let path = dir.join(format!("s{:x}-{t:02}.v2.bin", cfg.seed));
                 let mut out = BufWriter::new(File::create(path)?);
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
@@ -269,7 +287,7 @@ pub fn run(cfg: &Config, searcher: &dyn Searcher, dir: &Path) -> std::io::Result
 
 /// Relit un enregistrement : la position encodée et les voisines de chaque région.
 pub fn read_record(rec: &[u8]) -> (Encoded, Vec<Vec<u8>>) {
-    assert_eq!(rec.len(), RECORD);
+    assert!(rec.len() == RECORD || rec.len() == RECORD_V1);
     let players = rec[0] as usize;
     let regions = rec[1] as usize;
     let mut at = 4 + 20 + 20 + KEYS * 2;

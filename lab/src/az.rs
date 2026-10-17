@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use smallmobile_kernel::ids::MAX_PLAYERS;
-use smallmobile_kernel::{Ai, Game, Level, Phase, Tuning};
+use smallmobile_kernel::{Ai, Game, Level, Phase, Restrictions, Tuning};
 
 use crate::agent::Agent;
 use crate::encode::encode;
@@ -34,6 +34,8 @@ pub struct Config {
     /// Part d'une fin de partie jouée par l'IA Normal dans la valeur d'une position nouvelle (le
     /// reste vient du réseau), comme le premier AlphaGo. 0 : réseau seul.
     pub rollout: f32,
+    /// Longueur des fins simulées, en tours de joueur ; ensuite le réseau juge. 0 : jusqu'au bout.
+    pub depth: usize,
     /// Valeurs des coups ramenées entre 0 et 1 dans chaque nœud (comme MuZero) : les petits écarts
     /// de valeur comptent autant que l'a priori.
     pub normalize: bool,
@@ -50,6 +52,7 @@ impl Default for Config {
             win_weight: 1.0,
             scale: 8.0,
             rollout: 0.0,
+            depth: 0,
             normalize: true,
         }
     }
@@ -71,6 +74,7 @@ impl Config {
                 "s" => cfg.scale = v.parse().ok()?,
                 "roll" => cfg.rollout = v.parse().ok()?,
                 "norm" => cfg.normalize = v != "0",
+                "depth" => cfg.depth = v.parse().ok()?,
                 _ => return None,
             }
         }
@@ -78,7 +82,10 @@ impl Config {
     }
 }
 
-type Value = [f32; MAX_PLAYERS];
+/// Par joueur : la valeur (0 à 1), puis les pièces finales attendues (`COINS + joueur`).
+type Value = [f32; 2 * MAX_PLAYERS];
+const COINS: usize = MAX_PLAYERS;
+type PerPlayer = [f32; MAX_PLAYERS];
 const NO_CHILD: u32 = u32::MAX;
 
 struct Edge {
@@ -101,6 +108,8 @@ struct Node {
 pub struct Searched {
     pub mv: Move,
     pub visits: Vec<(Key, u32)>,
+    /// Pièces finales attendues de chaque joueur (réel) selon la recherche ; NaN si inconnues.
+    pub finals: [f32; MAX_PLAYERS],
     /// Pour chaque coup de la racine : a priori du réseau et valeur moyenne pour le joueur qui agit.
     pub details: Vec<(Key, f32, f32)>,
     /// Valeur de la racine pour le joueur qui agit.
@@ -116,7 +125,7 @@ pub struct Az {
 }
 
 /// La valeur du réseau (joueurs relatifs) remise en joueurs réels.
-fn absolute(win: &[f32; 5], me: usize, n: usize) -> Value {
+fn absolute(win: &[f32; 5], me: usize, n: usize) -> PerPlayer {
     let mut v = [0.0; MAX_PLAYERS];
     for (r, &w) in win.iter().enumerate().take(n) {
         v[(me + r) % n] = w;
@@ -155,8 +164,6 @@ impl Az {
 
     /// Valeur et a priori d'une position (le nœud n'a pas encore d'arêtes).
     fn expand(&self, node: &mut Node, w: &Game, k: &Knowledge, legal: &[moves::Choice]) -> Value {
-        let s = &w.state;
-        let me = s.actor().expect("un joueur doit agir");
         let eval = self.net.eval(&encode(w, k.race_tail), w.map);
         let top = legal.iter().map(|c| eval.logits[c.key as usize]).fold(f32::NEG_INFINITY, f32::max);
         let exps: Vec<f32> = legal.iter().map(|c| (eval.logits[c.key as usize] - top).exp()).collect();
@@ -164,31 +171,64 @@ impl Az {
         node.edges = legal
             .iter()
             .zip(&exps)
-            .map(|(c, &e)| Edge { key: c.key, prior: e / sum, child: NO_CHILD, visits: 0, total: [0.0; 5] })
+            .map(|(c, &e)| Edge {
+                key: c.key,
+                prior: e / sum,
+                child: NO_CHILD,
+                visits: 0,
+                total: [0.0; 2 * MAX_PLAYERS],
+            })
             .collect();
         node.expanded = true;
+        let v = self.judge(w, &eval);
+        let lambda = self.cfg.rollout;
+        if lambda <= 0.0 {
+            return v;
+        }
+        let r = self.simulate(w, k);
+        let mut out = [0.0; 2 * MAX_PLAYERS];
+        for (o, (a, b)) in out.iter_mut().zip(v.iter().zip(r)) {
+            *o = (1.0 - lambda) * a + lambda * b;
+        }
+        out
+    }
+
+    /// La valeur que le réseau donne à une position (joueurs réels).
+    fn judge(&self, w: &Game, eval: &crate::net::Eval) -> Value {
+        let s = &w.state;
+        let me = s.actor().expect("un joueur doit agir");
         let n = s.player_count();
         let mut finals = [0.0f32; MAX_PLAYERS];
         for r in 0..n {
             let q = (me + r) % n;
             finals[q] = s.players[q].coins as f32 + eval.gain[r];
         }
-        let v = self.blend(&absolute(&eval.win, me, n), &finals, n);
-        let lambda = self.cfg.rollout;
-        if lambda <= 0.0 {
-            return v;
-        }
+        self.blend(&absolute(&eval.win, me, n), &finals, n)
+    }
+
+    /// L'IA Normal joue la suite pour tout le monde : jusqu'au bout, ou `depth` tours de joueur puis
+    /// le réseau juge.
+    fn simulate(&self, w: &Game, k: &Knowledge) -> Value {
         let mut end = *w;
         for p in end.state.players.as_mut_slice() {
             p.level = Level::Normal;
         }
-        Ai::new(&self.tuning).play(&mut end, 50_000).expect("l'IA du jeu finit la partie");
-        let r = self.terminal(&end);
-        let mut out = [0.0; MAX_PLAYERS];
-        for q in 0..n {
-            out[q] = (1.0 - lambda) * v[q] + lambda * r[q];
+        let ai = Ai::new(&self.tuning);
+        let mut turns = 0;
+        let mut current = end.state.current;
+        while end.state.phase != Phase::GameOver {
+            if self.cfg.depth > 0 && turns >= self.cfg.depth {
+                let eval = self.net.eval(&encode(&end, k.race_tail), end.map);
+                return self.judge(&end, &eval);
+            }
+            let a = ai.decide(&end, Restrictions::default()).expect("l'IA du jeu trouve un coup");
+            end.apply(&a, &mut smallmobile_kernel::NoJournal).expect("coup de l'IA du jeu");
+            if end.state.current != current {
+                current = end.state.current;
+                turns += 1;
+            }
         }
-        out
+        self.terminal(&end)
     }
 
     /// La valeur d'une partie finie.
@@ -203,10 +243,11 @@ impl Az {
     }
 
     /// La valeur de chaque joueur : victoire et avance en pièces (finales ou prévues) mêlées.
-    fn blend(&self, win: &Value, finals: &[f32; MAX_PLAYERS], n: usize) -> Value {
+    fn blend(&self, win: &PerPlayer, finals: &PerPlayer, n: usize) -> Value {
         let w = self.cfg.win_weight;
-        let mut v = [0.0; MAX_PLAYERS];
+        let mut v = [0.0; 2 * MAX_PLAYERS];
         for q in 0..n {
+            v[COINS + q] = finals[q];
             let rival = (0..n).filter(|&o| o != q).map(|o| finals[o]).fold(f32::NEG_INFINITY, f32::max);
             let lead = 1.0 / (1.0 + (-(finals[q] - rival) / self.cfg.scale).exp());
             v[q] = w * win[q] + (1.0 - w) * lead;
@@ -223,7 +264,13 @@ impl Az {
         let legal = moves::legal(root);
         let me = root.state.actor().expect("un joueur doit agir");
         if legal.len() == 1 {
-            return Searched { mv: legal[0].mv, visits: vec![(legal[0].key, 1)], details: vec![], value: f32::NAN };
+            return Searched {
+                mv: legal[0].mv,
+                visits: vec![(legal[0].key, 1)],
+                finals: [f32::NAN; MAX_PLAYERS],
+                details: vec![],
+                value: f32::NAN,
+            };
         }
         let mut nodes: Vec<Node> = vec![Node::default()];
         let root_value = self.expand(&mut nodes[0], root, k, &legal);
@@ -264,7 +311,13 @@ impl Az {
                         Some(ei) => ei,
                         None => {
                             let prior = 1.0 / legal.len() as f32;
-                            n.edges.push(Edge { key: c.key, prior, child: NO_CHILD, visits: 0, total: [0.0; 5] });
+                            n.edges.push(Edge {
+                                key: c.key,
+                                prior,
+                                child: NO_CHILD,
+                                visits: 0,
+                                total: [0.0; 2 * MAX_PLAYERS],
+                            });
                             n.edges.len() - 1
                         }
                     };
@@ -336,14 +389,19 @@ impl Az {
         let details = root_node.edges.iter().map(|e| (e.key, e.prior, e.total[me] / e.visits.max(1) as f32)).collect();
         let best = root_node.edges.iter().max_by_key(|e| (e.visits, (e.prior * 1e6) as u64)).expect("des coups").key;
         let mv = legal.iter().find(|c| c.key == best).expect("coup de la racine").mv;
-        Searched { mv, visits, details, value: root_node.total[me] / root_node.visits as f32 }
+        let mut finals = [0.0; MAX_PLAYERS];
+        for (q, f) in finals.iter_mut().enumerate() {
+            *f = root_node.total[COINS + q] / root_node.visits as f32;
+        }
+        Searched { mv, visits, finals, details, value: root_node.total[me] / root_node.visits as f32 }
     }
 }
 
 impl Agent for Az {
     fn name(&self) -> String {
         let c = &self.cfg;
-        format!("az({}, n={}, c={}, w={}, roll={})", self.label, c.iterations, c.c_puct, c.win_weight, c.rollout)
+        let depth = if c.depth > 0 { format!(", depth={}", c.depth) } else { String::new() };
+        format!("az({}, n={}, c={}, w={}, roll={}{depth})", self.label, c.iterations, c.c_puct, c.win_weight, c.rollout)
     }
 
     fn act(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Move {
