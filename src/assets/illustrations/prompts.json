@@ -1,0 +1,236 @@
+{
+  "tool": "image_gen.imagegen (built-in)",
+  "transparent_background": true,
+  "assets": [
+    {
+      "category": "race",
+      "id": "amazons",
+      "prompt": "Use case: stylized-concept.\nAsset type: small raster illustration for a French mobile fantasy strategy board game, displayed at 32–56 CSS pixels.\nSubject: one Amazon archer, head and shoulders, with a single curved bow visible beside her face; confident expression.\nStyle: original friendly board-game illustration, flat color blocks, thick clean dark outline, only one broad shadow per shape, very simple recognizable silhouette.\nComposition: centered square, subject fills 80% of frame, generous safe margin around silhouette, front three-quarter view. Warm brown skin, dark hair, terracotta headband, teal tunic, ochre bow.\nBackdrop: genuinely transparent.\nConstraints: no text, no border, no decorative frame, no scenery, no tiny jewelry, no filigree, no texture, no thin lines, no realism, no watermark; legible when shrunk to 32 pixels."
+    },
+    {
+      "category": "power",
+      "id": "alchemist",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a mobile fantasy board game, displayed at 32–56 CSS pixels. Style: flat cut-paper illustration, VERY SIMPLE, 3–5 large color shapes, thick dark contour, maximum one broad shadow per shape, no gradients, no texture. Centered square, isolated subject fills 80 percent of frame, safe margin. Warm ochre and teal accents harmonizing with friendly fantasy board game art. No text, no watermark, no border or frame, no background, no small ornament. Bold silhouette instantly readable at 32 pixels. Subject: one alchemy flask with a broad round base, turquoise potion filling the bottom half, a single big golden coin beside it. Only these two objects, no bubbles or equipment."
+    },
+    {
+      "category": "terrain",
+      "id": "forest",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a mobile fantasy board game, displayed at 32–56 CSS pixels. Style: flat cut-paper illustration, VERY SIMPLE, 3–5 large color shapes, thick dark contour, maximum one broad shadow per shape, no gradients, no texture. Centered square, isolated subject fills 80 percent of frame, safe margin. Warm ochre and teal accents harmonizing with friendly fantasy board game art. No text, no watermark, no border or frame, no background, no small ornament. Bold silhouette instantly readable at 32 pixels. Subject: one tiny woodland terrain illustration: three simple pine trees grouped into one bold triangular silhouette, on a compact rounded moss green mound. No branches or individual needles, no stones, no characters, no scenery beyond the mound. Slight overhead board game perspective."
+    },
+    {
+      "category": "race",
+      "id": "dwarves",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a mobile fantasy board game, displayed at 32–56 CSS pixels. Style: flat cut-paper illustration, VERY SIMPLE, 3–5 large color shapes, thick dark contour, maximum one broad shadow per shape, no gradients, no texture. Centered square, isolated subject fills 80 percent of frame, safe margin. Warm ochre and teal accents harmonizing with friendly fantasy board game art. No text, no watermark, no border or frame, no background, no small ornament. Bold silhouette instantly readable at 32 pixels. Subject: a friendly dwarf head and shoulders, huge simple ginger beard, broad nose, ochre miner helmet, small steel axe silhouette beside head. Minimal facial details. No separate hair strands."
+    },
+    {
+      "category": "race",
+      "id": "orcs",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a mobile fantasy board game, displayed at 32–56 CSS pixels. Style: flat cut-paper illustration, VERY SIMPLE, 3–5 large color shapes, thick dark contour, maximum one broad shadow per shape, no gradients, no texture. Centered square, isolated subject fills 80 percent of frame, safe margin. Warm ochre and teal accents harmonizing with friendly fantasy board game art. No text, no watermark, no border or frame, no background, no small ornament. Bold silhouette instantly readable at 32 pixels. Subject: one grinning green orc head and shoulders, broad jaw with two white tusks, short dark hair, simple rust red tunic. Only face and shoulders, no weapons or scenery."
+    },
+    {
+      "category": "power",
+      "id": "dragonMaster",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a mobile fantasy board game, displayed at 32–56 CSS pixels. Style: flat cut-paper illustration, VERY SIMPLE, 3–5 large color shapes, thick dark contour, maximum one broad shadow per shape, no gradients, no texture. Centered square, isolated subject fills 80 percent of frame, safe margin. Warm ochre and teal accents harmonizing with friendly fantasy board game art. No text, no watermark, no border or frame, no background, no small ornament. Bold silhouette instantly readable at 32 pixels. Subject: a friendly teal dragon head with ochre horns, a short curled neck. Bold profile, one big eye, two horns, no scales, no flames, no wings or scenery."
+    },
+    {
+      "category": "power",
+      "id": "flying",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a mobile fantasy board game, displayed at 32–56 CSS pixels. Style: flat cut-paper illustration, VERY SIMPLE, 3–5 large color shapes, thick dark contour, maximum one broad shadow per shape, no gradients, no texture. Centered square, isolated subject fills 80 percent of frame, safe margin. Warm ochre and teal accents harmonizing with friendly fantasy board game art. No text, no watermark, no border or frame, no background, no small ornament. Bold silhouette instantly readable at 32 pixels. Subject: a single pair of spread cream and ochre feathered wings, only three broad feather shapes on each side, symmetrical, simple flight emblem, no bird body."
+    },
+    {
+      "category": "terrain",
+      "id": "mountain",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a mobile fantasy board game, displayed at 32–56 CSS pixels. Style: flat cut-paper illustration, VERY SIMPLE, 3–5 large color shapes, thick dark contour, maximum one broad shadow per shape, no gradients, no texture. Centered square, isolated subject fills 80 percent of frame, safe margin. Warm ochre and teal accents harmonizing with friendly fantasy board game art. No text, no watermark, no border or frame, no background, no small ornament. Bold silhouette instantly readable at 32 pixels. Subject: terrain illustration of two gray mountain peaks with one broad white snow cap each, on a small rounded stone mound. Compact silhouette, slight overhead board game perspective, no trees, no tiny rocks."
+    },
+    {
+      "category": "terrain",
+      "id": "farmland",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a mobile fantasy board game, displayed at 32–56 CSS pixels. Style: flat cut-paper illustration, VERY SIMPLE, 3–5 large color shapes, thick dark contour, maximum one broad shadow per shape, no gradients, no texture. Centered square, isolated subject fills 80 percent of frame, safe margin. Warm ochre and teal accents harmonizing with friendly fantasy board game art. No text, no watermark, no border or frame, no background, no small ornament. Bold silhouette instantly readable at 32 pixels. Subject: terrain illustration of one small cream farmhouse with terracotta roof, beside just three wide golden wheat stalks, on one compact rounded ochre patch. Very simplified broad shapes, slight overhead board game perspective, no windows beyond one dark doorway, no landscape."
+    },
+    {
+      "category": "texture",
+      "id": "farmland",
+      "prompt": "Use case: stylized-concept. Asset type: seamless repeating raster ground TEXTURE for irregular terrain tiles in a mobile fantasy strategy board game. Primary requirement: top-down flat surface material texture that can tile in both directions; opposite edges must match seamlessly. This is NOT an isolated terrain icon, landscape, vignette, diorama or object. Pattern must cover the entire square canvas uniformly, no focal point, no empty margin, no border. Very sparse large simple marks, low contrast, broad flat color areas, readable at small smartphone sizes; calm visual texture behind numeric badges. Hand-painted board-game graphic style without fine grain, noise or detail. Background genuinely transparent so the game's terrain base color remains visible. No text, no characters, no buildings, no shadows or perspective, no decorative frame. Subject: cultivated field surface texture: gently uneven PARALLEL diagonal rows of broad muted brown furrow strokes separated by wide transparent gaps, with occasional short golden harvest stubble marks. Extremely restrained, sparse, no individual wheat plants, no farmhouse. Use dark ochre marks at low opacity."
+    },
+    {
+      "category": "texture",
+      "id": "forest",
+      "prompt": "Use case: stylized-concept. Asset type: seamless repeating raster ground TEXTURE for irregular terrain tiles in a mobile fantasy strategy board game. Primary requirement: top-down flat surface material texture that can tile in both directions; opposite edges must match seamlessly. This is NOT an isolated terrain icon, landscape, vignette, diorama or object. Pattern must cover the entire square canvas uniformly, no focal point, no empty margin, no border. Very sparse large simple marks, low contrast, broad flat color areas, readable at small smartphone sizes; calm visual texture behind numeric badges. Hand-painted board-game graphic style without fine grain, noise or detail. Background genuinely transparent so the game's terrain base color remains visible. No text, no characters, no buildings, no shadows or perspective, no decorative frame. Subject: forest canopy surface texture: scattered clusters of large rounded leaf-like brush shapes and soft organic canopy patches seen directly from above; a sparse natural repeating pattern, dark moss and lighter sage marks at low opacity. No trees in side view, no trunks, no pine-tree icons, no ground mound."
+    },
+    {
+      "category": "texture",
+      "id": "mountain",
+      "prompt": "Use case: stylized-concept. Asset type: seamless repeating raster ground TEXTURE for irregular terrain tiles in a mobile fantasy strategy board game. Primary requirement: top-down flat surface material texture that can tile in both directions; opposite edges must match seamlessly. This is NOT an isolated terrain icon, landscape, vignette, diorama or object. Pattern must cover the entire square canvas uniformly, no focal point, no empty margin, no border. Very sparse large simple marks, low contrast, broad flat color areas, readable at small smartphone sizes; calm visual texture behind numeric badges. Hand-painted board-game graphic style without fine grain, noise or detail. Background genuinely transparent so the game's terrain base color remains visible. No text, no characters, no buildings, no shadows or perspective, no decorative frame. Subject: stone ground surface texture: a few broad angular slate facets, with sparse soft charcoal rock fissure strokes and pale gray highlights. A flat rough stone surface seen directly from above, dark gray marks at low opacity. No mountains in side view, no peaks, no snowcaps, no rock piles, no terrain mound."
+    },
+    {
+      "category": "terrain",
+      "id": "hill",
+      "prompt": "Use case: stylized-concept.\nAsset type: transparent raster ICON for hills in a mobile fantasy board game, shown at 20–32 pixels.\nSubject: just two low rounded ochre hills overlapping, one small broad sage-green grassy cap, very bold rounded silhouette. This is a compact symbolic icon, NOT a landscape picture.\nStyle: friendly flat board-game illustration matching ochre/teal fantasy icons, thick dark brown contour, 3 or 4 simple color shapes, one broad shadow per hill.\nComposition: centered square, symbol fills 80 percent, generous safe margin; isolated on genuinely transparent background.\nConstraints: no rectangular scenery, no sky, no horizon, no sun, no river, no trees, no buildings, no mountain peaks, no scenic frame, no text, no grain, no small details. Instantly readable at 20 pixels."
+    },
+    {
+      "category": "race",
+      "id": "elves",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: a friendly elf head and shoulders, long pointed ears, swept golden hair, sage-green hood and teal tunic. Confident calm face, no weapon or scenery."
+    },
+    {
+      "category": "race",
+      "id": "ghouls",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: a friendly cartoon ghoul head and shoulders, pale moss-green skin, sunken purple eyes, tousled dark hair, ragged terracotta collar. Mischievous smile, no wounds or blood."
+    },
+    {
+      "category": "race",
+      "id": "giants",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: a burly giant head and shoulders, huge square jaw, warm brown skin, broad nose, simple short dark hair, ochre stone-like shoulder armor. Gentle determined face."
+    },
+    {
+      "category": "race",
+      "id": "halflings",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: a cheerful halfling head and shoulders, round rosy face, short curly chestnut hair, broad green cap, rust-red vest and cream shirt. A single simple red mushroom beside the shoulder."
+    },
+    {
+      "category": "race",
+      "id": "humans",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: a friendly human farmer head and shoulders, medium brown skin, broad straw hat, teal shirt, three golden wheat ears held beside face. Simple welcoming expression."
+    },
+    {
+      "category": "race",
+      "id": "ratmen",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: an anthropomorphic rat head and shoulders, taupe fur, long muzzle, big round ears, two front teeth, terracotta scarf and teal tunic. Friendly cunning expression, no fine fur strokes."
+    },
+    {
+      "category": "race",
+      "id": "skeletons",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: a friendly skeleton head and shoulders, ivory skull with two large dark eye sockets, one simple grinning jaw, teal shoulder armor and rust-red collar. No horror, no blood."
+    },
+    {
+      "category": "race",
+      "id": "sorcerers",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one mysterious sorcerer head and shoulders, brown skin, dark purple hood, simple short black beard, one large glowing teal orb beside face. No pointed hat, no scenery."
+    },
+    {
+      "category": "race",
+      "id": "tritons",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: a friendly blue-teal triton head and shoulders, fin-shaped ears, swept dark teal hair, ochre collar, one simple three-pronged golden trident beside head. No underwater scenery."
+    },
+    {
+      "category": "race",
+      "id": "trolls",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: a friendly stocky troll head and shoulders, sage-green skin, big bulbous nose, two small tusks, short ochre hair tuft, simple terracotta vest. Broad rounded silhouette, no weapon."
+    },
+    {
+      "category": "race",
+      "id": "wizards",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: a friendly elderly wizard head and shoulders, big simple ivory beard, dark teal pointed hat with one ochre star, terracotta robe. Warm kindly face, no orb or scenery."
+    },
+    {
+      "category": "power",
+      "id": "berserk",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one single chunky ochre dice showing three large dark pips, with two short terracotta angular energy marks. Bold simple symbol for a berserk attack, no lettering."
+    },
+    {
+      "category": "power",
+      "id": "bivouacking",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one compact triangular teal canvas tent with an ochre opening, on a tiny warm ochre ground patch. No campsite scenery, no trees, no poles extending far."
+    },
+    {
+      "category": "power",
+      "id": "commando",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one short broad steel dagger with a teal hilt angled upward in front of a terracotta cloth band. Only these two objects, no character."
+    },
+    {
+      "category": "power",
+      "id": "diplomat",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one white dove in side view holding a single broad sage-green olive branch. Just three large feather shapes, no scenery."
+    },
+    {
+      "category": "power",
+      "id": "fortified",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one small compact ochre stone fortress tower, three broad crenellations, one dark doorway and a terracotta banner. No surrounding castle or landscape."
+    },
+    {
+      "category": "power",
+      "id": "heroic",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one heroic human head and shoulders wearing a steel winged helmet, ochre breastplate and a broad terracotta cape. Friendly determined expression, compact silhouette."
+    },
+    {
+      "category": "power",
+      "id": "merchant",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one simple ochre balance scale, two broad bowls, a short thick upright post, balanced on a compact teal base. No coin stacks, no lettering."
+    },
+    {
+      "category": "power",
+      "id": "mounted",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one chestnut horse head with a short neck, dark mane and simple teal bridle with an ochre buckle. Bold profile, friendly expression."
+    },
+    {
+      "category": "power",
+      "id": "pillaging",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one terracotta flaming torch with three broad flame shapes, beside one large golden coin. Just these two objects, no smoke or scenery."
+    },
+    {
+      "category": "power",
+      "id": "seafaring",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one tiny sturdy teal sailing boat with one large cream triangular sail and terracotta hull, two broad blue wave strokes beneath it. No sea landscape."
+    },
+    {
+      "category": "power",
+      "id": "spirit",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one friendly pale cream ghost silhouette with two large dark eyes, three broad flowing tails and a soft teal shaded edge. No chains, no scenery."
+    },
+    {
+      "category": "power",
+      "id": "stout",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one sturdy chunky wooden tankard with an ochre handle, teal metal band, one simple cream foam cap. No liquid droplets or text."
+    },
+    {
+      "category": "power",
+      "id": "underworld",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one compact dark rock cavern opening framed by three broad ochre and gray stones, with one small teal bat silhouette above the entrance. No landscape."
+    },
+    {
+      "category": "power",
+      "id": "wealthy",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one large faceted teal gemstone on a small pile of three broad golden coins. Very simple clean polygon faces, no sparkles or ornament."
+    },
+    {
+      "category": "terrain",
+      "id": "swamp",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one compact swamp terrain icon: a tiny sage-green pool with three thick cattail reeds, one broad lily pad, small ochre muddy bank. Slight overhead board-game perspective, no frog or scenery."
+    },
+    {
+      "category": "terrain",
+      "id": "sea",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one bold curled deep-blue ocean wave with a broad cream foam crest, two short teal horizontal water bands. Compact symbolic icon, no sea landscape, no boat."
+    },
+    {
+      "category": "terrain",
+      "id": "lake",
+      "prompt": "Use case: stylized-concept. Asset type: transparent raster illustration for a French mobile fantasy board game, displayed at 20–42 CSS pixels. Style: original friendly board-game cut-paper illustration, VERY SIMPLE large flat color shapes, thick clean dark brown contour, maximum one broad shadow per shape, no gradients, no grain. Centered square, isolated subject fills 80 percent of frame, safe transparent margin. Warm ochre, terracotta and teal accents. No text, watermark, border, frame, scenery, small ornament or thin lines. Bold silhouette readable at 24 pixels. Subject: one compact calm light-blue lake pool with a rounded ochre shore rim, one thick cream ripple and a single broad sage-green reed. Slight overhead view, no sky or landscape."
+    },
+    {
+      "category": "texture",
+      "id": "hill",
+      "prompt": "Use case: stylized-concept. Asset type: raster ground TEXTURE for irregular terrain tiles in a mobile fantasy board game. Top-down flat surface material marks spread evenly across the entire square canvas, no focal point or empty margin. This is NOT an isolated icon, vignette, diorama or landscape. Sparse medium-sized broad simple marks, low contrast, large transparent gaps, calm visual texture behind numeric badges. Friendly hand-painted board-game flat shapes without fine grain or noise. Genuinely transparent background so terrain base color remains visible. No text, characters, buildings, perspective, frame, dark outlines or isolated ground mound. Subject: rolling grassy ground surface: scattered broad shallow curved contour strokes and flat rounded soft sage grass patches on transparent gaps, muted ochre and brown tones. No hills in side view, no horizon."
+    },
+    {
+      "category": "texture",
+      "id": "swamp",
+      "prompt": "Use case: stylized-concept. Asset type: raster ground TEXTURE for irregular terrain tiles in a mobile fantasy board game. Top-down flat surface material marks spread evenly across the entire square canvas, no focal point or empty margin. This is NOT an isolated icon, vignette, diorama or landscape. Sparse medium-sized broad simple marks, low contrast, large transparent gaps, calm visual texture behind numeric badges. Friendly hand-painted board-game flat shapes without fine grain or noise. Genuinely transparent background so terrain base color remains visible. No text, characters, buildings, perspective, frame, dark outlines or isolated ground mound. Subject: marsh surface: sparse uneven horizontal dark sage ripple strokes with scattered broad moss-green reed clumps and flat olive puddle edges, transparent gaps. No scenery or frogs."
+    },
+    {
+      "category": "texture",
+      "id": "sea",
+      "prompt": "Use case: stylized-concept. Asset type: raster ground TEXTURE for irregular terrain tiles in a mobile fantasy board game. Top-down flat surface material marks spread evenly across the entire square canvas, no focal point or empty margin. This is NOT an isolated icon, vignette, diorama or landscape. Sparse medium-sized broad simple marks, low contrast, large transparent gaps, calm visual texture behind numeric badges. Friendly hand-painted board-game flat shapes without fine grain or noise. Genuinely transparent background so terrain base color remains visible. No text, characters, buildings, perspective, frame, dark outlines or isolated ground mound. Subject: deep ocean water surface: evenly scattered broad curved blue-teal wave strokes and sparse cream foam arcs separated by large transparent gaps. No coast, boats or horizon."
+    },
+    {
+      "category": "texture",
+      "id": "lake",
+      "prompt": "Use case: stylized-concept. Asset type: raster ground TEXTURE for irregular terrain tiles in a mobile fantasy board game. Top-down flat surface material marks spread evenly across the entire square canvas, no focal point or empty margin. This is NOT an isolated icon, vignette, diorama or landscape. Sparse medium-sized broad simple marks, low contrast, large transparent gaps, calm visual texture behind numeric badges. Friendly hand-painted board-game flat shapes without fine grain or noise. Genuinely transparent background so terrain base color remains visible. No text, characters, buildings, perspective, frame, dark outlines or isolated ground mound. Subject: calm lake water surface: sparse broad softly curved pale cyan ripple bands with a few pale cream reflection strokes, wide transparent gaps. Calmer and lighter than an ocean, no shore or scenery."
+    }
+  ],
+  "shared_art": {
+    "power-forest": "terrain-forest",
+    "power-hill": "terrain-hill",
+    "power-swamp": "terrain-swamp"
+  }
+}

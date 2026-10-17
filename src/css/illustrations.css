@@ -1,0 +1,39 @@
+.art-icon {
+  display: inline-block;
+  object-fit: contain;
+  flex: none;
+  vertical-align: middle;
+  pointer-events: none;
+}
+span.art-icon {
+  text-align: center;
+  line-height: 1;
+}
+.combo-art {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+.combo-label .art-icon {
+  margin-inline-end: 3px;
+}
+.terrain-texture {
+  pointer-events: none;
+  opacity: 0.3;
+}
+.region-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.peffect .art-icon,
+.prule .art-icon,
+.g-head .art-icon {
+  margin-inline-end: 4px;
+}
+.declined .art-icon {
+  filter: grayscale(1);
+  opacity: 0.65;
+}

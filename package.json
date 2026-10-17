@@ -1,0 +1,23 @@
+{
+  "name": "smallmobile",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Un clone de Small World pensé pour le navigateur mobile (2 joueurs + IA).",
+  "scripts": {
+    "dev": "bun run kernel:build && bun --hot server.ts",
+    "start": "bun run kernel:build && NODE_ENV=production bun server.ts",
+    "build": "bun run kernel:build && bun build ./src/index.html --outdir=dist --minify && cp public/* dist/",
+    "test": "bun run kernel:build && bun test",
+    "typecheck": "tsc --noEmit",
+    "kernel:build": "bun kernel/tools/build.ts"
+  },
+  "dependencies": {
+    "preact": "^11.0.1",
+    "qrcode-generator": "^2.0.4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "typescript": "^7.0.2"
+  }
+}

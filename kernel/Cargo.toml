@@ -1,0 +1,10 @@
+[package]
+name = "smallmobile-kernel"
+version = "0.1.0"
+edition = "2024"
+description = "Le jeu SmallMobile : règles, IA et cartes, pour le serveur et le téléphone (WebAssembly)."
+publish = false
+
+[lib]
+# rlib : les tests ; cdylib : le module WebAssembly.
+crate-type = ["rlib", "cdylib"]

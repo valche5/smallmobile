@@ -1,0 +1,20 @@
+[workspace]
+# kernel : le jeu (règles, IA, cartes), compilé en WebAssembly pour le téléphone et le serveur.
+members = ["kernel"]
+resolver = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# Les tests jouent des parties entières : compilés avec optimisations.
+[profile.test]
+opt-level = 3
+
+# Le module WebAssembly livré au téléphone : plus compact, même code.
+[profile.web]
+inherits = "release"
+opt-level = "s"
+strip = true

@@ -1,0 +1,720 @@
+/* Styles de la zone « chrome » (voir styles.css pour la base). */
+
+/* Couleurs de nature d'effet : liseré sous l'emoji (jamais seules porteuses du sens) */
+:root {
+  --k-atk: #c0392b;
+  --k-def: #2e6fd8;
+  --k-spe: #7a7a7a;
+  --k-inc: #c99a06;
+  /* variante sombre, pour le texte sur fond clair */
+  --k-atk-ink: #a1281c;
+  --k-def-ink: #2257b4;
+  --k-spe-ink: #5e5e5e;
+  --k-inc-ink: #8a6500;
+}
+.k-atk {
+  --k: var(--k-atk);
+  --k-ink: var(--k-atk-ink);
+}
+.k-def {
+  --k: var(--k-def);
+  --k-ink: var(--k-def-ink);
+}
+.k-spe {
+  --k: var(--k-spe);
+  --k-ink: var(--k-spe-ink);
+}
+.k-inc {
+  --k: var(--k-inc);
+  --k-ink: var(--k-inc-ink);
+}
+
+/* ---------- Étiquette : emoji souligné + texte court ---------- */
+
+.tagbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 20px;
+  white-space: nowrap;
+}
+.tagbox > .emo {
+  flex: none;
+  line-height: 1;
+  padding-bottom: 1px;
+  border-bottom: 3px solid var(--k);
+}
+.tag {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Ligne MOI (44 px) ---------- */
+
+.topbar {
+  flex: none;
+  background: var(--chrome);
+  color: var(--chrome-ink);
+  padding-top: env(safe-area-inset-top);
+}
+.me-row {
+  height: 44px;
+  display: flex;
+  align-items: stretch;
+  padding-left: 8px;
+}
+.round {
+  width: 44px;
+  flex: none;
+  margin: 3px 0;
+  border-radius: 9px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  user-select: none;
+}
+.round-num {
+  font-size: 15px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.round-num small {
+  font-size: 11px;
+  opacity: 0.75;
+}
+.round-label {
+  font-size: 11px;
+  margin-top: 2px;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+.round.mine .round-label {
+  opacity: 1;
+  font-weight: 800;
+  color: #fff;
+  background: var(--pc);
+  border-radius: 5px;
+  padding: 1px 3px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5);
+}
+.round.last {
+  background: #f2b134;
+  color: #2a2118;
+}
+.round.last .round-label {
+  opacity: 1;
+  font-weight: 800;
+}
+
+.who {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  border-radius: 10px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 0 4px 0 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+}
+.who:active {
+  background: var(--chrome-2);
+}
+.who-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 19px;
+  min-width: 0;
+  font-size: 13px;
+}
+.who-line.indent {
+  padding-left: 14px;
+}
+.who-line .pdot {
+  width: 8px;
+  height: 8px;
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.85);
+}
+.who-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats {
+  width: 64px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-end;
+  gap: 1px;
+  padding-right: 2px;
+}
+.stat {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.stat b {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+.bubble {
+  position: absolute;
+  right: calc(100% + 3px);
+  top: 0;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: var(--chrome-2);
+  pointer-events: none;
+  animation: bubble-up 1s ease-out forwards;
+}
+.bubble.up {
+  color: #7fe0a0;
+}
+.bubble.down {
+  color: #ff9a8f;
+}
+@keyframes bubble-up {
+  to {
+    transform: translateY(-10px);
+    opacity: 0;
+  }
+}
+
+.menu-btn {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font-size: 22px;
+}
+
+/* ---------- Bandeau des adversaires ---------- */
+
+.foes {
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.07);
+}
+.foes.one {
+  height: 36px;
+  padding: 2px 8px;
+}
+.foes.rows {
+  padding: 0 4px;
+}
+.foe {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  color: var(--chrome-ink);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+}
+.foe .pdot {
+  width: 8px;
+  height: 8px;
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.85);
+}
+.foe-name {
+  font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: none;
+}
+.foe-tags {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.foe-none {
+  opacity: 0.7;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.foe-gray {
+  filter: grayscale(1);
+  opacity: 0.7;
+}
+.foe-zz {
+  flex: none;
+  margin-right: -8px;
+}
+/* Peuples en déclin : affichés en entier s'ils tiennent, sinon pas du tout */
+.foe-old {
+  /* ne prend que la place laissée par les étiquettes, jamais une fraction de pixel de plus */
+  flex: 1 1 0;
+  min-width: 0;
+  height: 18px;
+  overflow: hidden;
+  display: flex;
+  flex-wrap: wrap;
+}
+.foe-old::before {
+  content: '';
+  flex: 0 0 0;
+  height: 18px;
+}
+.foe-old-in {
+  padding-left: 8px;
+  line-height: 18px;
+  opacity: 0.85;
+}
+.foe-end {
+  margin-left: auto;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 6px;
+}
+.foe .chev {
+  opacity: 0.6;
+  font-size: 15px;
+  line-height: 1;
+}
+.foe-now {
+  font-weight: 800;
+  color: #fff;
+}
+
+/* Un seul adversaire : puce de 2 lignes */
+.foe.one {
+  height: 32px;
+  border-radius: 10px;
+  background: var(--chrome-2);
+  padding: 0 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.foe-l1,
+.foe-l2 {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 15px;
+}
+.foe-l1 {
+  gap: 5px;
+  font-size: 13px;
+}
+.foe-l2 {
+  font-size: 12px;
+  padding-left: 13px;
+}
+.foe.one .foe-name {
+  max-width: 9em;
+}
+.foe-coins {
+  flex: none;
+  opacity: 0.85;
+}
+.foe.one .tagbox > .emo {
+  border-bottom-width: 2px;
+}
+
+/* 2 à 4 adversaires : une rangée de 22 px chacun */
+.foe.row {
+  height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: none;
+  font-size: 12px;
+}
+.foe.row .foe-name {
+  width: 48px;
+}
+.foe-play {
+  width: 12px;
+  flex: none;
+  text-align: center;
+  font-size: 10px;
+}
+.foe.row .foe-tags {
+  gap: 10px;
+}
+.foe.row .tagbox {
+  gap: 3px;
+}
+.foe.row .tagbox > .emo {
+  border-bottom-width: 2px;
+}
+.foe.row .foe-end {
+  gap: 4px;
+  padding-left: 4px;
+}
+.foe:active {
+  background: var(--chrome-2);
+}
+.foe.row + .foe.row {
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* L'adversaire qui agit : anneau à sa couleur qui pulse */
+.foe.now {
+  background: color-mix(in srgb, var(--pc) 22%, var(--chrome-2));
+}
+.foe.now::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 2px var(--pc), inset 0 0 0 3px rgba(255, 255, 255, 0.25);
+  animation: ring-pulse 1.2s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes ring-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+/* Nouveau peuple choisi : la puce pivote puis clignote deux fois */
+.foe.pivot-a {
+  animation: pivot-a 0.4s ease-out, blink-a 0.3s 0.4s 2;
+}
+.foe.pivot-b {
+  animation: pivot-b 0.4s ease-out, blink-b 0.3s 0.4s 2;
+}
+@keyframes pivot-a {
+  from {
+    transform: perspective(300px) rotateX(90deg);
+  }
+}
+@keyframes pivot-b {
+  from {
+    transform: perspective(300px) rotateX(90deg);
+  }
+}
+@keyframes blink-a {
+  50% {
+    opacity: 0.3;
+  }
+}
+@keyframes blink-b {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* ---------- Peuples en jeu ---------- */
+
+.people {
+  display: flex;
+  flex-direction: column;
+}
+.pblock {
+  border-top: 1px solid var(--line);
+}
+.pblock:first-child {
+  border-top: 0;
+}
+.pblock-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 6px 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  font-size: 14px;
+}
+.pblock-head .pdot {
+  width: 11px;
+  height: 11px;
+  box-shadow: none;
+}
+.pblock-line {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pblock .chev {
+  color: var(--muted);
+  flex: none;
+}
+.pblock-body {
+  padding: 0 0 8px 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.peffect {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13.5px;
+  line-height: 1.35;
+}
+.peffect .kind {
+  flex: none;
+  width: 62px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--k-ink, var(--muted));
+}
+.peffect .kind.k-old {
+  color: var(--muted);
+}
+.peffect.declined .peffect-text {
+  color: #5f574c;
+}
+.peffect-text {
+  min-width: 0;
+}
+.pstatus {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+details.pmore > summary {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  padding: 4px 0;
+  cursor: pointer;
+  list-style: none;
+}
+details.pmore > summary::-webkit-details-marker {
+  display: none;
+}
+details.pmore > summary::after {
+  content: ' ▾';
+}
+details.pmore[open] > summary::after {
+  content: ' ▴';
+}
+.prule {
+  margin: 4px 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* ---------- Vues ---------- */
+
+.back-btn {
+  min-height: 36px;
+  padding: 4px 12px;
+  margin-bottom: 8px;
+}
+
+/* Marché */
+.market-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.market-head h2 {
+  margin: 0;
+  font-size: 20px;
+}
+.help-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  background: var(--card);
+  font-weight: 800;
+  color: var(--muted);
+  flex: none;
+}
+.market-help {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: var(--card);
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 1px 6px rgba(60, 40, 10, 0.12);
+}
+.combo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+}
+.combo-card {
+  background: var(--card);
+  border-radius: 14px;
+  box-shadow: 0 2px 0 var(--line), 0 1px 8px rgba(60, 40, 10, 0.08);
+  border: 2px solid transparent;
+  overflow: hidden;
+}
+.combo-card.open {
+  border-color: var(--primary);
+}
+.combo-card.locked {
+  opacity: 0.6;
+}
+.combo-main {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 12px 10px;
+  border: 0;
+  background: none;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.combo-l1,
+.combo-l3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.combo-l1 .emo {
+  flex: none;
+  font-size: 17px;
+}
+.combo-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  line-height: 1.2;
+}
+.combo-tokens {
+  flex: none;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.combo-eff {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 18px;
+  padding-left: 7px;
+  border-left: 3px solid var(--k);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.price {
+  flex: none;
+  font-size: 12.5px;
+  font-weight: 800;
+  white-space: nowrap;
+  background: #f1e8d6;
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.price.good {
+  background: #dcf1e3;
+  color: #17683a;
+}
+.combo-details {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.combo-details p {
+  margin: 0 0 6px;
+}
+.btn.take {
+  display: flex;
+  width: calc(100% - 24px);
+  margin: 0 12px 12px;
+  min-height: 44px;
+}
+
+/* Journal */
+.log-entry.hit {
+  color: var(--bad);
+  font-weight: 600;
+  background: #fdf0ee;
+}
+.log-entry.quiet {
+  color: var(--muted);
+  background: transparent;
+  font-size: 12.5px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+/* Légende */
+.cost-demo.c-threat {
+  /* comme sur la carte : pastille sombre, anneau à la couleur de l'ennemi, orange si la prise est facile */
+  background: #4a4038;
+  color: #fff;
+  box-shadow: inset 0 0 0 2px #1f6fe0;
+}
+.cost-demo.c-threat.hot {
+  background: #e8590c;
+}
+.lost-demo {
+  display: inline-block;
+  width: 26px;
+  height: 16px;
+  border-radius: 4px;
+  border: 2px dashed var(--bad);
+  vertical-align: -3px;
+  margin-right: 6px;
+}
+
+/* ---------- Écran de passage et fin de partie ---------- */
+
+.handoff-tags {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.handoff-tags .emo {
+  border-bottom: 3px solid var(--k);
+}
+.handoff-card .hit-line {
+  color: var(--bad);
+  font-weight: 600;
+}
+.gameover .handoff-card h1 {
+  font-size: 22px;
+}
+.podium .gap {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  margin-left: 4px;
+}
+.podium .tie {
+  color: var(--muted);
+  font-size: 12px;
+}
+.podium li.me {
+  box-shadow: inset 0 0 0 2px var(--line);
+}

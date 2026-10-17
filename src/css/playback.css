@@ -1,0 +1,347 @@
+/* Styles de la zone « playback » : carte d'événement du tour adverse, surbrillance et caméra de la carte. */
+
+/* ---------- Carte d'événement (zone d'action, 84 px) ---------- */
+
+.actionbar.eventcard {
+  position: relative;
+  display: block;
+  flex: none;
+  height: 84px;
+  min-height: 84px;
+  max-height: 84px;
+  padding: 0;
+  gap: 0;
+  overflow: visible;
+  background: #fffaf0;
+  border-top: 0;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.eventcard .ec-inner {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 84px;
+  background: #fffaf0;
+  border-top: 3px solid color-mix(in srgb, var(--pc, #7b6d5b) 30%, #efe5d0);
+  cursor: pointer;
+}
+/* choix d'un peuple : la carte grandit vers le haut, par-dessus la carte de jeu, sans bouger la mise en page */
+.eventcard.tall .ec-inner {
+  height: 102px;
+  z-index: 6;
+  box-shadow: 0 -6px 16px rgba(40, 28, 10, 0.16);
+}
+.ec-progress {
+  position: absolute;
+  left: 0;
+  top: -3px;
+  height: 3px;
+  width: 100%;
+  background: var(--pc, #7b6d5b);
+  transform-origin: left;
+  transform: scaleX(0);
+  animation: ec-progress linear forwards;
+}
+@keyframes ec-progress {
+  to {
+    transform: scaleX(1);
+  }
+}
+.eventcard > .ec-body,
+.ec-inner > .ec-body {
+  position: absolute;
+  top: 6px;
+  left: 12px;
+  right: 12px;
+  bottom: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ec-inner > .ec-body {
+  animation: ec-in 0.22s ease-out;
+}
+@keyframes ec-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+}
+.ec-who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 18px;
+  line-height: 18px;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--pc, var(--muted));
+  white-space: nowrap;
+  overflow: hidden;
+  padding-right: 62px;
+}
+.ec-name {
+  min-width: 0;
+  max-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: none;
+}
+.ec-combo {
+  flex: none;
+  font-family: var(--emoji);
+  letter-spacing: 0;
+}
+.ec-suffix {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+  color: var(--muted);
+}
+.ec-main {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 22px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.ec-main.verdict {
+  animation: ec-verdict 0.35s ease-out;
+}
+@keyframes ec-verdict {
+  from {
+    transform: scale(1.06);
+    transform-origin: left;
+  }
+}
+.ec-main.rolling {
+  line-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ec-die {
+  display: inline-block;
+  font-family: var(--emoji);
+  font-size: 27px;
+  line-height: 32px;
+  width: 32px;
+  text-align: center;
+  flex: none;
+  animation: ec-roll 0.5s linear infinite;
+}
+@keyframes ec-roll {
+  0% {
+    transform: rotate(0) translateY(0);
+  }
+  25% {
+    transform: rotate(90deg) translateY(-3px);
+  }
+  50% {
+    transform: rotate(180deg) translateY(0);
+  }
+  75% {
+    transform: rotate(270deg) translateY(-3px);
+  }
+  100% {
+    transform: rotate(360deg) translateY(0);
+  }
+}
+.ec-detail {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.ec-detail.hit {
+  color: var(--bad);
+  font-weight: 600;
+}
+/* « ⏩ N » : zone de toucher large, pastille visible plus petite */
+.ec-skip {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 40px;
+  min-width: 64px;
+  padding: 3px 8px 0 4px;
+  border: 0;
+  background: transparent;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  font: 800 13px var(--font);
+  color: var(--ink);
+  cursor: pointer;
+  z-index: 2;
+}
+.ec-skip::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 6px;
+  height: 22px;
+  left: 8px;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--pc, #7b6d5b) 16%, #ffffff);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc, #7b6d5b) 35%, transparent);
+  z-index: -1;
+}
+.ec-skip {
+  isolation: isolate;
+  line-height: 22px;
+}
+/* attente : la dernière carte pâlit, un sablier tourne */
+.eventcard.idle .ec-body,
+.eventcard.wait .ec-body {
+  opacity: 0.6;
+}
+.eventcard .spinner {
+  width: 11px;
+  height: 11px;
+  vertical-align: -1px;
+}
+.ec-main .spinner {
+  margin-right: 4px;
+}
+.eventcard.header .ec-who {
+  color: var(--muted);
+}
+.eventcard.header .ec-name {
+  max-width: none;
+}
+
+/* ---------- Carte : surbrillance de l'action adverse ---------- */
+
+.hl {
+  fill: none;
+  stroke-width: 5px;
+  stroke-linejoin: round;
+  pointer-events: none;
+  animation: hl-pulse 0.45s ease-in-out 2;
+}
+@keyframes hl-pulse {
+  50% {
+    stroke-width: 10px;
+    stroke-opacity: 0.4;
+  }
+}
+.hl-flash {
+  fill: #e03131;
+  fill-opacity: 0;
+  pointer-events: none;
+  animation: hl-flash 0.3s ease-out;
+}
+@keyframes hl-flash {
+  from {
+    fill-opacity: 0.55;
+  }
+  to {
+    fill-opacity: 0;
+  }
+}
+.mk text.loss-bubble {
+  font: 900 15px var(--font);
+  fill: #e03131;
+  stroke: #ffffff;
+  stroke-width: 3px;
+  paint-order: stroke;
+  opacity: 0;
+  animation: loss-up 1.2s ease-out;
+}
+@keyframes loss-up {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  70% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+}
+/* début du tour d'un adversaire : ses régions clignotent une fois */
+.hl-blink {
+  fill: none;
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  stroke-opacity: 0;
+  pointer-events: none;
+  animation: hl-blink 0.7s ease-in-out;
+}
+@keyframes hl-blink {
+  40% {
+    stroke-opacity: 1;
+  }
+}
+/* régions qu'un adversaire m'a prises depuis mon dernier décompte */
+.lost-outline {
+  fill: none;
+  stroke: #e03131;
+  stroke-width: 2px;
+  stroke-dasharray: 6 4;
+  pointer-events: none;
+}
+/* menace ennemie sur mes régions (redéploiement, défense) : anneau à la couleur de l'ennemi */
+.region.m-threat {
+  stroke: #ffffff;
+  stroke-width: 2.2px;
+  stroke-dasharray: 3 3;
+}
+.cost.threat rect {
+  fill: #4a4038;
+  stroke-width: 2px;
+}
+.cost.threat.hot rect {
+  fill: #e8590c;
+}
+
+/* ---------- Carte : contrôles ---------- */
+
+.tool.follow {
+  width: auto;
+  padding: 0 10px 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 14px;
+  font-weight: 800;
+  animation: follow-in 0.2s ease-out;
+}
+.tool.follow span {
+  font-family: var(--font);
+}
+@keyframes follow-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+.map-tools {
+  align-items: flex-end;
+}
+
+/* texte d'une ligne flex : l'ellipse ne marche que sur un enfant qui peut rétrécir */
+.ec-ell {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

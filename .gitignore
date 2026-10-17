@@ -1,0 +1,10 @@
+node_modules
+dist
+.DS_Store
+*.log
+data
+output/illustrations-preview/
+
+# compilations Rust et module WebAssembly du jeu (bun run kernel:build)
+/target/
+public/game-kernel.wasm

@@ -1,0 +1,422 @@
+/* Styles de la zone « decisions » (voir styles.css pour la base). */
+/* Sélecteurs à deux classes : ce fichier est importé avant styles.css et doit l'emporter sur ses règles d'une classe. */
+
+/* ---------- Zone d'action : 84 px, indication (22 px) puis boutons (52 px) ---------- */
+
+.app > .actionbar {
+  height: 84px;
+  min-height: 84px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex-wrap: nowrap;
+  gap: 0;
+  padding: 4px 10px 6px;
+  position: relative;
+  box-sizing: border-box;
+}
+.actionbar.decide .hint-row {
+  height: 22px;
+  line-height: 22px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-radius: 6px;
+  padding: 0 6px;
+  margin: 0 -6px;
+  color: var(--ink);
+  flex: none;
+}
+.actionbar.decide .hint-row .spinner {
+  margin-right: 4px;
+}
+/* confirmation d'une action irréversible : toujours en entier */
+.actionbar.decide .hint-row.confirm {
+  background: #f2b134;
+  color: #2a2118;
+  font-weight: 800;
+  text-overflow: clip;
+  animation: hint-in 0.2s ease-out;
+}
+.actionbar.decide .hint-row.flash {
+  background: color-mix(in srgb, var(--pc, #ffd166) 20%, var(--card));
+  font-weight: 800;
+  font-size: 13.5px;
+  animation: hint-in 0.35s ease-out;
+}
+.actionbar.decide .hint-row.flash.hit {
+  background: #fbe0dc;
+  color: #8d2016;
+}
+@keyframes hint-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+.actionbar.decide .bar-row {
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  flex: none;
+}
+.actionbar.decide .bar-row .btn {
+  flex: none;
+  min-height: 48px;
+  padding: 0 12px;
+  font-size: 14.5px;
+}
+.actionbar.decide .bar-row .btn.main {
+  margin-left: auto;
+}
+.actionbar.decide .bar-row .btn.icon-btn,
+.actionbar.decide .bar-row .btn.folded {
+  width: 48px;
+  padding: 0;
+  font-size: 20px;
+  font-family: var(--emoji);
+}
+.actionbar.decide .bar-row .btn.icon-btn {
+  font-family: var(--font);
+  font-size: 22px;
+}
+/* dernier recours : le bouton principal se coupe plutôt que de déborder */
+.actionbar.decide.squeeze .bar-row .btn.main {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  line-height: 48px;
+}
+@media (min-width: 760px) {
+  .app > .actionbar {
+    padding-left: max(10px, calc(50% - 360px));
+    padding-right: max(10px, calc(50% - 360px));
+  }
+}
+
+/* ---------- Feuilles : trois tailles, posées au-dessus des onglets ou de la zone d'action ---------- */
+
+.app > .sheet {
+  bottom: var(--sheet-bottom, 0px);
+}
+.app > .sheet.raised {
+  padding-bottom: 0;
+  box-shadow: 0 -8px 22px rgba(0, 0, 0, 0.28);
+}
+.app > .sheet.peek {
+  max-height: 190px;
+}
+.app > .sheet.standard {
+  max-height: min(45dvh, 380px);
+}
+.app > .sheet.expanded {
+  max-height: min(62dvh, 580px);
+}
+@media (min-width: 760px) {
+  .app > .sheet {
+    bottom: calc(var(--sheet-bottom, 0px) + 16px);
+  }
+}
+.app > .sheet .sheet-head {
+  padding: 13px 8px 3px 14px;
+}
+.app > .sheet .grab {
+  top: 5px;
+}
+.app > .sheet .sheet-title {
+  font-size: 17px;
+  line-height: 22px;
+  min-width: 0;
+}
+.app > .sheet .sheet-sub {
+  font-size: 12.5px;
+  line-height: 16px;
+  margin-top: 1px;
+  min-width: 0;
+}
+.app > .sheet .close {
+  width: 32px;
+  height: 32px;
+  font-size: 14px;
+}
+.app > .sheet .sheet-body {
+  padding: 2px 14px 6px;
+}
+.app > .sheet .sheet-foot {
+  padding: 6px 12px 8px;
+}
+.app > .sheet .sheet-foot .btn {
+  min-height: 48px;
+}
+/* une seule ligne par bouton : les chiffres restent lisibles, rien ne passe à la ligne */
+.app > .sheet .sheet-foot .btn-row .btn {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 48px;
+  padding: 0 8px;
+  font-size: 14.5px;
+}
+/* écrans très bas (iPhone SE 1re génération) : on resserre pour que la fiche d'attaque ne défile pas */
+@media (max-height: 620px) {
+  .app > .sheet .sheet-head {
+    padding-top: 10px;
+  }
+  .app > .sheet .sheet-title {
+    font-size: 16px;
+    line-height: 20px;
+  }
+  .app > .sheet .sheet-body {
+    padding-bottom: 2px;
+  }
+  .app > .sheet .sheet-foot {
+    padding: 4px 12px 5px;
+  }
+  .app > .sheet .sheet-foot .btn,
+  .app > .sheet .sheet-foot .btn-row .btn {
+    min-height: 44px;
+    line-height: 44px;
+  }
+}
+.sheet .ell {
+  display: block;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sheet .sheet-title .ell {
+  flex: 1;
+}
+.sheet details.more {
+  margin: 2px 0 0;
+}
+.sheet details.more > summary {
+  padding: 3px 0;
+  line-height: 18px;
+}
+.sheet .more-body {
+  padding-bottom: 4px;
+}
+.sheet .more-body .lines li {
+  background: none;
+  padding: 2px 0;
+  font-size: 13px;
+}
+.sheet .detail-line {
+  font-size: 13.5px;
+  padding: 2px 0 4px;
+}
+
+/* ---------- Fiche de région ---------- */
+
+.sheet .occ {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 26px;
+  border: 0;
+  border-left: 4px solid #c9b994;
+  border-radius: 0 8px 8px 0;
+  background: #faf6ec;
+  padding: 2px 8px;
+  margin: 2px 0 4px;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: left;
+  color: var(--ink);
+}
+.sheet .occ.plain {
+  font-weight: 600;
+}
+.sheet .occ .pdot {
+  width: 9px;
+  height: 9px;
+  vertical-align: 0;
+  box-shadow: none;
+}
+.occ-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.occ-count {
+  flex: none;
+  white-space: nowrap;
+}
+.occ-more {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1;
+}
+.sheet .formula {
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.conseq {
+  list-style: none;
+  margin: 2px 0;
+  padding: 0;
+}
+.consequence {
+  font-size: 13.5px;
+  line-height: 20px;
+  height: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.consequence.tone-bad {
+  color: var(--bad);
+  font-weight: 600;
+}
+.sheet .reason {
+  display: block;
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+  min-height: 22px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 1px 0;
+}
+.sheet .reason.warn {
+  color: #8a5300;
+}
+.sheet .reason.muted {
+  color: var(--muted);
+  font-weight: 500;
+}
+.sheet button.reason.threat {
+  border-left: 3px solid var(--line);
+  padding-left: 7px;
+  cursor: pointer;
+}
+.sheet .reason .muted {
+  font-weight: 500;
+}
+
+/* ---------- Panneau de redéploiement (peek) ---------- */
+
+.deploy-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+}
+.deploy-row .step {
+  width: 46px;
+  height: 46px;
+  font-size: 26px;
+  flex: none;
+}
+.deploy-row .step-value {
+  min-width: 78px;
+  font-size: 17px;
+  font-weight: 800;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.deploy-row .all-here {
+  margin-left: auto;
+  min-height: 42px;
+  padding: 0 12px;
+  font-size: 14px;
+}
+.region-sheet .power-row {
+  min-height: 44px;
+  padding: 3px 0 0;
+  margin-top: 3px;
+  gap: 8px;
+  justify-content: flex-start;
+  font-size: 14px;
+  white-space: nowrap;
+}
+.region-sheet .power-row > .btn {
+  min-height: 40px;
+  font-size: 14px;
+}
+.region-sheet .power-row .ell {
+  flex: none;
+}
+.region-sheet .power-btns {
+  align-items: center;
+  gap: 8px;
+}
+.region-sheet .power-btns .btn {
+  width: 40px;
+  min-height: 38px;
+}
+
+/* ---------- Fin du tour : paix (Diplomates), déclin après décompte (Robustes) ---------- */
+
+.peace-chips {
+  margin: 4px 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.peace-chips .chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 44px;
+  padding: 0 12px;
+}
+.peace-chips .chip .pdot {
+  box-shadow: 0 0 0 1.5px #fff;
+}
+.sheet-line {
+  font-size: 13.5px;
+  line-height: 20px;
+}
+.stout-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+  line-height: 20px;
+  padding: 6px 0;
+  cursor: pointer;
+}
+.stout-row input {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  flex: none;
+  accent-color: var(--primary);
+}
+
+/* à 320 px, le compteur de réserve se coupe proprement */
+.region-sheet .power-row > .muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

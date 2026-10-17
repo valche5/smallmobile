@@ -1,0 +1,12 @@
+{
+  "name": "SmallMobile",
+  "short_name": "SmallMobile",
+  "description": "Un clone de Small World pour mobile : 2 joueurs en passe-et-joue, IA pour les grandes cartes.",
+  "lang": "fr",
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f3ecdc",
+  "theme_color": "#2f241a",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
