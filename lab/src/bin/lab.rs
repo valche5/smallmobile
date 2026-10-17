@@ -192,7 +192,7 @@ fn analyze_cmd(opts: &HashMap<String, String>) {
     println!("Chance de victoire estimée : {:.1} %", 100.0 * s.value);
     let mut rows: Vec<_> =
         s.details.iter().zip(&s.visits).map(|(&(key, prior, q), &(_, n))| (n, key, prior, q)).collect();
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.0));
     println!("{:>8}  {:>7}  {:>8}  coup", "visites", "victoire", "a priori");
     for (n, key, prior, q) in rows.iter().take(get(opts, "top", 12)) {
         let mv = legal.iter().find(|c| c.key == *key).map(|c| moves::describe(&g, &c.mv)).unwrap_or_default();
