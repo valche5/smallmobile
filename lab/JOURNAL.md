@@ -131,3 +131,39 @@ Coût : une décision à 200 itérations prend ~50 ms à 2 joueurs, plus à 5.
 
 Génération 0 : 6 000 parties de MCTS (n=200, c=0,3, w=0) contre lui-même, toutes tables,
 ~250 000 positions par heure.
+
+## 2026-10-17 — Premiers réseaux : ce qui ne marchait pas, et pourquoi
+
+Réseau d'essai sur les 66 000 premières positions de la génération 0 (~500 parties) :
+- la valeur apprend (Brier 0,65 → 0,36), la politique presque pas : les cibles de MCTS sont
+  presque uniformes (9,5 coups en moyenne, le plus visité n'a que 33 % des visites) ;
+- MCTS lui-même ne choisit le même coup que dans 43 % des cas sur deux recherches indépendantes,
+  même à 1 000 itérations : beaucoup de coups se valent vraiment (l'ordre des conquêtes, par
+  exemple). La politique de ce jeu est floue par nature ; seule la force de jeu fait foi ;
+- la recherche guidée par ce réseau perd lourdement contre l'IA Normal (4 % de victoires, −24
+  points) : elle passe en déclin un tour sur deux. En cours de tour, les pièces du tour ne sont pas
+  encore comptées ; le déclin finit le tour et les encaisse : un réseau mal entraîné le préfère.
+
+Corrections, mesurées contre l'IA Normal (40 donnes, même graine, ± 8 points) :
+
+| recherche guidée (200 itérations) | écart à l'attendu |
+| --- | --- |
+| réseau d'essai, victoire seule | −24 |
+| réseau d'essai, avance en pièces prévue (w=0) | −16 |
+| réseau pré-entraîné sur l'IA Normal, w=1 | +11 |
+| idem + fins simulées (roll=1) | +26 |
+| idem + valeurs normalisées dans chaque nœud (MuZero) | +40 |
+| idem, c=2,5 | **+42** |
+| réseau pré-entraîné seul, valeurs normalisées | +12 |
+| MCTS (n=200, c=0,3, w=0), pour comparer | +36 |
+
+- pré-entraînement : 100 000 parties de l'IA Normal (2 ms chacune), 10 % des positions gardées,
+  soit 1,3 million de positions en 2 minutes. Le réseau y apprend à juger une position et imite
+  l'IA Normal (78 % de coups identiques) ;
+- normalisation : les écarts de valeur entre coups (quelques centièmes) étaient écrasés par le
+  terme d'exploration ; la recherche jouait presque toujours le coup de l'a priori, donc celui de
+  l'IA Normal. Ramenées entre 0 et 1 dans chaque nœud, les valeurs reprennent la main ;
+- fins simulées (le premier AlphaGo) : la valeur d'une position nouvelle mêle le réseau et une fin
+  de partie jouée par l'IA Normal. Avec un réseau encore jeune, ça aide beaucoup.
+
+La recherche hybride égale déjà MCTS, avec un réseau qui ne fera que progresser.
