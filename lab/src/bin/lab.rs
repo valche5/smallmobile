@@ -5,7 +5,7 @@
 //! lab bench --agent random [--players 2] [--games 20]
 //! lab selfplay --agent mcts:n=200 --games 1000 --out lab/data/gen0 [--players 2,3,4,5] [--sample-rounds 2]
 //! lab check-net --net poids.bin --data parties.bin [--count 5]   (comparaison avec lab/py/check.py)
-//! lab label --games 20000 --out lab/data/label1 [--share 0.1] [--rollouts 32] [--random 0.1]
+//! lab label --games 20000 --out lab/data/label1 [--share 0.1] [--rollouts 32] [--random 0.1] [--agent az:net=poids.bin,n=50]
 //! lab analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par lab/tools/export-room.ts)
 //! ```
 
@@ -277,8 +277,9 @@ fn label_cmd(opts: &HashMap<String, String>) {
         random: get(opts, "random", 0.1),
     };
     let out = opts.get("out").unwrap_or_else(|| usage());
+    let player = opts.contains_key("agent").then(|| agent(opts, "agent"));
     let start = Instant::now();
-    if let Err(e) = smallmobile_lab::label::run(&cfg, std::path::Path::new(out)) {
+    if let Err(e) = smallmobile_lab::label::run(&cfg, player.as_deref(), std::path::Path::new(out)) {
         eprintln!("échec : {e}");
         std::process::exit(1)
     }

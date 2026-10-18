@@ -4,8 +4,9 @@
 //! les simulations de la recherche mesurent une à une. Un réseau qui l'apprend vaut une infinité de
 //! simulations, pour le prix d'une évaluation.
 //!
-//! Les parties qui fournissent les positions sont jouées par l'IA Normal, avec une part de coups au
-//! hasard pour couvrir aussi les positions étranges que la recherche visite.
+//! Les parties qui fournissent les positions sont jouées par l'IA Normal (ou un autre joueur, pour
+//! voir les positions d'un jeu plus fort), avec une part de coups au hasard pour couvrir aussi les
+//! positions étranges que la recherche visite.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -56,8 +57,15 @@ pub fn judge(g: &Game, k: &Knowledge, count: usize, rng: &mut Rng) -> ([f32; MAX
     (win, coins)
 }
 
-fn label_game(table: &Table, seed: u32, cfg: &Config, rng: &mut Rng, out: &mut impl Write) -> std::io::Result<usize> {
-    let normal = KernelAi::new(Level::Normal);
+/// Une partie qui fournit des positions : `random` de coups au hasard, le reste par `agent`.
+fn label_game(
+    table: &Table,
+    seed: u32,
+    cfg: &Config,
+    agent: &dyn Agent,
+    rng: &mut Rng,
+    out: &mut impl Write,
+) -> std::io::Result<usize> {
     let mut g = table.game(seed);
     let mut k = Knowledge::default();
     let mut count = 0;
@@ -85,7 +93,7 @@ fn label_game(table: &Table, seed: u32, cfg: &Config, rng: &mut Rng, out: &mut i
             out.write_all(&Record { enc: &enc, map: g.map, win: w, gain, visits: &visits, qgain }.bytes())?;
             count += 1;
         }
-        let mv = if rng.unit() < cfg.random { legal[rng.below(legal.len())].mv } else { normal.act(&g, &k, rng) };
+        let mv = if rng.unit() < cfg.random { legal[rng.below(legal.len())].mv } else { agent.act(&g, &k, rng) };
         let mut ret = Returns::default();
         moves::play(&mut g, &mv, &mut ret).expect("coup possible");
         k.observe(ret.0, &g.state);
@@ -93,7 +101,10 @@ fn label_game(table: &Table, seed: u32, cfg: &Config, rng: &mut Rng, out: &mut i
     Ok(count)
 }
 
-pub fn run(cfg: &Config, dir: &Path) -> std::io::Result<()> {
+/// `agent` : qui joue les parties d'où viennent les positions (l'IA Normal si `None`).
+pub fn run(cfg: &Config, agent: Option<&dyn Agent>, dir: &Path) -> std::io::Result<()> {
+    let normal = KernelAi::new(Level::Normal);
+    let agent = agent.unwrap_or(&normal);
     std::fs::create_dir_all(dir)?;
     let next = AtomicUsize::new(0);
     let positions = AtomicUsize::new(0);
@@ -113,7 +124,7 @@ pub fn run(cfg: &Config, dir: &Path) -> std::io::Result<()> {
                     let deal = mix(cfg.seed, i as u64);
                     let table = Table::new(n, deal % 1_000_000_007);
                     let mut rng = Rng::new(mix(deal, 77));
-                    let count = label_game(&table, mix(deal, 1) as u32, cfg, &mut rng, &mut out)?;
+                    let count = label_game(&table, mix(deal, 1) as u32, cfg, agent, &mut rng, &mut out)?;
                     let total = positions.fetch_add(count, Ordering::Relaxed) + count;
                     if (i + 1) % 100 == 0 {
                         let secs = start.elapsed().as_secs_f64();

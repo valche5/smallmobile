@@ -241,3 +241,57 @@ l'IA Normal (100 donnes, graine 31, 350 parties, ± 7 points), recherche guidée
   cible de politique ; elle pondère maintenant par le nombre de positions de chaque cible.
 
 Meilleure recherche à ce stade : gen3, n=200, profondeur 5 (+54 en 88 s).
+
+## 2026-10-18 — Réseau plus gros, entraînement plus long, réglages : plateau
+
+Mêmes données que gen3, 20 passes au lieu de 6 :
+
+- gen3l (64×4, depuis gen1, 33 min) : valeur en validation 0,674 (elle baisse jusqu'au bout),
+  politique figée dès la 5e passe (ses 450 000 positions sont trop peu) ;
+- gen3b (128×6, depuis zéro, 51 min) : 0,678, et sa politique se dégrade (apprentissage par
+  cœur) ; la recherche est 3,3 fois plus lente.
+
+Contre l'IA Normal (200 donnes, graine 41, 700 parties, ± 3 % de victoires) :
+
+| réseau | profondeur 5 | réseau seul |
+| --- | --- | --- |
+| gen3 | +50 | +28 |
+| gen3l | +50 | +31 |
+| gen3b | +49 | +28 |
+
+Ce ne sont ni la taille du réseau ni la durée d'entraînement qui limitent, mais les données.
+
+Réglages de la recherche (gen3l, n=200, mêmes donnes ; référence profondeur 5, c=2,5, w=0 : +50) :
+
+| variante | écart |
+| --- | --- |
+| profondeur 3 | +49 |
+| profondeur 8 | +55 |
+| roll=0,5 (moitié réseau, moitié fin simulée) | +50 |
+| c=1,5 / c=4 | +52 / +52 |
+| w=0,5 / w=1 (probabilité de victoire dans la valeur) | +55 / +53 |
+| w=0,5, s=4 / s=16 | +53 / +54 |
+| w=0,5, profondeur 8 | +56 |
+
+Tout se tient entre +49 et +56 : contre l'IA Normal (84 % de victoires), la mesure sature et ne
+départage plus les réglages fins. Il faut un adversaire plus fort.
+
+## 2026-10-18 — gen4 : la politique des recherches de gen3
+
+Parties de gen3l contre lui-même (n=200, profondeur 5, bruit 0,25, la moitié des coups cherchés à
+fond et enregistrés, les autres en 50 itérations) : 12 000 parties, 810 000 positions, 2 h 15.
+gen4 : la valeur sur `label1`, la politique sur ces recherches et celles de gen1, depuis gen3l,
+10 passes (précision de la politique en validation : 42 %).
+
+Contre l'IA Difficile (200 donnes, graine 51 ; n=200, profondeur 5, w=0,5) :
+
+| réseau | écart |
+| --- | --- |
+| gen3l | +27,5 |
+| gen4 | +33,1 |
+
+Face à face, réseau seul (n=200, w=0,5 ; 200 donnes) : gen4 contre des gen3l +2,1, gen3l contre
+des gen4 −1,4. Léger mieux.
+
+`lab label --agent` : les positions jugées peuvent venir de parties d'un autre joueur. `label2` :
+60 000 parties jouées par gen3l (n=50, réseau seul, 10 % de coups au hasard).
