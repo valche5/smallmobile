@@ -121,13 +121,15 @@ def main():
             sums += [pol.item(), val.item(), gain.item(), acc.item(), brier.item()]
             count += 1
         net.eval()
+        # moyennes pondérées par le nombre de positions qui ont chaque cible (politique, valeur)
         vs = np.zeros(5)
-        vc = 0
+        vc = np.zeros(5)
         with torch.no_grad():
             for b in batches(recs, val_idx, 2048, device, args.policy_temp, value_mask):
-                vs += [x.item() for x in losses(net, b, args.q_weight)]
-                vc += 1
-        t, v = sums / count, vs / vc
+                w = np.array([b["has_policy"].sum().item(), b["has_value"].sum().item()])[[0, 1, 1, 0, 1]]
+                vs += [x.item() for x in losses(net, b, args.q_weight)] * w
+                vc += w
+        t, v = sums / count, vs / np.maximum(vc, 1)
         print(
             f"époque {epoch + 1}/{args.epochs} ({time.time() - start:.0f} s) | entraînement : politique {t[0]:.3f} "
             f"valeur {t[1]:.3f} pièces {t[2]:.3f} précision {t[3]:.1%} | validation : politique {v[0]:.3f} "

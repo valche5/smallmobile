@@ -42,7 +42,9 @@ def load(paths, seed=0, with_value=False):
     Renvoie les enregistrements, le numéro de bloc de chacun (pour séparer la validation) et, si
     `with_value`, si sa valeur s'apprend."""
     rng = np.random.default_rng(seed)
-    parts, blocks, values = [], [], []
+    # premier passage : quels enregistrements garder (sans rien lire), pour tout écrire d'un coup
+    # dans un seul tableau (pas de copie : les données peuvent occuper la moitié de la mémoire)
+    plan = []
     next_block = 0
     for spec in paths:
         spec, _, tag = str(spec).partition(":")
@@ -52,24 +54,32 @@ def load(paths, seed=0, with_value=False):
         for f in sorted(p.rglob("*.bin")) if p.is_dir() else [p]:
             dtype = RECORD if f.name.endswith(".v2.bin") else RECORD_V1
             count = f.stat().st_size // dtype.itemsize
-            recs = np.fromfile(f, dtype=dtype, count=count)
-            if dtype is RECORD_V1:
-                full = np.zeros(count, dtype=RECORD)
-                for name in RECORD_V1.names:
-                    full[name] = recs[name]
-                full["qgain"] = np.nan
-                recs = full
             ids = np.arange(count) // BLOCK + next_block
             next_block = int(ids[-1]) + 1 if count else next_block
+            mask = None
             if share < 1.0:
                 keep_blocks = rng.random(next_block) < share
                 mask = keep_blocks[ids]
-                recs, ids = recs[mask], ids[mask]
-            parts.append(recs)
-            blocks.append(ids)
-            values.append(np.full(len(recs), tag != "policy"))
-    if not parts:
-        empty = (np.zeros(0, dtype=RECORD), np.zeros(0, dtype=np.int64))
-        return empty + (np.zeros(0, dtype=bool),) if with_value else empty
-    out = (np.concatenate(parts), np.concatenate(blocks))
-    return out + (np.concatenate(values),) if with_value else out
+                ids = ids[mask]
+            plan.append((f, dtype, count, mask, ids, tag != "policy"))
+    total = sum(len(ids) for *_, ids, _ in plan)
+    recs = np.empty(total, dtype=RECORD)
+    blocks = np.empty(total, dtype=np.int64)
+    values = np.empty(total, dtype=bool)
+    at = 0
+    for f, dtype, count, mask, ids, value in plan:
+        src = np.memmap(f, dtype=dtype, mode="r", shape=(count,)) if count else np.zeros(0, dtype=dtype)
+        if mask is not None:
+            src = src[mask]
+        dst = recs[at : at + len(ids)]
+        if dtype is RECORD:
+            dst[...] = src
+        else:
+            for name in RECORD_V1.names:
+                dst[name] = src[name]
+            dst["qgain"] = np.nan
+        blocks[at : at + len(ids)] = ids
+        values[at : at + len(ids)] = value
+        at += len(ids)
+        del src
+    return (recs, blocks, values) if with_value else (recs, blocks)

@@ -219,3 +219,25 @@ politique : `train.py` masque l'une ou l'autre selon la source (`dossier:policy`
 seule).
 
 `label1` : 125 000 parties, 1,96 million de positions jugées en 63 minutes (518 par seconde).
+
+gen3 : la valeur apprise sur `label1` seul, la politique sur les recherches de gen0 et gen1
+(`:policy`), en partant de gen1 ; 2,4 millions de positions, 6 passes, 9 minutes. Mesures contre
+l'IA Normal (100 donnes, graine 31, 350 parties, ± 7 points), recherche guidée c=2,5 :
+
+| recherche | gen1 | gen2 | gen3 | durée (gen3) |
+| --- | --- | --- | --- | --- |
+| n=200, fin simulée complète | +52 | +45 | +52 | 194 s |
+| n=200, profondeur 5 | +20 | +31 | **+54** | 88 s |
+| n=200, profondeur 2 | −3 (60 donnes) | | +44 | 59 s |
+| n=400, profondeur 2 | | | +44 | 121 s |
+| n=200, réseau seul | −11 | −1 | +28 | 21 s |
+| n=800, réseau seul | | | +32 | 93 s |
+
+- le jugement appris sur des fins simulées moyennées vaut enfin quelque chose : la fin simulée
+  s'arrête après 5 tours de joueur sans rien perdre, deux fois plus vite ;
+- le réseau seul passe de −1 à +28, mais profite peu de plus d'itérations (+32 à n=800) : son
+  jugement reste en deçà de quelques tours joués pour de vrai ;
+- correctif : la validation faisait la moyenne par lot, faussée quand un lot n'a presque pas de
+  cible de politique ; elle pondère maintenant par le nombre de positions de chaque cible.
+
+Meilleure recherche à ce stade : gen3, n=200, profondeur 5 (+54 en 88 s).
