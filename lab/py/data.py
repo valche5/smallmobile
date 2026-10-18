@@ -34,16 +34,19 @@ RECORD = np.dtype(FIELDS + [("qgain", "<f4", 5)])
 BLOCK = 256
 
 
-def load(paths, seed=0):
+def load(paths, seed=0, with_value=False):
     """Les enregistrements des fichiers (ou dossiers) donnés. `dossier@0.2` n'en garde que 20 %, par
-    blocs de positions consécutives (des parties entières, à peu près).
+    blocs de positions consécutives (des parties entières, à peu près) ; `dossier:policy` ne sert
+    qu'à la politique (sa valeur n'est pas apprise).
 
-    Renvoie les enregistrements et le numéro de bloc de chacun (pour séparer la validation)."""
+    Renvoie les enregistrements, le numéro de bloc de chacun (pour séparer la validation) et, si
+    `with_value`, si sa valeur s'apprend."""
     rng = np.random.default_rng(seed)
-    parts, blocks = [], []
+    parts, blocks, values = [], [], []
     next_block = 0
     for spec in paths:
-        path, _, share = str(spec).partition("@")
+        spec, _, tag = str(spec).partition(":")
+        path, _, share = spec.partition("@")
         share = float(share) if share else 1.0
         p = Path(path)
         for f in sorted(p.rglob("*.bin")) if p.is_dir() else [p]:
@@ -64,6 +67,9 @@ def load(paths, seed=0):
                 recs, ids = recs[mask], ids[mask]
             parts.append(recs)
             blocks.append(ids)
+            values.append(np.full(len(recs), tag != "policy"))
     if not parts:
-        return np.zeros(0, dtype=RECORD), np.zeros(0, dtype=np.int64)
-    return np.concatenate(parts), np.concatenate(blocks)
+        empty = (np.zeros(0, dtype=RECORD), np.zeros(0, dtype=np.int64))
+        return empty + (np.zeros(0, dtype=bool),) if with_value else empty
+    out = (np.concatenate(parts), np.concatenate(blocks))
+    return out + (np.concatenate(values),) if with_value else out

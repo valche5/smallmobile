@@ -197,4 +197,25 @@ position (format `*.v2.bin`). Le réseau apprend sur un mélange du résultat r�
 attente (`--q-weight 0.5`), bien plus stable qu'une partie unique (exemple : attendu 116 et 98,
 réel 119 et 93).
 
-En cours : 5 000 parties de l'hybride (gen1, fins complètes) au nouveau format.
+Génération 2 : 5 000 parties de l'hybride (gen1, fins complètes) au nouveau format, 166 000
+positions ; gen2 apprend gen0 + gen1 + 10 % de l'IA Normal, en partant de gen1 (350 parties contre
+l'IA Normal) :
+
+| réseau | fin simulée complète | profondeur 5 | réseau seul |
+| --- | --- | --- | --- |
+| gen1 | **+52** | +20 | −11 |
+| gen2 | +45 | +31 | −1 |
+
+Pas de progrès : le réseau se trompe d'environ 9 pièces par position, et toujours dans le même
+sens, alors que les coups ne se départagent souvent que de 1 à 3 pièces. Une fin simulée est plus
+bruitée, mais sans biais : sur 200 simulations, ses erreurs se compensent.
+
+## 2026-10-18 — Des positions jugées par 32 fins simulées
+
+`lab label` : l'IA Normal joue des parties (10 % de coups au hasard, pour couvrir les positions
+étranges que visite la recherche) ; une position sur dix est jugée par la moyenne de 32 fins de
+partie, chacune dans un monde possible honnête. Cible de valeur presque exacte, sans cible de
+politique : `train.py` masque l'une ou l'autre selon la source (`dossier:policy` : politique
+seule).
+
+`label1` : 125 000 parties, 1,96 million de positions jugées en 63 minutes (518 par seconde).

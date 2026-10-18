@@ -2,7 +2,8 @@
 
     python train.py --data ../data/gen1 ../data/normal@0.2 --out ../nets/gen2.bin [--init ../nets/gen1.pt]
 
-`dossier@0.2` : n'en prendre que 20 % (par blocs de parties).
+`dossier@0.2` : n'en prendre que 20 % (par blocs de parties) ; `dossier:policy` : seulement pour la
+politique (sa valeur n'est pas apprise).
 
 Cibles : la politique (visites de la recherche à la racine), la victoire (part de chaque joueur à la
 fin) et, en appoint, les pièces gagnées d'ici la fin. Les positions sont vues du joueur qui agit.
@@ -21,9 +22,10 @@ from data import ILLEGAL, load
 from model import GAIN_SCALE, Net, export, unpack_adj
 
 
-def batches(recs, idx, size, device, temp=1.0):
+def batches(recs, idx, size, device, temp=1.0, value_mask=None):
     for start in range(0, len(idx), size):
-        r = recs[np.sort(idx[start : start + size])]
+        sel = np.sort(idx[start : start + size])
+        r = recs[sel]
         visits = torch.from_numpy(r["visits"].astype(np.int32)).to(device)
         legal = visits != ILLEGAL
         visits = torch.where(legal, visits, 0).float()
@@ -41,26 +43,29 @@ def batches(recs, idx, size, device, temp=1.0):
             win=torch.from_numpy(r["win"]).to(device),
             gain=torch.from_numpy(r["gain"]).to(device) / GAIN_SCALE,
             qgain=torch.from_numpy(r["qgain"]).to(device) / GAIN_SCALE,
+            has_value=torch.from_numpy(value_mask[sel]).to(device),
+            has_policy=legal.any(1) & (visits.sum(1) > 0),
         )
 
 
 def losses(net, b, q_weight=0.0):
     logits, value = net(b["node"], b["glob"], b["adj"], b["regions"])
     logits = logits.masked_fill(~b["legal"], -1e9)
-    pol = -(b["policy"] * F.log_softmax(logits, 1)).sum(1).mean()
+    hp, hv = b["has_policy"].float(), b["has_value"].float()
+    pol = (-(b["policy"] * F.log_softmax(logits, 1)).sum(1) * hp).sum() / hp.sum().clamp(min=1)
     present = torch.arange(5, device=value.device)[None] < b["players"][:, None]
     vlog = value[:, :5].masked_fill(~present, -1e9)
-    val = -(b["win"] * F.log_softmax(vlog, 1)).sum(1).mean()
+    val = (-(b["win"] * F.log_softmax(vlog, 1)).sum(1) * hv).sum() / hv.sum().clamp(min=1)
     # pièces : le résultat de la partie, mêlé à ce qu'attendait la recherche quand elle le sait
     target = b["gain"]
     if q_weight > 0:
         known = ~torch.isnan(b["qgain"])
         target = torch.where(known, (1 - q_weight) * target + q_weight * torch.nan_to_num(b["qgain"]), target)
-    gain = (((value[:, 5:] - target) ** 2) * present).sum(1).mean()
+    gain = ((((value[:, 5:] - target) ** 2) * present).sum(1) * hv).sum() / hv.sum().clamp(min=1)
     # précision : le coup le plus visité est-il le préféré du réseau ?
-    acc = (logits.argmax(1) == b["policy"].argmax(1)).float().mean()
-    # la victoire prédite du joueur qui agit, comparée au résultat (erreur quadratique, « Brier »)
-    brier = ((torch.softmax(vlog, 1) - b["win"]) ** 2).sum(1).mean()
+    acc = ((logits.argmax(1) == b["policy"].argmax(1)).float() * hp).sum() / hp.sum().clamp(min=1)
+    # la victoire prédite, comparée à la cible (erreur quadratique, « Brier »)
+    brier = (((torch.softmax(vlog, 1) - b["win"]) ** 2).sum(1) * hv).sum() / hv.sum().clamp(min=1)
     return pol, val, gain, acc, brier
 
 
@@ -82,7 +87,7 @@ def main():
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    recs, blocks = load(args.data)
+    recs, blocks, value_mask = load(args.data, with_value=True)
     rng = np.random.default_rng(0)
     # validation sur des blocs entiers : pas de position d'une partie vue à l'entraînement
     val_blocks = rng.random(int(blocks.max()) + 1) < args.val_share
@@ -105,7 +110,7 @@ def main():
         start = time.time()
         sums = np.zeros(5)
         count = 0
-        for b in batches(recs, rng.permutation(train_idx), args.batch, device, args.policy_temp):
+        for b in batches(recs, rng.permutation(train_idx), args.batch, device, args.policy_temp, value_mask):
             pol, val, gain, acc, brier = losses(net, b, args.q_weight)
             loss = pol + val + args.gain_weight * gain
             opt.zero_grad(set_to_none=True)
@@ -119,7 +124,7 @@ def main():
         vs = np.zeros(5)
         vc = 0
         with torch.no_grad():
-            for b in batches(recs, val_idx, 2048, device, args.policy_temp):
+            for b in batches(recs, val_idx, 2048, device, args.policy_temp, value_mask):
                 vs += [x.item() for x in losses(net, b, args.q_weight)]
                 vc += 1
         t, v = sums / count, vs / vc

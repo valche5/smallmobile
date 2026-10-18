@@ -118,6 +118,47 @@ impl Searcher for crate::agent::KernelAi {
     }
 }
 
+/// Un exemple pour le réseau, cibles en joueurs relatifs (0 : celui qui agit).
+pub struct Record<'a> {
+    pub enc: &'a Encoded,
+    pub map: &'a smallmobile_kernel::Map,
+    pub win: [f32; MAX_PLAYERS],
+    pub gain: [f32; MAX_PLAYERS],
+    pub visits: &'a [u16; KEYS],
+    pub qgain: [f32; MAX_PLAYERS],
+}
+
+impl Record<'_> {
+    pub fn bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(RECORD);
+        buf.extend_from_slice(&[self.enc.players as u8, self.enc.regions as u8, 1, 0]);
+        for x in self.win.iter().chain(&self.gain) {
+            buf.extend_from_slice(&x.to_le_bytes());
+        }
+        for v in self.visits {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        for i in 0..REGIONS {
+            let mut bits = 0u64;
+            if i < self.map.len() {
+                for &a in &self.map.regions[i].adj {
+                    bits |= 1 << a;
+                }
+            }
+            buf.extend_from_slice(&bits.to_le_bytes());
+        }
+        for row in &self.enc.node {
+            buf.extend_from_slice(row);
+        }
+        buf.extend_from_slice(&self.enc.global);
+        for x in &self.qgain {
+            buf.extend_from_slice(&x.to_le_bytes());
+        }
+        debug_assert_eq!(buf.len(), RECORD);
+        buf
+    }
+}
+
 struct Pending {
     enc: Encoded,
     actor: usize,
@@ -195,42 +236,18 @@ pub fn play(
     }
     let o = Outcome::of(&g);
     let n = o.players;
-    let mut buf = Vec::with_capacity(RECORD);
     for p in &pending {
-        buf.clear();
-        buf.extend_from_slice(&[n as u8, p.enc.regions as u8, 1, 0]);
-        for r in 0..MAX_PLAYERS {
-            let w = if r < n { o.win[(p.actor + r) % n] as f32 } else { 0.0 };
-            buf.extend_from_slice(&w.to_le_bytes());
-        }
-        for r in 0..MAX_PLAYERS {
+        let mut win = [0.0; MAX_PLAYERS];
+        let mut gain = [0.0; MAX_PLAYERS];
+        let mut qgain = [f32::NAN; MAX_PLAYERS];
+        for r in 0..n {
             let q = (p.actor + r) % n;
-            let gain = if r < n { (o.coins[q] - p.coins[q]) as f32 } else { 0.0 };
-            buf.extend_from_slice(&gain.to_le_bytes());
+            win[r] = o.win[q] as f32;
+            gain[r] = (o.coins[q] - p.coins[q]) as f32;
+            qgain[r] = p.finals[q] - p.coins[q] as f32;
         }
-        for v in p.visits {
-            buf.extend_from_slice(&v.to_le_bytes());
-        }
-        for i in 0..REGIONS {
-            let mut bits = 0u64;
-            if i < table.map.len() {
-                for &a in &table.map.regions[i].adj {
-                    bits |= 1 << a;
-                }
-            }
-            buf.extend_from_slice(&bits.to_le_bytes());
-        }
-        for row in &p.enc.node {
-            buf.extend_from_slice(row);
-        }
-        buf.extend_from_slice(&p.enc.global);
-        for r in 0..MAX_PLAYERS {
-            let q = (p.actor + r) % n;
-            let gain = if r < n { p.finals[q] - p.coins[q] as f32 } else { f32::NAN };
-            buf.extend_from_slice(&gain.to_le_bytes());
-        }
-        debug_assert_eq!(buf.len(), RECORD);
-        out.write_all(&buf)?;
+        let rec = Record { enc: &p.enc, map: &table.map, win, gain, visits: &p.visits, qgain };
+        out.write_all(&rec.bytes())?;
     }
     Ok((o, pending.len()))
 }

@@ -5,6 +5,7 @@
 //! lab bench --agent random [--players 2] [--games 20]
 //! lab selfplay --agent mcts:n=200 --games 1000 --out lab/data/gen0 [--players 2,3,4,5] [--sample-rounds 2]
 //! lab check-net --net poids.bin --data parties.bin [--count 5]   (comparaison avec lab/py/check.py)
+//! lab label --games 20000 --out lab/data/label1 [--share 0.1] [--rollouts 32] [--random 0.1]
 //! lab analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par lab/tools/export-room.ts)
 //! ```
 
@@ -28,6 +29,7 @@ fn main() {
         "analyze" => analyze_cmd(&opts),
         "agree" => agree_cmd(&opts),
         "trace" => trace_cmd(&opts),
+        "label" => label_cmd(&opts),
         _ => usage(),
     }
 }
@@ -262,4 +264,23 @@ fn trace_cmd(opts: &HashMap<String, String>) {
     }
     let coins: Vec<i32> = g.state.players.iter().map(|p| p.coins).collect();
     println!("fin : {coins:?}");
+}
+
+fn label_cmd(opts: &HashMap<String, String>) {
+    let cfg = smallmobile_lab::label::Config {
+        players: players(opts, "2,3,4,5"),
+        games: get(opts, "games", 1000),
+        threads: get(opts, "threads", threads()),
+        seed: get(opts, "seed", 1),
+        share: get(opts, "share", 0.1),
+        rollouts: get(opts, "rollouts", 32),
+        random: get(opts, "random", 0.1),
+    };
+    let out = opts.get("out").unwrap_or_else(|| usage());
+    let start = Instant::now();
+    if let Err(e) = smallmobile_lab::label::run(&cfg, std::path::Path::new(out)) {
+        eprintln!("échec : {e}");
+        std::process::exit(1)
+    }
+    println!("{} parties en {:.0} s", cfg.games, start.elapsed().as_secs_f64());
 }
