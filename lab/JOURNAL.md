@@ -470,3 +470,42 @@ Pistes ouvertes, par ordre d'intérêt :
    jugées (`lab label --agent` avec gen7) si elle redevient le facteur limitant.
 3. Mettre cette IA dans le jeu : mesurer le temps d'une décision (n=200, `rp=2`, profondeur 3) sur
    un téléphone, chercher une version allégée.
+
+## 2026-10-19 — gen8 : un tour de plus
+
+Parties de gen7 contre lui-même, mêmes réglages que pour `gen6` (`lab/runs/gen8-a.sh`) :
+20 000 parties, 1,48 million de positions (`gen7`, 8,0 Go), 66 min sur 64 cœurs.
+
+gen8 (`gen8-b.sh`) : la valeur sur label1 à label4, la politique sur `gen7` et la moitié de `gen6`
+(`gen6@0.5:policy` : les parties de la génération précédente gardées, moins pesantes), depuis gen7,
+8 passes de 9 min (6,9 millions de positions) ; précision de la politique en validation 53,4 %
+(gen7 : 51,0 %, sur d'autres parties), brier 0,106 (0,108).
+
+Contre l'IA Difficile (1 000 donnes, graine 61 ; n=200, profondeur 3, `rp=2`) :
+
+| réseau | 2 j. | 3 j. | 4 j. | 5 j. | écart |
+| --- | --- | --- | --- | --- | --- |
+| gen6 | 85,9 % | 75,1 % | 63,1 % | 56,6 % | +38,0 |
+| gen7 | 89,0 % | 79,4 % | 67,0 % | 57,7 % | +40,9 |
+| gen8 | 90,2 % | 78,2 % | 68,8 % | 60,8 % | **+42,4** ± 1,5 |
+
+Autant que gen6 à n=800, profondeur 5 (+42,0), pour quatre fois moins de recherche. Face à face
+(même recherche, 400 donnes, graine 61) : gen8 contre des gen7 +2,9, gen7 contre des gen8 −1,2
+(gen7 contre gen6 : +2,0 / −3,0). Le gain tient, un peu plus petit (+1,5 contre l'IA Difficile,
+au bord du bruit ; le face-à-face va dans le même sens). Coût : 68 + 78 + 25 min de c7a.16xlarge,
+10,1 $ (parties 4,0, entraînement 4,6, mesures 1,5).
+
+## 2026-10-19 — Point d'étape (gen8)
+
+Meilleure IA à ce jour : `az:net=lab/nets/gen8.bin,n=200,w=0.5,c=2.5,roll=1,depth=3,rp=2`, +42,4
+contre l'IA Difficile (1 000 donnes, graine 61). Dépense du mois sur AWS : ~27 $ (plafond 50 $) ;
+`lab/data/gen7` est sur mini et dans le bucket.
+
+Pistes ouvertes, par ordre d'intérêt :
+1. Encore un tour (gen9 : parties de gen8, politique sur `gen8` + `gen7@0.5`), ~10 $. Les gains
+   diminuent (+2,9 puis +1,5) : 1 000 donnes ne suffiront bientôt plus à les voir (± 1,5) ;
+   mesurer sur 2 000 donnes, ou d'abord gen8 à n=800 pour voir si recherche et réseau s'ajoutent.
+2. La valeur n'apprend presque plus de label1 à label4 (brier 0,106) : de nouvelles positions
+   jugées (`lab label --agent` avec gen8) si elle redevient le facteur limitant.
+3. Mettre cette IA dans le jeu : mesurer le temps d'une décision (n=200, `rp=2`, profondeur 3) sur
+   un téléphone, chercher une version allégée.
