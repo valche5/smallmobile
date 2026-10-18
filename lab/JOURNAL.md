@@ -363,7 +363,7 @@ prévoir les adversaires : l'IA Normal ressemble à l'IA Difficile (mêmes heuri
 qui simule des adversaires à son image se trompe sur eux. `rp=2` prend le meilleur des deux, pour
 le même temps de calcul.
 
-## 2026-10-18 — Point d'étape (le labo passe sur mini)
+## 2026-10-18 — Point d'étape (le calcul passe sur AWS)
 
 Meilleure IA à ce jour : `az:net=lab/nets/gen6.bin,n=200,w=0.5,c=2.5,roll=1,depth=5,rp=2,rt=0.5`,
 +40 contre l'IA Difficile (200 donnes, graine 51), pour le même calcul que la référence (+31).
@@ -376,6 +376,8 @@ Pistes ouvertes, par ordre d'intérêt :
 3. Le réseau juge mal (erreur ~7 pièces sur l'avance, `lab noise`) mais ce n'est pas ce qui limite
    la force (`rolls=4` n'apporte que +3) : inutile d'y investir pour l'instant.
 
-mini (i5-8500T, 6 cœurs, 15 Go dont ~7 libres, pas de GPU) : environ 4 fois plus lent que le PC
-du labo. `lab/py/setup.sh cpu` pour l'entraînement sur processeur ; toujours `train.py --lazy`
-(les données ne tiennent pas en mémoire) ; régler `--threads` pour laisser de la marge au jeu.
+Organisation : le calcul part sur des machines AWS (EC2 Spot, processeur seul) ; mini (i5-8500T,
+6 cœurs, sert aussi le jeu) ne fait qu'orchestrer : il garde les données (`lab/data`, 39 Go) et
+les poids, lance les machines, y envoie le travail, rapatrie les résultats et les éteint. Pas de
+calcul sur mini. `lab/py/setup.sh cpu` : entraînement sur processeur ; `train.py --lazy` si les
+données ne tiennent pas en mémoire.

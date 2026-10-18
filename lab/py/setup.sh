@@ -1,7 +1,7 @@
 #!/bin/bash
 # Environnement Python de l'entraînement.
 #   ./setup.sh       PyTorch pour ROCm, avec les seuls pilotes de la RX 9070 (gfx1201) ; demande uv.
-#   ./setup.sh cpu   PyTorch sur processeur (machine sans GPU, mini par exemple) ; venv et pip suffisent.
+#   ./setup.sh cpu   PyTorch sur processeur (machine de calcul sans GPU) ; venv et pip suffisent.
 set -e
 cd "$(dirname "$0")"
 if [ "${1:-}" = cpu ]; then
