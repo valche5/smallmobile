@@ -6,6 +6,7 @@
 //! lab selfplay --agent mcts:n=200 --games 1000 --out lab/data/gen0 [--players 2,3,4,5] [--sample-rounds 2]
 //! lab check-net --net poids.bin --data parties.bin [--count 5]   (comparaison avec lab/py/check.py)
 //! lab label --games 20000 --out lab/data/label1 [--share 0.1] [--rollouts 32] [--random 0.1] [--agent az:net=poids.bin,n=50]
+//! lab noise --net poids.bin [--positions 2000] [--rollouts 32]   (bruit des cibles, erreur du réseau)
 //! lab analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par lab/tools/export-room.ts)
 //! ```
 
@@ -30,6 +31,7 @@ fn main() {
         "agree" => agree_cmd(&opts),
         "trace" => trace_cmd(&opts),
         "label" => label_cmd(&opts),
+        "noise" => noise_cmd(&opts),
         _ => usage(),
     }
 }
@@ -284,4 +286,108 @@ fn label_cmd(opts: &HashMap<String, String>) {
         std::process::exit(1)
     }
     println!("{} parties en {:.0} s", cfg.games, start.elapsed().as_secs_f64());
+}
+
+/// Bruit des positions jugées et erreur du réseau : chaque position (parties de l'IA Normal, 10 % de
+/// coups au hasard) est jugée deux fois par `rollouts` fins simulées indépendantes. L'écart entre les
+/// deux jugements donne le bruit ; le réseau est comparé à leur moyenne, bruit retiré. Par nombre de
+/// joueurs et par manches restantes, avec la dispersion des cibles (ce qu'il y a à expliquer).
+fn noise_cmd(opts: &HashMap<String, String>) {
+    use smallmobile_kernel::{Level, Phase};
+    use smallmobile_lab::agent::KernelAi;
+    use smallmobile_lab::encode::encode;
+    use smallmobile_lab::know::{Knowledge, Returns};
+    use smallmobile_lab::label::judge;
+    use smallmobile_lab::moves;
+    use smallmobile_lab::rand::{Rng, mix};
+    let net = smallmobile_lab::net::Net::load(std::path::Path::new(opts.get("net").unwrap_or_else(|| usage())))
+        .unwrap_or_else(|e| panic!("réseau illisible : {e}"));
+    let positions: usize = get(opts, "positions", 2000);
+    let rollouts: usize = get(opts, "rollouts", 32);
+    let threads: usize = get(opts, "threads", threads());
+    let seed: u64 = get(opts, "seed", 9);
+    /// Une position : joueurs, manches restantes, puis pour l'avance du joueur qui agit sur son
+    /// meilleur rival : jugement A, jugement B, réseau.
+    struct Sample {
+        players: usize,
+        left: i32,
+        lead: [f64; 3],
+        coins: Vec<[f64; 3]>,
+    }
+    let samples = std::sync::Mutex::new(Vec::<Sample>::new());
+    std::thread::scope(|scope| {
+        for t in 0..threads {
+            let (net, samples) = (&net, &samples);
+            scope.spawn(move || {
+                let normal = KernelAi::new(Level::Normal);
+                let mut rng = Rng::new(mix(seed, t as u64));
+                let mut local = Vec::new();
+                let mut game = 0;
+                while local.len() < positions / threads {
+                    game += 1;
+                    let table = Table::new(2 + (t + game) % 4, mix(seed, (t * 100_000 + game) as u64) % 1_000_000_007);
+                    let mut g = table.game(game as u32);
+                    let mut k = Knowledge::default();
+                    while g.state.phase != Phase::GameOver && local.len() < positions / threads {
+                        let legal = moves::legal(&g);
+                        if legal.len() > 1 && rng.unit() < 0.05 {
+                            let (_, fa) = judge(&g, &k, rollouts, &mut rng);
+                            let (_, fb) = judge(&g, &k, rollouts, &mut rng);
+                            let s = &g.state;
+                            let n = s.player_count();
+                            let me = s.actor().expect("un joueur doit agir");
+                            let ev = net.eval(&encode(&g, k.race_tail), g.map);
+                            let mut pred = [0.0f32; 5];
+                            for r in 0..n {
+                                let q = (me + r) % n;
+                                pred[q] = s.players[q].coins as f32 + ev.gain[r];
+                            }
+                            let lead = |f: &[f32; 5]| {
+                                let rival = (0..n).filter(|&q| q != me).map(|q| f[q]).fold(f32::MIN, f32::max);
+                                (f[me] - rival) as f64
+                            };
+                            local.push(Sample {
+                                players: n,
+                                left: s.max_rounds - s.round,
+                                lead: [lead(&fa), lead(&fb), lead(&pred)],
+                                coins: (0..n).map(|q| [fa[q] as f64, fb[q] as f64, pred[q] as f64]).collect(),
+                            });
+                        }
+                        let mv = if rng.unit() < 0.1 { legal[rng.below(legal.len())].mv } else { normal.act(&g, &k, &mut rng) };
+                        let mut ret = Returns::default();
+                        moves::play(&mut g, &mv, &mut ret).expect("coup possible");
+                        k.observe(ret.0, &g.state);
+                    }
+                }
+                samples.lock().unwrap().extend(local);
+            });
+        }
+    });
+    let samples = samples.into_inner().unwrap();
+    // pour des triplets (A, B, réseau) : dispersion de la cible, bruit d'un jugement, erreur du réseau
+    // (bruit de la moyenne de deux jugements retiré)
+    fn stats<'a>(cells: impl Iterator<Item = &'a [f64; 3]>) -> (usize, f64, f64, f64) {
+        let v: Vec<&[f64; 3]> = cells.collect();
+        let m = v.len().max(1) as f64;
+        let mean = v.iter().map(|c| (c[0] + c[1]) / 2.0).sum::<f64>() / m;
+        let d2 = v.iter().map(|c| (c[0] - c[1]).powi(2)).sum::<f64>() / m;
+        let spread = (v.iter().map(|c| ((c[0] + c[1]) / 2.0 - mean).powi(2)).sum::<f64>() / m - d2 / 4.0).max(0.0).sqrt();
+        let e2 = v.iter().map(|c| (c[2] - (c[0] + c[1]) / 2.0).powi(2)).sum::<f64>() / m;
+        (v.len(), spread, (d2 / 2.0).sqrt(), (e2 - d2 / 4.0).max(0.0).sqrt())
+    }
+    println!("{} positions, {rollouts} fins par jugement ; avance du joueur qui agit sur son meilleur rival :", samples.len());
+    println!("{:<22} {:>6} {:>10} {:>8} {:>8}", "", "pos.", "dispersion", "bruit", "réseau");
+    let row = |name: &str, f: &dyn Fn(&Sample) -> bool| {
+        let (c, sp, no, er) = stats(samples.iter().filter(|s| f(s)).map(|s| &s.lead));
+        println!("{name:<22} {c:>6} {sp:>10.2} {no:>8.2} {er:>8.2}");
+    };
+    row("toutes", &|_| true);
+    for n in 2..=5 {
+        row(&format!("{n} joueurs"), &|s| s.players == n);
+    }
+    for (lo, hi) in [(0, 0), (1, 2), (3, 5), (6, 20)] {
+        row(&format!("{lo} à {hi} manches restantes"), &|s| s.left >= lo && s.left <= hi);
+    }
+    let (c, sp, no, er) = stats(samples.iter().flat_map(|s| &s.coins));
+    println!("pièces finales, par joueur : {c} ; dispersion {sp:.2}, bruit {no:.2}, réseau {er:.2}");
 }

@@ -295,3 +295,45 @@ des gen4 −1,4. Léger mieux.
 
 `lab label --agent` : les positions jugées peuvent venir de parties d'un autre joueur. `label2` :
 60 000 parties jouées par gen3l (n=50, réseau seul, 10 % de coups au hasard).
+
+## 2026-10-18 — Le jugement du réseau n'est plus le facteur limitant
+
+`label3` (60 000 parties de gen4) et `label4` (80 000 parties de gen5) : ~0,8 et ~1,1 million de
+positions jugées. `train.py --lazy` lit les données à la demande (`np.memmap`), plus grosses que la
+mémoire. gen5 : valeur sur label1 + label2, politique sur gen3, depuis gen4 ; gen6 : + label3,
+depuis gen5.
+
+| réseau | contre l'IA Difficile (n=200, profondeur 5, w=0,5) | face-à-face, réseau seul |
+| --- | --- | --- |
+| gen5 | +31,0 (n=100 : +29,9 ; n=400 : +34,1) | +1,2 / −3,0 contre gen4 |
+| gen6 | +30,8 | +0,1 / −2,1 contre gen5 |
+
+`lab noise` : chaque position (parties de l'IA Normal) est jugée deux fois par 32 fins simulées ;
+l'écart donne le bruit des cibles, le réseau (gen6) est comparé à leur moyenne. Avance du joueur qui
+agit sur son meilleur rival, en pièces :
+
+| positions | dispersion des cibles | bruit d'un jugement | erreur du réseau |
+| --- | --- | --- | --- |
+| toutes | 17,6 | 1,7 | 6,9 |
+| 2 joueurs | 22,0 | 1,8 | 8,6 |
+| 5 joueurs | 15,1 | 1,5 | 5,8 |
+| dernière manche | 20,9 | 0,1 | 2,3 |
+| 6 manches ou plus restantes | 14,2 | 2,4 | 8,6 |
+
+Le réseau se trompe quatre fois plus que le bruit de ses cibles, et ni plus de données (gen3l →
+gen6 : 6,96 → 6,89) ni un poids quatre fois plus fort sur les pièces à l'entraînement n'y changent
+rien.
+
+Mais est-ce ce qui limite la force ? `rolls=K` : K fins simulées par position nouvelle (la première
+dans le monde de l'itération, les autres dans d'autres mondes possibles). gen6 contre l'IA
+Difficile (200 donnes) :
+
+| jugement d'une position nouvelle | écart | durée |
+| --- | --- | --- |
+| 1 fin de 5 tours, puis le réseau | +30,8 | 6 min |
+| 4 fins de 5 tours, puis le réseau | +33,5 | 18 min |
+| 4 fins complètes | +30,7 | 26 min |
+
+Un jugement bien moins bruité n'apporte presque rien : la précision de la valeur ne limite plus.
+Détail contre l'IA Difficile : 2 joueurs 75,5 % (attendu 50 %), 3 joueurs 64 %, 4 joueurs 58,5 %,
+5 joueurs 50,8 % (attendu 20 %).

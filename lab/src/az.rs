@@ -36,6 +36,8 @@ pub struct Config {
     pub rollout: f32,
     /// Longueur des fins simulées, en tours de joueur ; ensuite le réseau juge. 0 : jusqu'au bout.
     pub depth: usize,
+    /// Nombre de fins simulées par position nouvelle (leur moyenne : moins de bruit, plus de calcul).
+    pub rollouts: usize,
     /// Valeurs des coups ramenées entre 0 et 1 dans chaque nœud (comme MuZero) : les petits écarts
     /// de valeur comptent autant que l'a priori.
     pub normalize: bool,
@@ -53,6 +55,7 @@ impl Default for Config {
             scale: 8.0,
             rollout: 0.0,
             depth: 0,
+            rollouts: 1,
             normalize: true,
         }
     }
@@ -75,6 +78,7 @@ impl Config {
                 "roll" => cfg.rollout = v.parse().ok()?,
                 "norm" => cfg.normalize = v != "0",
                 "depth" => cfg.depth = v.parse().ok()?,
+                "rolls" => cfg.rollouts = v.parse::<usize>().ok()?.max(1),
                 _ => return None,
             }
         }
@@ -163,7 +167,7 @@ impl Az {
     }
 
     /// Valeur et a priori d'une position (le nœud n'a pas encore d'arêtes).
-    fn expand(&self, node: &mut Node, w: &Game, k: &Knowledge, legal: &[moves::Choice]) -> Value {
+    fn expand(&self, node: &mut Node, w: &Game, k: &Knowledge, legal: &[moves::Choice], rng: &mut Rng) -> Value {
         let eval = self.net.eval(&encode(w, k.race_tail), w.map);
         let top = legal.iter().map(|c| eval.logits[c.key as usize]).fold(f32::NEG_INFINITY, f32::max);
         let exps: Vec<f32> = legal.iter().map(|c| (eval.logits[c.key as usize] - top).exp()).collect();
@@ -185,7 +189,12 @@ impl Az {
         if lambda <= 0.0 {
             return v;
         }
-        let r = self.simulate(w, k);
+        let mut r = [0.0; 2 * MAX_PLAYERS];
+        for i in 0..self.cfg.rollouts {
+            // la première dans ce monde-ci, les suivantes dans d'autres mondes possibles (pioches, dés)
+            let one = if i == 0 { self.simulate(w, k) } else { self.simulate(&determinize(w, k, rng), k) };
+            r.iter_mut().zip(one).for_each(|(a, b)| *a += b / self.cfg.rollouts as f32);
+        }
         let mut out = [0.0; 2 * MAX_PLAYERS];
         for (o, (a, b)) in out.iter_mut().zip(v.iter().zip(r)) {
             *o = (1.0 - lambda) * a + lambda * b;
@@ -273,7 +282,7 @@ impl Az {
             };
         }
         let mut nodes: Vec<Node> = vec![Node::default()];
-        let root_value = self.expand(&mut nodes[0], root, k, &legal);
+        let root_value = self.expand(&mut nodes[0], root, k, &legal, rng);
         nodes[0].visits = 1;
         nodes[0].total = root_value;
         if noise > 0.0 {
@@ -301,7 +310,7 @@ impl Az {
                 }
                 let n = &mut nodes[node as usize];
                 if !n.expanded {
-                    break self.expand(n, &w, &kw, &legal);
+                    break self.expand(n, &w, &kw, &legal, rng);
                 }
                 let pid = w.state.actor().expect("un joueur doit agir");
                 // les coups de ce monde-ci ; un coup jamais vu reçoit un a priori moyen
@@ -400,7 +409,10 @@ impl Az {
 impl Agent for Az {
     fn name(&self) -> String {
         let c = &self.cfg;
-        let depth = if c.depth > 0 { format!(", depth={}", c.depth) } else { String::new() };
+        let mut depth = if c.depth > 0 { format!(", depth={}", c.depth) } else { String::new() };
+        if c.rollouts > 1 {
+            depth += &format!(", rolls={}", c.rollouts);
+        }
         format!("az({}, n={}, c={}, w={}, roll={}{depth})", self.label, c.iterations, c.c_puct, c.win_weight, c.rollout)
     }
 

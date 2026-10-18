@@ -34,13 +34,53 @@ RECORD = np.dtype(FIELDS + [("qgain", "<f4", 5)])
 BLOCK = 256
 
 
-def load(paths, seed=0, with_value=False):
+class Records:
+    """Les enregistrements lus à la demande dans les fichiers (`np.memmap`) : pour des données plus
+    grosses que la mémoire. `recs[sel]` (indices croissants) renvoie un tableau `RECORD`."""
+
+    def __init__(self, sources):
+        # sources : (fichier, dtype, nombre d'enregistrements du fichier, lignes gardées)
+        self.maps = [
+            np.memmap(f, dtype=dtype, mode="r", shape=(count,)) if count else np.zeros(0, dtype=dtype)
+            for f, dtype, count, _ in sources
+        ]
+        self.starts = np.cumsum([0] + [len(rows) for *_, rows in sources])
+        self.rows = np.concatenate([rows for *_, rows in sources]) if sources else np.zeros(0, np.int64)
+
+    def __len__(self):
+        return len(self.rows)
+
+    def __getitem__(self, sel):
+        sel = np.asarray(sel)
+        out = np.empty(len(sel), dtype=RECORD)
+        # les indices sont croissants : chaque fichier en occupe une tranche
+        cuts = np.searchsorted(sel, self.starts)
+        for i, m in enumerate(self.maps):
+            a, b = cuts[i], cuts[i + 1]
+            if a == b:
+                continue
+            fill(out[a:b], m[self.rows[sel[a:b]]])
+        return out
+
+
+def fill(dst, src):
+    """Copie des enregistrements (anciens ou nouveaux) dans un tableau `RECORD`."""
+    if src.dtype == RECORD:
+        dst[...] = src
+    else:
+        for name in RECORD_V1.names:
+            dst[name] = src[name]
+        dst["qgain"] = np.nan
+
+
+def load(paths, seed=0, with_value=False, lazy=False):
     """Les enregistrements des fichiers (ou dossiers) donnés. `dossier@0.2` n'en garde que 20 %, par
     blocs de positions consécutives (des parties entières, à peu près) ; `dossier:policy` ne sert
     qu'à la politique (sa valeur n'est pas apprise).
 
     Renvoie les enregistrements, le numéro de bloc de chacun (pour séparer la validation) et, si
-    `with_value`, si sa valeur s'apprend."""
+    `with_value`, si sa valeur s'apprend. `lazy` : les enregistrements restent dans les fichiers
+    (`Records`), lus à chaque lot."""
     rng = np.random.default_rng(seed)
     # premier passage : quels enregistrements garder (sans rien lire), pour tout écrire d'un coup
     # dans un seul tableau (pas de copie : les données peuvent occuper la moitié de la mémoire)
@@ -63,23 +103,22 @@ def load(paths, seed=0, with_value=False):
                 ids = ids[mask]
             plan.append((f, dtype, count, mask, ids, tag != "policy"))
     total = sum(len(ids) for *_, ids, _ in plan)
+    blocks = np.concatenate([ids for *_, ids, _ in plan]) if plan else np.zeros(0, np.int64)
+    values = np.concatenate([np.full(len(ids), v) for *_, ids, v in plan]) if plan else np.zeros(0, bool)
+    if lazy:
+        sources = [
+            (f, dtype, count, np.arange(count) if mask is None else np.flatnonzero(mask))
+            for f, dtype, count, mask, _, _ in plan
+        ]
+        recs = Records(sources)
+        return (recs, blocks, values) if with_value else (recs, blocks)
     recs = np.empty(total, dtype=RECORD)
-    blocks = np.empty(total, dtype=np.int64)
-    values = np.empty(total, dtype=bool)
     at = 0
-    for f, dtype, count, mask, ids, value in plan:
+    for f, dtype, count, mask, ids, _ in plan:
         src = np.memmap(f, dtype=dtype, mode="r", shape=(count,)) if count else np.zeros(0, dtype=dtype)
         if mask is not None:
             src = src[mask]
-        dst = recs[at : at + len(ids)]
-        if dtype is RECORD:
-            dst[...] = src
-        else:
-            for name in RECORD_V1.names:
-                dst[name] = src[name]
-            dst["qgain"] = np.nan
-        blocks[at : at + len(ids)] = ids
-        values[at : at + len(ids)] = value
+        fill(recs[at : at + len(ids)], src)
         at += len(ids)
         del src
     return (recs, blocks, values) if with_value else (recs, blocks)

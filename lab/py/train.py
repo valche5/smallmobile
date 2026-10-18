@@ -83,11 +83,12 @@ def main():
     ap.add_argument("--gain-weight", type=float, default=0.25)
     ap.add_argument("--val-share", type=float, default=0.05)
     ap.add_argument("--q-weight", type=float, default=0.5, help="part des pièces attendues par la recherche")
+    ap.add_argument("--lazy", action="store_true", help="lire les données à la demande (plus grosses que la mémoire)")
     ap.add_argument("--policy-temp", type=float, default=1.0, help="cible de politique : visites^(1/T)")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    recs, blocks, value_mask = load(args.data, with_value=True)
+    recs, blocks, value_mask = load(args.data, with_value=True, lazy=args.lazy)
     rng = np.random.default_rng(0)
     # validation sur des blocs entiers : pas de position d'une partie vue à l'entraînement
     val_blocks = rng.random(int(blocks.max()) + 1) < args.val_share
