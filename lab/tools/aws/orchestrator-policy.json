@@ -1,0 +1,57 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PassWorkerRoleToEc2",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::631245464763:role/smallai-worker",
+      "Condition": { "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" } }
+    },
+    {
+      "Sid": "ReadWorkerProfile",
+      "Effect": "Allow",
+      "Action": ["iam:GetInstanceProfile", "iam:GetRole", "iam:ListInstanceProfiles"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NoAccountBillingOrSpendLimitChanges",
+      "Effect": "Deny",
+      "Action": [
+        "account:Put*", "account:Delete*", "account:Enable*", "account:Disable*",
+        "account:Accept*", "account:Start*", "account:Close*",
+        "organizations:*",
+        "aws-portal:Modify*",
+        "billing:Put*", "billing:Update*", "billing:Create*", "billing:Delete*", "billing:Redeem*",
+        "budgets:Create*", "budgets:Modify*", "budgets:Update*", "budgets:Delete*", "budgets:Execute*",
+        "ce:Create*", "ce:Update*", "ce:Delete*",
+        "freetier:Put*", "freetier:Upgrade*",
+        "payments:*", "invoicing:*", "consolidatedbilling:*", "purchase-orders:*",
+        "tax:Put*", "tax:Delete*", "tax:Batch*",
+        "cur:Put*", "cur:Delete*", "cur:Modify*",
+        "supportplans:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NoUpfrontCommitments",
+      "Effect": "Deny",
+      "Action": [
+        "savingsplans:Create*",
+        "ec2:Purchase*",
+        "ec2:AcceptReservedInstancesExchangeQuote",
+        "ec2:CreateCapacityReservation*",
+        "rds:PurchaseReserved*",
+        "elasticache:PurchaseReserved*",
+        "redshift:PurchaseReserved*",
+        "es:PurchaseReserved*",
+        "dynamodb:PurchaseReserved*",
+        "memorydb:PurchaseReserved*",
+        "route53domains:RegisterDomain", "route53domains:TransferDomain", "route53domains:RenewDomain",
+        "aws-marketplace:*",
+        "shield:CreateSubscription"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

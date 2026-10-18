@@ -381,3 +381,92 @@ Organisation : le calcul part sur des machines AWS (EC2 Spot, processeur seul) ;
 les poids, lance les machines, y envoie le travail, rapatrie les résultats et les éteint. Pas de
 calcul sur mini. `lab/py/setup.sh cpu` : entraînement sur processeur ; `train.py --lazy` si les
 données ne tiennent pas en mémoire.
+
+## 2026-10-18 — Les machines AWS
+
+Compte AWS « nouvelle expérience » : projet SmallAI (compte 631245464763), plan payant, plafond de
+dépense de 50 $/mois (compté avant les crédits). AWS y interdit le Spot (règle
+`DenySpotMarketType`, plan gratuit comme payant ; seule l'activation des « fonctionnalités
+avancées », irréversible, la lève, mais supprime le plafond) : machines à la demande, région
+eu-north-1 (c7a.4xlarge 0,88 $/h, c7a.16xlarge 3,52 $/h). Quota à la demande : 64 vCPU (une
+c7a.16xlarge à la fois).
+
+- `lab/tools/cloud.sh` (profil `smallai`, utilisateur `smallai-orchestrator`) : `job [--type T]
+  [--data D1,D2] [--get chemins] -- 'commande'` lance une machine (Debian 13, Rust, labo compilé,
+  `setup.sh cpu`), copie les données du bucket, calcule, rapatrie, détruit, vérifie qu'il ne reste
+  ni machine, ni disque, ni adresse ; `status` : machines et dépense du mois. Sur la machine,
+  extinction (donc destruction) après 20 min sans calcul et au bout de 12 h quoi qu'il arrive.
+- `lab/data` est copié dans `s3://smallai-lab-631245464763/data` (mini → bucket : ~33 Mo/s), lu
+  gratuitement par les machines (rôle `smallai-worker`, ce seul bucket).
+- Politiques : `lab/tools/aws/`.
+
+Vitesse (`lab label`, 5 min) : c7a.4xlarge (16 cœurs AMD EPYC 9R14) 570 positions/s, i7-12700KF
+518. Installation et compilation : 1 min 20 ; test complet : 6 min, 0,10 $.
+
+## 2026-10-18 — `rp=2` confirmé sur 1 000 donnes
+
+gen6 contre l'IA Difficile, 1 000 donnes (graine 61), n=200, profondeur 5, w=0,5 ; c7a.4xlarge :
+
+| fins simulées | 2 j. | 3 j. | 4 j. | 5 j. | écart | durée |
+| --- | --- | --- | --- | --- | --- | --- |
+| IA Normal pour tous | 80,2 % | 68,1 % | 59,0 % | 51,8 % | +32,8 ± 1,6 | 14 min |
+| réseau pour moi (`rp=2`) | 86,3 % | 76,6 % | 64,5 % | 57,6 % | **+39,2** ± 1,5 | 26 min |
+| idem, rt=0,5 | 87,3 % | 74,8 % | 62,8 % | 53,9 % | +37,1 ± 1,6 | 25 min |
+
+`rp=2` vaut +6 à +7 à tous les nombres de joueurs ; rt=0,5 ne fait pas mieux que rt=0 (l'avance
+sur 200 donnes était du bruit). Sur cette machine, `rp=2` prend deux fois le temps de la référence
+(sur l'i7, autant) : les fins de l'IA Normal y vont deux fois plus vite, le réseau à peine plus.
+Coût : 67 min, 1,01 $.
+
+Autres réglages avec `rp=2` (mêmes 1 000 donnes, c7a.16xlarge, 64 cœurs) :
+
+| réglage | écart | durée |
+| --- | --- | --- |
+| n=200, profondeur 3 | +38,0 | 6 min |
+| n=200, profondeur 5 | +39,2 | (26 min sur 16 cœurs) |
+| n=200, profondeur 5, rt=1 | +35,4 | 8,5 min |
+| n=200, profondeur 8 | +38,8 | 12 min |
+| n=400, profondeur 5 | +40,0 | 17,5 min |
+| n=800, profondeur 5 | **+42,0** | 35 min |
+
+La profondeur ne compte pas (3 vaut 5 et 8, pour moitié moins de calcul) ; tirer les coups du
+réseau au hasard (rt=1) coûte 4 points ; doubler n rapporte ~1,5 point. Coût : 81 min, 4,77 $.
+
+## 2026-10-18 — gen7 : la politique des recherches `rp=2`
+
+Parties de gen6 contre lui-même (n=200, profondeur 3, `rp=2`, bruit 0,25, la moitié des coups
+cherchés à fond et enregistrés, les autres en 50 itérations) : 20 000 parties, 1,42 million de
+positions (`gen6`), 61 min sur 64 cœurs. Compilée pour le processeur (`target-cpu=native`), la
+recherche ne va pas plus vite.
+
+Entraînement sur processeur (64 cœurs) : 63 s par passe sur 811 000 positions, aussi vite que la
+carte graphique. gen7 : la valeur sur label1 à label4, la politique sur `gen6`, depuis gen6,
+8 passes de 8 min (6,1 millions de positions) ; précision de la politique en validation 51 %
+(gen6 : 44 %, sur d'autres parties), brier 0,108.
+
+Contre l'IA Difficile (1 000 donnes, graine 61 ; n=200, profondeur 3, `rp=2`) :
+
+| réseau | 2 j. | 3 j. | 4 j. | 5 j. | écart |
+| --- | --- | --- | --- | --- | --- |
+| gen6 | 85,9 % | 75,1 % | 63,1 % | 56,6 % | +38,0 |
+| gen7 | 89,0 % | 79,4 % | 67,0 % | 57,7 % | **+40,9** |
+
+Presque gen6 à n=800, profondeur 5 (+42,0), pour six fois moins de calcul. Face à face (même
+recherche, 400 donnes) : gen7 contre des gen6 +2,0, gen6 contre des gen7 −3,0. Coût de gen7
+(parties, entraînement, évaluation) : ~11 $.
+
+## 2026-10-18 — Point d'étape (gen7)
+
+Meilleure IA à ce jour : `az:net=lab/nets/gen7.bin,n=200,w=0.5,c=2.5,roll=1,depth=3,rp=2`, +40,9
+contre l'IA Difficile (1 000 donnes, graine 61). Dépense de la journée sur AWS : ~16 $ (crédits
+restants : 160 $) ; `lab/data/gen6` est sur mini et dans le bucket.
+
+Pistes ouvertes, par ordre d'intérêt :
+1. Un tour de plus : parties de gen7 contre lui-même (mêmes réglages que pour `gen6`, 20 000
+   parties, ~1 h), gen8 (valeur sur label1 à label4, politique sur `gen7` et peut-être `gen6`,
+   depuis gen7, 8 passes, ~1 h), puis les mêmes mesures (IA Difficile 1 000 donnes graine 61,
+   face-à-face 400 donnes). ~10 $. Le gain tient-il (+2,9 de gen6 à gen7) ?
+2. La valeur n'apprend plus de label1 à label4 (brier ~0,11 depuis gen5) : de nouvelles positions
+   jugées (`lab label --agent` avec gen7) si elle redevient le facteur limitant.
+3. Mettre cette IA dans le jeu : mesurer le temps d'une décision (n=200, `rp=2`, profondeur 3) sur
+   un téléphone, chercher une version allégée.
