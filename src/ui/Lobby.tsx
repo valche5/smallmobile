@@ -1,18 +1,11 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { PLAYER_COLORS } from '../engine/data';
+import { AI_LEVELS, PLAYER_COLORS } from '../engine/data';
 import { PRESETS, presetMap } from '../engine/mapgen';
 import { randomSeed } from '../engine/rng';
-import type { AiLevel } from '../engine/types';
 import { MapPreview } from './components/MapPreview';
 import { QrCode } from './components/QrCode';
 import { saveMe } from './me';
 import { onlineQuit, onlineSend, toast, type UIState } from './store';
-
-const LEVELS: { id: AiLevel; label: string }[] = [
-  { id: 'facile', label: 'Facile' },
-  { id: 'normal', label: 'Normale' },
-  { id: 'difficile', label: 'Difficile' },
-];
 
 /** Adresse à partager : si l'hôte a ouvert « localhost », on donne l'adresse du serveur sur le réseau local. */
 function useJoinUrl(code: string): string {
@@ -176,7 +169,7 @@ function Room({ s }: { s: UIState }) {
               <div class="extra-ai">
                 <div class="small">Niveau des IA qui complètent la table :</div>
                 <div class="seg">
-                  {LEVELS.map((l) => (
+                  {AI_LEVELS.map((l) => (
                     <button key={l.id} class={room.aiLevel === l.id ? 'on' : ''} onClick={() => onlineSend({ t: 'lobby', aiLevel: l.id })}>
                       {l.label}
                     </button>

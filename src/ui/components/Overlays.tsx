@@ -1,54 +1,8 @@
 import { useEffect, useState } from 'preact/hooks';
-import { RACES } from '../../engine/data';
 import { ranking } from '../../engine/rules';
 import type { DieEvent, GameState } from '../../engine/types';
 import { dismissOverlay, getState, quitGame, setState } from '../store';
 import { PlayerDot, plural } from './common';
-import { KIND_CLASS, playerTags } from './TopBar';
-import { TagArt } from './ArtIcon';
-
-/** Passe-et-joue : écran de passage minimal (5 lignes au plus, aucune liste). La relecture démarre à sa fermeture. */
-export function HandoffOverlay({ g, player, sinceSeq, defense }: { g: GameState; player: number; sinceSeq: number; defense: boolean }) {
-  const p = g.players[player]!;
-  const hits = g.log.filter((l) => l.seq > sinceSeq && l.player !== player && l.kind === 'conquer' && l.victim === player);
-  const attackers = [...new Set(hits.map((l) => l.player))];
-  const by = attackers.length === 1 && attackers[0] !== null ? g.players[attackers[0]!]!.name : 'On';
-  const task = defense ? g.defense[0] : null;
-  const hand = task ? (g.races[task.race]?.hand ?? 0) : 0;
-  const tags = playerTags(g, player);
-  const parts: string[] = [];
-  if (hits.length) parts.push(`${by} vous a pris ${plural(hits.length, 'région')}`);
-  if (task) parts.push(`${plural(hand, 'jeton')} ${RACES[task.race].name} à replacer`);
-  return (
-    <div class="overlay handoff" style={{ '--pc': p.color } as Record<string, string>}>
-      <div class="handoff-card">
-        <div class="handoff-top">
-          <PlayerDot player={p} size={14} />
-          <span>
-            Tour {g.round}/{g.maxRounds}
-          </span>
-        </div>
-        <h1>{task && task.player !== g.current ? `${p.name}, défendez-vous !` : `À vous, ${p.name} !`}</h1>
-        {tags.length > 0 ? (
-          <p class="handoff-tags">
-            {tags.map((t, i) => (
-              <span key={t.icon}>
-                {i > 0 && ' · '}
-                <span class={`emo k-${KIND_CLASS[t.kind]}`}><TagArt t={t} size={16} /></span> {t.tag}
-              </span>
-            ))}
-          </p>
-        ) : (
-          g.phase === 'pick' && <p class="handoff-tags">👑 Choisissez un peuple</p>
-        )}
-        {parts.length > 0 && <p class="lead hit-line">{parts.join(' · ')}.</p>}
-        <button class="btn primary big-btn" onClick={dismissOverlay}>
-          C'est parti&nbsp;!
-        </button>
-      </div>
-    </div>
-  );
-}
 
 const PIPS: Record<number, number[][]> = {
   0: [],

@@ -1,5 +1,5 @@
 //! Le banc d'essai lui-même : les coups proposés sont toujours jouables, et ce que le joueur « sait »
-//! des pioches est exact.
+//! des pioches est exact. Et l'IA Expert telle que le jeu l'emploie (`smallmobile_brain::expert`).
 
 use smallmobile_kernel::Phase;
 use smallmobile_kernel::action::{Event, Logged};
@@ -60,6 +60,8 @@ fn known_deck_bottom_is_exact() {
                 })
                 .sum();
             k.observe(returns, &g.state);
+            // le noyau suit lui-même ce fond connu (c'est ce que reçoit l'IA Expert dans le jeu)
+            assert_eq!(Knowledge::of(&g.state), k);
             let deck = g.state.race_deck.as_slice();
             let tail = &deck[deck.len() - k.race_tail..];
             assert_eq!(tail, &seen[seen.len() - k.race_tail..]);
@@ -100,5 +102,60 @@ fn the_network_sees_only_what_the_player_knows() {
             moves::play(&mut g, &m, &mut ret).unwrap();
             k.observe(ret.0, &g.state);
         }
+    }
+}
+
+#[test]
+fn a_move_cut_into_actions_plays_the_same() {
+    let mut rng = Rng::new(17);
+    for game in 0..30u64 {
+        let table = Table::new(2 + game as usize % 4, 1700 + game);
+        let mut g = table.game(game as u32);
+        while g.state.phase != Phase::GameOver {
+            let legal = moves::legal(&g);
+            for c in &legal {
+                let mut played = g;
+                moves::play(&mut played, &c.mv, &mut Returns::default()).unwrap();
+                let mut cut = g;
+                for a in moves::actions(&g, &c.mv).unwrap() {
+                    cut.apply(&a, &mut smallmobile_kernel::NoJournal).unwrap_or_else(|e| panic!("{a:?} : {e:?}"));
+                }
+                assert_eq!(cut.state, played.state, "{:?}", c.mv);
+            }
+            let m = legal[rng.below(legal.len())].mv;
+            moves::play(&mut g, &m, &mut Returns::default()).unwrap();
+        }
+    }
+}
+
+#[test]
+fn the_expert_plays_whole_games() {
+    use smallmobile_brain::expert::Expert;
+    use smallmobile_kernel::Level;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nets/gen8.bin");
+    let net = std::sync::Arc::new(smallmobile_lab::net::Net::load(&path).unwrap());
+    let expert = Expert::new(net, 8);
+    for players in [2, 5] {
+        let table = Table::new(players, 2100 + players as u64);
+        let mut g = table.game(players as u32);
+        g.state.players[0].level = Level::Expert;
+        let mut decisions = 0;
+        while g.state.phase != Phase::GameOver {
+            let actions = if g.state.actor() == Some(0) {
+                decisions += 1;
+                let d = expert.decide(&g, decisions).unwrap();
+                assert!(!d.actions.is_empty());
+                d.actions
+            } else {
+                // l'IA du noyau joue l'Expert comme Difficile ; ici les autres places
+                let tuning = smallmobile_kernel::Tuning::default();
+                let ai = smallmobile_kernel::Ai::new(&tuning);
+                vec![ai.decide(&g, smallmobile_kernel::Restrictions::default()).unwrap()]
+            };
+            for a in actions {
+                g.apply(&a, &mut smallmobile_kernel::NoJournal).unwrap_or_else(|e| panic!("{a:?} : {e:?}"));
+            }
+        }
+        assert!(decisions > 10);
     }
 }

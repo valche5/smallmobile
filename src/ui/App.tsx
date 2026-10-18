@@ -8,7 +8,7 @@ import { onlineResume, savedSession, useStore, wantsHome } from './store';
 export function App() {
   const s = useStore();
 
-  // Une partie en ligne était en cours sur ce téléphone : on s'y reconnecte directement
+  // Une partie était en cours sur ce téléphone : on s'y reconnecte directement
   useEffect(() => {
     const session = savedSession();
     const invited = normalizeCode(new URLSearchParams(location.search).get('partie') ?? '');
@@ -17,7 +17,7 @@ export function App() {
 
   let screen;
   if (s.online) screen = s.game && s.online.map ? <GameScreen s={s} /> : <Lobby s={s} />;
-  else screen = s.game ? <GameScreen s={s} /> : <Setup />;
+  else screen = <Setup />;
 
   return (
     <>

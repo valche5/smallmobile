@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'preact/hooks';
 import { ActionBar } from './components/ActionBar';
 import { TabBar } from './components/TabBar';
 import { mySeat, TopBar } from './components/TopBar';
-import { DieOverlay, GameOverOverlay, HandoffOverlay } from './components/Overlays';
+import { DieOverlay, GameOverOverlay } from './components/Overlays';
 import { PeopleSheet } from './components/PeopleSheet';
 import { RegionSheet } from './components/RegionSheet';
 import { LegendSheet, MenuSheet } from './components/MenuSheet';
@@ -31,13 +31,14 @@ function useWide(): boolean {
 
 export function GameScreen({ s }: { s: UIState }) {
   const g = s.game!;
-  // « human » : ce téléphone a la main (son tour en ligne, ou un humain sur ce téléphone)
+  // « human » : ce téléphone a la main
   const human = canAct(s);
   // le joueur dont on montre le point de vue (ligne du haut, Peuples en jeu, Journal)
   const me = mySeat(s, g);
   const [sheetH, setSheetH] = useState(0);
   const wide = useWide();
-  const marks = useMemo(() => computeMarks(g, human), [g, human]);
+  const viewer = viewerSeat(s);
+  const marks = useMemo(() => computeMarks(g, viewer, human), [g, viewer, human]);
 
   // Pendant le tour adverse, on ne garde ouvertes que les fenêtres d'information
   useEffect(() => {
@@ -79,9 +80,7 @@ export function GameScreen({ s }: { s: UIState }) {
   }
 
   let overlay = null;
-  if (s.overlay?.kind === 'handoff')
-    overlay = <HandoffOverlay g={g} player={s.overlay.player} sinceSeq={s.overlay.sinceSeq} defense={s.overlay.defense} />;
-  else if (s.overlay?.kind === 'die') overlay = <DieOverlay key={s.overlay.event.seq} ev={s.overlay.event} auto={s.overlay.auto} />;
+  if (s.overlay?.kind === 'die') overlay = <DieOverlay key={s.overlay.event.seq} ev={s.overlay.event} auto={s.overlay.auto} />;
   else if (g.phase === 'gameOver' && s.podium)
     overlay = <GameOverOverlay g={g} me={viewerSeat(s)} onClose={() => setState({ podium: false })} />;
 

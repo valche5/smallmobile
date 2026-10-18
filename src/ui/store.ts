@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import { aiAction } from '../engine/ai';
-import { applyAction, createGame, RuleError, type GameSetup } from '../engine/game';
+import { applyAction, RuleError } from '../engine/game';
 import { RACES } from '../engine/data';
 import { currentActor } from '../engine/rules';
 import type { Action, AiLevel, DieEvent, GameState, LogEntry, MapDef } from '../engine/types';
@@ -14,7 +13,6 @@ import {
   newEvents,
   REDEPLOY_MS,
   splitFrames,
-  thinkDelay,
   UNDO_MS,
 } from '../shared/pacing';
 import type { AiSpeed, ClientMsg, Replay, RoomView, ServerMsg, Snapshot } from '../shared/protocol';
@@ -35,10 +33,7 @@ export type Sheet =
   | { kind: 'people'; player: number }
   | null;
 
-export type Overlay =
-  | { kind: 'handoff'; player: number; sinceSeq: number; defense: boolean }
-  | { kind: 'die'; event: DieEvent; auto: boolean }
-  | null;
+export type Overlay = { kind: 'die'; event: DieEvent; auto: boolean } | null;
 
 export interface Toast {
   id: number;
@@ -123,7 +118,6 @@ export interface UIState {
   blink: { regions: number[]; color: string; key: number } | null;
   /** Dernière région touchée par une action de ce téléphone (pulsation). */
   ownPulse: { region: number; key: number } | null;
-  undo: GameState[];
   online: OnlineState | null;
   tab: Tab;
   sheet: Sheet;
@@ -136,14 +130,12 @@ export interface UIState {
   showCosts: boolean;
   /** Dernier numéro de journal vu par chaque joueur humain. */
   seen: Record<number, number>;
-  /** Dernier humain à avoir eu la main (pour l'écran « passez le téléphone »). */
-  lastHuman: number | null;
+  /** Le dernier début de tour de ce téléphone déjà annoncé (« À vous ! »). */
   handoffKey: string | null;
   /** Incrémenté pour demander à la carte de recentrer une région. */
   focus: { region: number; n: number } | null;
 }
 
-const SAVE_KEY = 'smallmobile:save:v1';
 const PREFS_KEY = 'smallmobile:prefs:v1';
 const ONLINE_KEY = 'smallmobile:online:v1';
 
@@ -172,7 +164,6 @@ const NO_PLAYBACK: Pick<UIState, 'playback' | 'card' | 'idle' | 'highlight' | 'b
 let state: UIState = {
   game: null,
   ...NO_PLAYBACK,
-  undo: [],
   online: null,
   tab: 'map',
   sheet: null,
@@ -180,7 +171,6 @@ let state: UIState = {
   toast: null,
   podium: false,
   seen: {},
-  lastHuman: null,
   handoffKey: null,
   focus: null,
   ...loadPrefs(),
@@ -194,7 +184,6 @@ export function getState(): UIState {
 
 export function setState(patch: Partial<UIState>) {
   state = { ...state, ...patch };
-  scheduleLocalAi();
   if ('aiSpeed' in patch || 'showCosts' in patch) {
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify({ aiSpeed: state.aiSpeed, showCosts: state.showCosts }));
@@ -225,69 +214,26 @@ function pageHidden(): boolean {
   return typeof document !== 'undefined' && document.visibilityState === 'hidden';
 }
 
-// --- Sauvegarde locale (partie sur ce téléphone) ---------------------------
-
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
-/** Hors ligne : dernier état de la partie (peut être en avance sur l'état affiché pendant la lecture). */
-let latest: GameState | null = null;
-
-function saveNow() {
-  saveTimer = null;
-  if (state.online) return;
-  try {
-    const game = latest ?? state.game;
-    if (game) localStorage.setItem(SAVE_KEY, JSON.stringify({ game, seen: state.seen, lastHuman: state.lastHuman }));
-    else localStorage.removeItem(SAVE_KEY);
-  } catch {
-    /* quota ou mode privé */
-  }
-}
-
-/** Nouvel état de la partie locale : on le retient et on l'enregistre bientôt. */
-function persistGame(g: GameState | null) {
-  if (state.online) return;
-  latest = g;
-  if (g) remember(g);
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveNow, 150);
-}
-
-// Écran verrouillé ou onglet fermé : on enregistre tout de suite, et la lecture se met en pause
+// Écran verrouillé ou onglet fermé : on retient la partie en ligne, et la lecture se met en pause
 if (typeof window !== 'undefined') {
   window.addEventListener('pagehide', () => {
-    if (saveTimer) saveNow();
     if (state.online) saveSession();
   });
   document.addEventListener('visibilitychange', () => {
     if (pageHidden()) {
-      if (saveTimer) saveNow();
       if (state.online) saveSession();
       pausePlayback();
     } else {
       document.title = TITLE;
       resumePlayback();
-      scheduleLocalAi();
     }
   });
-}
-
-export function hasSave(): { players: string[]; round: number; maxRounds: number } | null {
-  try {
-    const raw = localStorage.getItem(SAVE_KEY);
-    if (!raw) return null;
-    const data = JSON.parse(raw) as { game: GameState };
-    if (!data.game || data.game.version !== 1 || data.game.phase === 'gameOver') return null;
-    return { players: data.game.players.map((p) => p.name), round: data.game.round, maxRounds: data.game.maxRounds };
-  } catch {
-    return null;
-  }
 }
 
 /** Remet à zéro tout ce qui appartient à la partie affichée (file de lecture, historique, minuteurs). */
 function leaveGame(): Partial<UIState> {
   resetPlayback();
   timeline = [];
-  latest = null;
   turnSignaled = null;
   flashPending = false;
   if (flashTimer) clearTimeout(flashTimer);
@@ -295,41 +241,9 @@ function leaveGame(): Partial<UIState> {
   return { ...NO_PLAYBACK };
 }
 
-export function resumeGame() {
-  try {
-    const data = JSON.parse(localStorage.getItem(SAVE_KEY) ?? 'null') as {
-      game: GameState;
-      seen: Record<number, number>;
-      lastHuman: number | null;
-    } | null;
-    if (!data) return;
-    setState({ ...leaveGame(), game: data.game, seen: data.seen ?? {}, lastHuman: null, undo: [], tab: 'map', sheet: null, overlay: null, handoffKey: null });
-    latest = data.game;
-    remember(data.game);
-    checkHandoff();
-  } catch {
-    toast('Sauvegarde illisible.', 'bad');
-  }
-}
-
+/** Quitte la partie et y abandonne sa place. */
 export function quitGame() {
-  if (state.online) {
-    onlineQuit(true);
-    return;
-  }
-  setState({ ...leaveGame(), game: null, undo: [], sheet: null, overlay: null, lastHuman: null, seen: {}, handoffKey: null });
-  try {
-    localStorage.removeItem(SAVE_KEY);
-  } catch {
-    /* ignore */
-  }
-}
-
-export function startGame(setup: GameSetup) {
-  const game = createGame(setup);
-  setState({ ...leaveGame(), game, undo: [], tab: 'map', sheet: null, overlay: null, seen: {}, lastHuman: null, handoffKey: null });
-  persistGame(game);
-  checkHandoff();
+  onlineQuit(true);
 }
 
 // --- Notifications ---------------------------------------------------------
@@ -368,9 +282,8 @@ function turnKey(g: GameState, actor: number): string {
 }
 
 /** Ce joueur se joue sur ce téléphone. */
-function playsHere(g: GameState, pid: number): boolean {
-  if (state.online) return pid === state.online.seat;
-  return g.players[pid]?.kind === 'human';
+function playsHere(pid: number): boolean {
+  return pid === state.online?.seat;
 }
 
 /** Défense « contre soi-même » : mon peuple actif vient de prendre une région à mes Goules en déclin. */
@@ -383,7 +296,7 @@ let turnSignaled: string | null = null;
 /** Le tour revient à ce téléphone (côté serveur ou moteur) : vibration et titre d'onglet tout de suite, même si la lecture continue. */
 function signalTurn(g: GameState) {
   const actor = currentActor(g);
-  if (actor === null || !playsHere(g, actor)) return;
+  if (actor === null || !playsHere(actor)) return;
   const key = turnKey(g, actor);
   if (turnSignaled === key) return;
   turnSignaled = key;
@@ -428,7 +341,7 @@ export interface Frame {
   group?: { from: GameState };
   /** Reçue page cachée, ou rejouée après une absence : ni accélération ni raccourci. */
   late?: boolean;
-  /** Relecture demandée (passe-et-joue, Journal). */
+  /** Relecture demandée (Journal). */
   replay?: boolean;
   /** Appliquée tout de suite, sans carte (défense d'un tiers, annulation jamais vue, état final d'une relecture). */
   silent?: boolean;
@@ -484,7 +397,7 @@ function speedFactor(): number {
   return FACTOR[playbackSpeed()];
 }
 
-/** Le joueur pour qui on raconte (« vous ») : siège en ligne, humain seul, ou dernier humain à avoir joué. */
+/** Le joueur pour qui on raconte (« vous ») : le siège de ce téléphone. */
 function meSeat(): number | null {
   return viewerSeat();
 }
@@ -797,7 +710,7 @@ function replayStates(
   showNextFrame();
 }
 
-/** Rejoue, action par action, ce qui s'est passé depuis ce numéro de journal (passe-et-joue, « ▶ Revoir »). */
+/** Rejoue, action par action, ce qui s'est passé depuis ce numéro de journal (« ▶ Revoir »). */
 export function replaySince(seq: number) {
   const g = state.game;
   if (!g || playbackBusy()) return;
@@ -823,31 +736,6 @@ export function replaySince(seq: number) {
 /** Alias du nom employé par la spécification. */
 export const replayFrom = replaySince;
 
-// --- IA sur ce téléphone ----------------------------------------------------------
-
-let aiTimer: ReturnType<typeof setTimeout> | null = null;
-
-/** Hors ligne, les IA jouent ici, une action à la fois, chacune affichée avant la suivante ; rien ne s'accumule page cachée. */
-function scheduleLocalAi() {
-  if (aiTimer || state.online || state.overlay || playbackBusy() || pageHidden()) return;
-  const g = latest ?? state.game;
-  if (!g || g.phase === 'gameOver') return;
-  const actor = currentActor(g);
-  if (actor === null || g.players[actor]!.kind !== 'ai') return;
-  aiTimer = setTimeout(() => {
-    aiTimer = null;
-    const cur = latest ?? state.game;
-    if (!cur || state.online || state.overlay || playbackBusy() || pageHidden() || cur.phase === 'gameOver') return scheduleLocalAi();
-    const who = currentActor(cur);
-    if (who === null || cur.players[who]!.kind !== 'ai') return;
-    try {
-      act(aiAction(cur), { fromAi: true });
-    } catch (e) {
-      console.error(e);
-    }
-  }, thinkDelay(state.aiSpeed));
-}
-
 // --- Qui peut jouer ? ---------------------------------------------------------
 
 /** Ce téléphone peut-il agir maintenant ? */
@@ -855,35 +743,22 @@ export function canAct(s: UIState = state): boolean {
   const g = s.game;
   if (!g || s.playback || playbackBusy()) return false;
   const actor = currentActor(g);
-  if (actor === null) return false;
-  if (s.online) return actor === s.online.seat && s.online.status === 'open' && !s.online.inflight;
-  return g.players[actor]!.kind === 'human';
+  if (actor === null || !s.online) return false;
+  return actor === s.online.seat && s.online.status === 'open' && !s.online.inflight;
 }
 
-/**
- * « Moi » : en ligne, mon siège ; seul contre l'IA, l'unique humain ;
- * en passe-et-joue, l'humain qui a la main, ou le dernier humain à l'avoir eue quand une IA joue.
- */
+/** « Moi » : le siège de ce téléphone dans la partie. */
 export function viewerSeat(s: UIState = state): number | null {
-  if (s.online) return s.online.seat;
-  // l'état réel, pas celui de la trame affichée : pendant une relecture, « moi » reste celui qui tient le téléphone
-  const g = (s === state ? latest : null) ?? s.game;
-  const humans = g?.players.filter((p) => p.kind === 'human') ?? [];
-  if (humans.length === 1) return humans[0]!.id;
-  if (!g || !humans.length) return null;
-  const actor = currentActor(g);
-  if (actor !== null && g.players[actor]!.kind === 'human') return actor;
-  return s.lastHuman;
+  return s.online?.seat ?? null;
 }
 
 export function canUndo(s: UIState = state): boolean {
-  if (!canAct(s)) return false;
-  return s.online ? s.online.undo > 0 && s.online.pending.length === 0 : s.undo.length > 0;
+  if (!canAct(s) || !s.online) return false;
+  return s.online.undo > 0 && s.online.pending.length === 0;
 }
 
 // --- Actions ---------------------------------------------------------------
 
-const IRREVERSIBLE = new Set<Action['type']>(['reinforce', 'berserkRoll', 'decline', 'endTurn', 'endDefense', 'skipPick']);
 /** Actions qui tirent un dé : seul le serveur peut les résoudre. */
 const RANDOM = new Set<Action['type']>(['reinforce', 'berserkRoll']);
 const CLOSES_REGION_SHEET = new Set<Action['type']>(['conquer', 'dragon', 'sorcery', 'reinforce', 'abandon', 'pick', 'decline', 'endTurn', 'endDefense']);
@@ -901,48 +776,9 @@ function pulseAfter(prev: GameState, next: GameState): Partial<UIState> {
   return { ownPulse: { region: next.lastRegion, key: next.seq }, highlight: null };
 }
 
-export function act(a: Action, opts: { fromAi?: boolean } = {}): boolean {
-  if (state.online) return actOnline(a);
-  const g = opts.fromAi ? (latest ?? state.game) : state.game;
-  if (!g) return false;
-  let next: GameState;
-  try {
-    next = applyAction(g, a);
-  } catch (e) {
-    if (e instanceof RuleError) toast(e.message, 'bad');
-    else {
-      console.error(e);
-      toast('Erreur inattendue.', 'bad');
-    }
-    return false;
-  }
-  const irreversible = opts.fromAi || IRREVERSIBLE.has(a.type) || currentActor(g) !== currentActor(next);
-  const undo = irreversible ? [] : [...state.undo.slice(-30), g];
-
-  if (opts.fromAi) {
-    // l'action de l'IA s'affiche comme celle d'un adversaire en ligne : une trame à la fois
-    persistGame(next);
-    signalTurn(next);
-    enqueueState(next, g);
-    if (state.undo.length) setState({ undo });
-    return true;
-  }
-  const patch: Partial<UIState> = { game: next, undo, ...sheetAfter(a), ...pulseAfter(g, next) };
-  if (next.lastDie && next.lastDie.seq !== g.lastDie?.seq) {
-    patch.overlay = { kind: 'die', event: next.lastDie, auto: false };
-  }
-  // passe-et-joue : la prochaine relecture de ce joueur repartira de la carte telle qu'il l'a laissée
-  const who = currentActor(g);
-  if (who !== null && who !== currentActor(next)) {
-    const own = [...next.log].reverse().find((l) => l.player === who);
-    if (own) patch.seen = { ...state.seen, [who]: own.seq };
-  }
-  feedback(a);
-  persistGame(next);
-  setState(patch);
-  showOthers(g, next, currentActor(g));
-  if (!state.overlay) checkHandoff();
-  return true;
+/** Joue une action de ce téléphone (affichée tout de suite, confirmée par le serveur). */
+export function act(a: Action): boolean {
+  return actOnline(a);
 }
 
 /** Ma propre action a aussi fait commencer le tour de l'adversaire : sa trame « ▶ commence son tour » passe par la file. */
@@ -994,33 +830,15 @@ function feedback(a: Action) {
 }
 
 export function undoLast() {
-  if (state.online) {
-    const o = state.online;
-    // un 2e ↶ avant la réponse annulerait une action de plus
-    if (canUndo() && conn().send({ t: 'undo' })) setState({ sheet: null, online: { ...o, inflight: true } });
-    else setState({ sheet: null });
-    return;
-  }
-  const prev = state.undo[state.undo.length - 1];
-  if (!prev) return;
-  setState({ game: prev, undo: state.undo.slice(0, -1), sheet: null, ownPulse: null });
-  persistGame(prev);
+  const o = state.online;
+  if (!o) return;
+  // un 2e ↶ avant la réponse annulerait une action de plus
+  if (canUndo() && conn().send({ t: 'undo' })) setState({ sheet: null, online: { ...o, inflight: true } });
+  else setState({ sheet: null });
 }
 
 export function dismissOverlay() {
-  const o = state.overlay;
-  const g = state.game;
-  if (o?.kind === 'handoff' && g) {
-    const since = state.seen[o.player] ?? o.sinceSeq;
-    // rien du tour précédent ne reste affiché pour le joueur qui prend le téléphone
-    setState({ overlay: null, lastHuman: o.player, seen: { ...state.seen, [o.player]: g.seq }, card: null, highlight: null, idle: false });
-    if (state.online) saveSession();
-    else {
-      // passe-et-joue : on rejoue à ce joueur tout ce qui s'est passé depuis son dernier tour
-      replaySince(since);
-      if (playbackBusy()) return;
-    }
-  } else setState({ overlay: null });
+  setState({ overlay: null });
   checkHandoff();
 }
 
@@ -1052,7 +870,7 @@ function takenSince(g: GameState, me: number, since: number): string | null {
   return `${who} ${plural(regions, 'région')}`;
 }
 
-/** Quand la main revient à ce téléphone : le flash « À vous ! » (ou l'écran « passez le téléphone » si plusieurs humains le partagent). */
+/** Quand la main revient à ce téléphone : le flash « À vous ! ». */
 export function checkHandoff() {
   const g = state.game;
   if (!g || state.overlay || playbackBusy()) return;
@@ -1061,7 +879,7 @@ export function checkHandoff() {
   const defense = g.phase === 'defend';
   const key = turnKey(g, actor);
   if (state.handoffKey === key) return;
-  if (!playsHere(g, actor)) return;
+  if (!playsHere(actor)) return;
   signalTurn(g);
   // page cachée : le flash attendra qu'on revienne
   if (pageHidden()) {
@@ -1071,15 +889,10 @@ export function checkHandoff() {
   flashPending = false;
   const p = g.players[actor]!;
   const since = state.seen[actor] ?? 0;
-  const shared = !state.online && g.players.filter((x) => x.kind === 'human').length > 1;
-  if (shared && (actor !== state.lastHuman || (defense && !selfDefense(g)))) {
-    setState({ overlay: { kind: 'handoff', player: actor, sinceSeq: since, defense }, handoffKey: key, sheet: null, card: null, highlight: null });
-    return;
-  }
   if (graceTimer) clearTimeout(graceTimer);
   graceTimer = null;
-  setState({ handoffKey: key, lastHuman: actor, seen: { ...state.seen, [actor]: g.seq }, card: null, highlight: null, idle: false });
-  if (state.online) saveSession();
+  setState({ handoffKey: key, seen: { ...state.seen, [actor]: g.seq }, card: null, highlight: null, idle: false });
+  saveSession();
   // les fenêtres de confirmation ouvertes pendant le tour adverse n'ont plus de sens
   if (state.sheet && state.sheet.kind !== 'region' && state.sheet.kind !== 'people') setState({ sheet: null });
   const task = defense ? g.defense[0] : null;
@@ -1185,17 +998,15 @@ function enterOnline(patch: Partial<OnlineState> = {}) {
       ...patch,
     },
     game: null,
-    undo: [],
     sheet: null,
     overlay: null,
     handoffKey: null,
-    lastHuman: null,
     tab: 'map',
   });
   conn().connect();
 }
 
-export function onlineCreate(p: { name: string; color: string; size: number; aiLevel: AiLevel; mapSeed: number }) {
+export function onlineCreate(p: { name: string; color: string; size: number; aiLevel: AiLevel; mapSeed: number; opponent: 'human' | 'ai' }) {
   intro = { t: 'create', ...p };
   resumeShown = null;
   setState({ seen: {} });

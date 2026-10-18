@@ -73,7 +73,7 @@ fn noise_amplitude(level: Level) -> f64 {
     match level {
         Level::Easy => 2.5,
         Level::Normal => 0.4,
-        Level::Hard => 0.0,
+        Level::Hard | Level::Expert => 0.0,
     }
 }
 
@@ -82,7 +82,7 @@ fn coin_blur(level: Level) -> f64 {
     match level {
         Level::Easy => 0.35,
         Level::Normal => 0.2,
-        Level::Hard => 0.1,
+        Level::Hard | Level::Expert => 0.1,
     }
 }
 
@@ -130,7 +130,7 @@ impl<'t> Ai<'t> {
     /// La prochaine action du joueur qui doit agir, à son niveau.
     pub fn decide(&self, g: &Game, restrictions: Restrictions) -> Result<Action, Reason> {
         let pid = g.state.actor().ok_or(Reason::GameOver)?;
-        self.decide_as(g, g.state.players[pid].level, restrictions)
+        self.decide_as(g, g.state.players[pid].level.classic(), restrictions)
     }
 
     fn decide_as(&self, g: &Game, level: Level, restrictions: Restrictions) -> Result<Action, Reason> {
@@ -533,7 +533,7 @@ impl Seat<'_, '_, '_> {
             .fold(0, i32::max);
         match self.level {
             Level::Easy => Ok(est == 0 || (est <= 1 && self.noise("decl", None) > 1.5)),
-            Level::Hard => {
+            Level::Hard | Level::Expert => {
                 if fresh == 0 {
                     return Ok(false);
                 }

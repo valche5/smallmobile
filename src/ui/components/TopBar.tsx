@@ -8,16 +8,11 @@ import { TagArt } from './ArtIcon';
 /** Classe CSS de chaque nature d'effet (couleurs --k-*). */
 export const KIND_CLASS: Record<EffectKind, string> = { attaque: 'atk', défense: 'def', spécial: 'spe', revenu: 'inc' };
 
-/**
- * Le joueur dont ce téléphone montre le point de vue : en ligne, mon siège ; seul contre l'IA, l'unique humain ;
- * en passe-et-joue, l'humain qui a la main, ou le dernier humain à l'avoir eue pendant qu'une IA joue (ou pendant une relecture).
- */
+/** Le joueur dont ce téléphone montre le point de vue : son siège (à défaut, le joueur qui a la main). */
 export function mySeat(s: UIState, g: GameState): number {
   const seat = viewerSeat(s);
   if (seat !== null) return seat;
-  const actor = currentActor(g);
-  if (actor !== null && canAct(s)) return actor;
-  return s.lastHuman ?? actor ?? g.current;
+  return currentActor(g) ?? g.current;
 }
 
 /** Une étiquette : l'emoji souligné à la couleur de sa nature, puis le texte court. */

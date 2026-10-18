@@ -38,6 +38,11 @@ impl Journal for Returns {
 }
 
 impl Knowledge {
+    /// Ce que sait un joueur de la partie en cours : le noyau suit le fond public des pioches.
+    pub fn of(s: &State) -> Knowledge {
+        Knowledge { race_tail: s.race_tail as usize, power_tail: s.power_tail as usize }
+    }
+
     /// Met à jour ce qui est su après une action : `returns` cartes rendues sous les pioches (voir
     /// `Returns`), puis les pioches de l'état qui en résulte (les cartes tirées partent du dessus).
     pub fn observe(&mut self, returns: usize, after: &State) {

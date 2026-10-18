@@ -339,12 +339,12 @@ describe('pastilles de carte (computeMarks)', () => {
     put(g, g.map.regions[r]!.adj[0]!, 'ratmen', 3);
     g.phase = 'redeploy';
     g.turn.army = 'humans';
-    const marks = computeMarks(g, true);
+    const marks = computeMarks(g, 0, true);
     expect(marks.get(r)).toEqual({ kind: 'threat', label: '⚔3', ring: '#000001', hot: true });
     expect(marks.get(quiet)!.kind).toBe('own');
     expect(marks.get(quiet)!.label).toBeUndefined();
     // hors de mon tour : aucune pastille
-    expect([...computeMarks(g, false).values()].some((m) => m.label)).toBe(false);
+    expect([...computeMarks(g, 0, false).values()].some((m) => m.label)).toBe(false);
   });
 
   test('régions perdues : signalées hors de mon redéploiement', async () => {
@@ -360,11 +360,11 @@ describe('pastilles de carte (computeMarks)', () => {
     g.current = 1;
     g.phase = 'conquest';
     g.turn.army = 'ratmen';
-    expect(computeMarks(g, false).get(r)).toEqual({ kind: 'plain', lost: true });
+    expect(computeMarks(g, 0, false).get(r)).toEqual({ kind: 'plain', lost: true });
     g.current = 0;
     g.phase = 'redeploy';
     g.turn.army = 'humans';
-    expect(computeMarks(g, true).get(r)?.lost).toBeUndefined();
+    expect(computeMarks(g, 0, true).get(r)?.lost).toBeUndefined();
   });
 
   test('Amazones : les jetons rendus sont dits une fois, au redéploiement', () => {

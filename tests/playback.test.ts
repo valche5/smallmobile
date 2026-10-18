@@ -505,7 +505,7 @@ describe('avec le serveur', () => {
     store.onlineQuit(false);
     const rooms = new RoomManager(null, new ManualScheduler());
     FakeSocket.rooms = rooms;
-    store.onlineCreate({ name: 'Alice', color: ALICE, size: 2, aiLevel: 'normal', mapSeed: PRESETS[2]!.seed });
+    store.onlineCreate({ name: 'Alice', color: ALICE, size: 2, aiLevel: 'normal', mapSeed: PRESETS[2]!.seed, opponent: 'human' });
     await flush(10);
     const code = store.getState().online!.code!;
     const bob = new Phone();
@@ -559,27 +559,5 @@ describe('actions en vol et reconnexions', () => {
     expect(store.canUndo()).toBe(false);
     serverSends(newGame());
     expect(store.getState().online!.inflight).toBe(false);
-  });
-});
-
-describe('passe-et-joue', () => {
-  test('la relecture repart de la carte telle que le joueur l\'a laissée', () => {
-    store.onlineQuit(false);
-    store.startGame({
-      players: [
-        { name: 'Alice', color: ALICE, kind: 'human', ai: 'normal' },
-        { name: 'Bob', color: BOB, kind: 'human', ai: 'normal' },
-      ],
-      mapSeed: PRESETS[2]!.seed,
-      seed: 3,
-    });
-    store.dismissOverlay();
-    store.act({ type: 'pick', index: 0 });
-    store.act({ type: 'endConquest' });
-    store.act({ type: 'endTurn' });
-    const g = store.getState().game!;
-    const lastAlice = [...g.log].reverse().find((l) => l.player === 0)!;
-    expect(store.getState().seen[0]).toBe(lastAlice.seq);
-    store.quitGame();
   });
 });

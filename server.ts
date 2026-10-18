@@ -2,6 +2,8 @@ import type { ServerWebSocket } from 'bun';
 import { networkInterfaces } from 'node:os';
 import index from './src/index.html';
 import { initEngine } from './src/engine/engine';
+import { FileGameArchive } from './src/server/archive';
+import { DEFAULT_EXPERT, ExpertProcess } from './src/server/expert';
 import { RoomManager } from './src/server/rooms';
 import { socketHandlers, upgradeSocket, type SocketData } from './src/server/socket';
 import { FileRoomStore } from './src/server/store';
@@ -13,16 +15,29 @@ await initEngine(await Bun.file(KERNEL).arrayBuffer());
 const port = Number(process.env.PORT ?? 3000);
 const dev = process.env.NODE_ENV !== 'production';
 const store = new FileRoomStore(process.env.DATA_DIR ?? './data/rooms');
-const rooms = new RoomManager(store);
+const archive = new FileGameArchive(process.env.GAMES_DIR ?? './data/games');
+
+// En développement (bun --hot), ce module est réexécuté à chaque modification : ce qui vit au-delà
+// d'une exécution (connexions, minuteur, processus de l'Expert) est retrouvé ici et remplacé.
+const shared = globalThis as {
+  __sockets?: Set<ServerWebSocket<SocketData>>;
+  __prune?: ReturnType<typeof setInterval>;
+  __expert?: ExpertProcess;
+};
+
+// l'IA Expert : un processus natif ; sans lui, ses sièges jouent comme l'IA Difficile
+const missing = ExpertProcess.available(DEFAULT_EXPERT);
+if (missing) console.warn(`  IA Expert indisponible : ${missing}`);
+shared.__expert?.close();
+const expert = missing ? null : (shared.__expert = new ExpertProcess(DEFAULT_EXPERT));
+const rooms = new RoomManager(store, undefined, { expert, archive });
 
 const lan = Object.values(networkInterfaces())
   .flat()
   .filter((i) => i && i.family === 'IPv4' && !i.internal)
   .map((i) => `http://${i!.address}:${port}`);
 
-// En développement (bun --hot), ce module est réexécuté à chaque modification :
-// on ferme les anciennes connexions pour que les téléphones se reconnectent au nouveau gestionnaire.
-const shared = globalThis as { __sockets?: Set<ServerWebSocket<SocketData>>; __prune?: ReturnType<typeof setInterval> };
+// les anciennes connexions se ferment : les téléphones se reconnectent au nouveau gestionnaire
 for (const ws of shared.__sockets ?? []) ws.close(1012, 'Redémarrage du serveur');
 const sockets = (shared.__sockets = new Set<ServerWebSocket<SocketData>>());
 if (shared.__prune) clearInterval(shared.__prune);
@@ -50,6 +65,8 @@ const server = Bun.serve<SocketData>({
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     store.flush();
+    archive.flush();
+    expert?.close();
     process.exit(0);
   });
 }

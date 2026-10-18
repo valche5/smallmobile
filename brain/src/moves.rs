@@ -306,6 +306,43 @@ pub fn play(g: &mut Game, m: &Move, journal: &mut impl Journal) -> Result<(), Re
     }
 }
 
+/// Les actions du noyau qui jouent ce coup, dans l'ordre (le jeu les joue une à une). Mêmes actions
+/// que `play`, calculées sur une copie de la partie.
+pub fn actions(g: &Game, m: &Move) -> Result<Vec<Action>, Reason> {
+    let mut out = Vec::new();
+    match m {
+        Move::Act(a) => out.push(*a),
+        Move::Finish(f) => {
+            out.extend(f.specials.iter().map(|&x| special_action(x)));
+            if let Some(p) = f.placement {
+                out.push(Action::Place(p));
+            }
+            out.push(Action::EndTurn { peace: f.peace, stout: f.stout });
+        }
+        Move::Defend(plan) => {
+            let race = g.state.defense[0].race;
+            for r in g.owned(race).iter() {
+                if plan[r] > 0 {
+                    out.push(Action::Deploy { region: r, delta: plan[r] });
+                }
+            }
+            out.push(Action::EndDefense);
+        }
+        Move::Auto => {
+            let tuning = Tuning::default();
+            let ai = Ai::new(&tuning);
+            let mut w = *g;
+            w.state.players[w.state.current].level = Level::Normal;
+            while w.state.phase == Phase::Redeploy {
+                let a = ai.decide(&w, Restrictions::default())?;
+                w.apply(&a, &mut smallmobile_kernel::NoJournal)?;
+                out.push(a);
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Le coup en clair, pour l'analyse (régions désignées par leur numéro dans la carte).
 pub fn describe(g: &Game, m: &Move) -> String {
     let s = &g.state;

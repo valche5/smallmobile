@@ -1,15 +1,17 @@
 # SmallMobile 🗺️⚔️
 
 Un clone de **Small World** pensé pour le **navigateur mobile** : chaque joueur
-joue sur **son propre téléphone**, connecté à un petit serveur Bun. Des **IA**
-complètent la table sur les cartes plus grandes. Chaque action affiche ses
+joue sur **son propre téléphone**, connecté à un petit serveur Bun. On joue
+seul contre des **IA**, ou à deux (des IA complètent la table sur les cartes
+plus grandes). Chaque action affiche ses
 conséquences **avant** d'être confirmée. Interface entièrement en français.
 
 ## Démarrer
 
 Il faut [Bun](https://bun.sh) ≥ 1.2 et [Rust](https://rustup.rs) avec la cible WebAssembly
 (`rustup target add wasm32-unknown-unknown`) : les règles, l'IA et les cartes sont écrites en Rust
-(`kernel/`) et compilées en WebAssembly, chargé par le serveur et par les téléphones.
+(`kernel/`) et compilées en WebAssembly, chargé par le serveur et par les téléphones. L'IA Expert
+(`brain/`) est un programme natif que le serveur fait tourner à côté de lui.
 
 ```bash
 bun install
@@ -20,7 +22,9 @@ Le serveur affiche son adresse sur le réseau local, par exemple
 `http://192.168.1.20:3000`. Ouvrez-la sur les deux téléphones, connectés au
 même Wi-Fi que l'ordinateur qui fait tourner le serveur.
 
-1. Sur le premier téléphone : **En ligne → Créer la partie**. Un code de
+Seul : **Contre l'IA → Jouer**, la partie commence aussitôt. À deux :
+
+1. Sur le premier téléphone : **Contre un ami → Créer la partie**. Un code de
    4 lettres et un QR code s'affichent.
 2. Sur le second : scannez le QR code avec l'appareil photo (ou ouvrez le lien
    partagé, ou tapez le code dans **Rejoindre une partie**).
@@ -35,20 +39,22 @@ automatiquement.
 | ------------------- | ----------------------------------------------------------------- |
 | `bun start`         | Serveur de jeu (`PORT=8080 bun start` pour changer de port)       |
 | `bun run dev`       | Développement avec rechargement à chaud                           |
-| `bun run kernel:build` | Noyau du jeu en WebAssembly (`public/game-kernel.wasm`), fait par les autres commandes |
-| `bun run build`     | Version statique dans `dist/` (mode « Sur ce téléphone » seulement) |
+| `bun run kernel:build` | Noyau du jeu en WebAssembly (`public/game-kernel.wasm`) et IA Expert (`target/release/expert`), fait par les autres commandes |
 | `bun test`          | Tests : règles, pouvoirs, parties IA, serveur et WebSockets       |
 | `cargo test`        | Tests du noyau Rust (dont l'empreinte de non-régression de l'IA)  |
 | `bun run typecheck` | Vérification TypeScript                                           |
 
-Les parties en ligne sont enregistrées dans `data/rooms/` (modifiable avec
+Les parties en cours sont enregistrées dans `data/rooms/` (modifiable avec
 `DATA_DIR`) : elles survivent à un redémarrage du serveur et sont effacées
-après 7 jours d'inactivité.
+après 7 jours d'inactivité. Chaque partie jouée est aussi archivée dans
+`data/games/` (`GAMES_DIR`), pour le labo de l'IA : de quoi la rejouer à
+l'identique et le temps de chaque décision d'IA (`bun lab/tools/games.ts`).
 
 ## Jouer
 
-- **En ligne** (chacun sur son téléphone) : le serveur applique les règles et
-  fait jouer les IA ; chaque téléphone affiche la partie en direct.
+- Toutes les parties se jouent sur le serveur (seul contre l'IA, ou chacun sur
+  son téléphone) : il applique les règles et fait jouer les IA ; chaque
+  téléphone affiche la partie en direct.
   - « À vous ! » s'affiche (et le téléphone vibre) quand c'est votre tour,
     avec le résumé de ce que les autres ont fait. Quand ce n'est pas votre
     tour, la barre du bas indique qui joue et sa dernière action ; vous pouvez
@@ -56,12 +62,12 @@ après 7 jours d'inactivité.
   - Un téléphone en veille ou un rechargement de page se reconnecte tout seul.
     Si un joueur reste hors ligne pendant son tour, l'autre peut confier ses
     tours à l'IA ; il reprend la main dès qu'il revient.
-- **Sur ce téléphone** : contre l'IA, ou en passe-et-joue (un écran invite à
-  passer le téléphone). Sauvegarde automatique sur l'appareil.
 - **Cartes** : Petite (2 joueurs, 23 régions, 10 tours), Moyenne (+1 IA),
-  Grande (+2 IA), Immense (+3 IA). Les IA ont trois niveaux ; « Difficile »
+  Grande (+2 IA), Immense (+3 IA). Les IA ont quatre niveaux ; « Difficile »
   simule les tours suivants (déclin, placement des jetons) et s'en prend
-  davantage à ses adversaires, surtout en duel.
+  davantage à ses adversaires, surtout en duel ; « Expert » est l'IA du labo
+  (recherche guidée par un réseau de neurones, voir `lab/JOURNAL.md`), jouée
+  par le serveur.
   « 🎲 Autre carte » génère un nouveau monde.
 - **Vues** (barre du bas) : 🗺️ Carte, 👑 Peuples (le marché), 👥 Joueurs
   (scores, revenus, connexion), 📜 Journal, 📖 Règles.

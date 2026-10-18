@@ -36,6 +36,8 @@ pub fn initial_state(map: &Map, lost_tribes: RegionSet, levels: &[Level], rounds
         market: ArrayVec::new(),
         race_deck,
         power_deck,
+        race_tail: 0,
+        power_tail: 0,
         round: 1,
         max_rounds: rounds,
         current: 0,

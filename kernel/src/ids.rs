@@ -52,8 +52,16 @@ id_enum! {
 }
 
 id_enum! {
-    /// Niveau de l'IA qui joue une place.
-    Level { Easy, Normal, Hard }
+    /// Niveau de l'IA qui joue une place. Expert : l'IA du labo (recherche guidée par un réseau,
+    /// hors du noyau) ; le noyau, lui, la joue comme Difficile.
+    Level { Easy, Normal, Hard, Expert }
+}
+
+impl Level {
+    /// Le niveau que joue l'IA du noyau.
+    pub fn classic(self) -> Level {
+        if self == Level::Expert { Level::Hard } else { self }
+    }
 }
 
 impl Race {

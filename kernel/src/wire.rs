@@ -16,7 +16,7 @@ use crate::reason::Reason;
 use crate::rules::{AttackHint, AttackHow, Attacker, Modifier, Special, TargetKind, Via};
 use crate::state::{Combo, DefenseTask, DieRoll, Occupant, Peace, Player, RaceState, RegionState, Stage, State, Turn};
 
-pub const MAGIC: u32 = 0x534d_4b32; // « SMK2 »
+pub const MAGIC: u32 = 0x534d_4b33; // « SMK3 »
 const NONE_ID: u32 = 255;
 const LOST_ID: u32 = 254;
 
@@ -286,8 +286,10 @@ pub fn decode_state(r: &mut Reader, map: &Map) -> Result<State> {
         };
     }
     let market = r.list(|r| Ok(Combo { race: r.race()?, power: r.power()?, coins: r.count()? }))?;
-    let race_deck = r.list(|r| r.race())?;
-    let power_deck = r.list(|r| r.power())?;
+    let race_deck: ArrayVec<Race, { Race::COUNT }> = r.list(|r| r.race())?;
+    let power_deck: ArrayVec<Power, { Power::COUNT }> = r.list(|r| r.power())?;
+    let race_tail = r.upto(race_deck.len())? as u8;
+    let power_tail = r.upto(power_deck.len())? as u8;
     let mut turn = Turn {
         stage: if r.flag()? { Stage::Ghouls } else { Stage::Active },
         army: r.race_or_none()?,
@@ -320,6 +322,8 @@ pub fn decode_state(r: &mut Reader, map: &Map) -> Result<State> {
         market,
         race_deck,
         power_deck,
+        race_tail,
+        power_tail,
         round,
         max_rounds,
         current,
@@ -433,6 +437,7 @@ pub fn encode_state(s: &State, n: usize, w: &mut Writer) {
     for &p in &s.power_deck {
         w.word(p.index() as u32);
     }
+    w.word(s.race_tail as u32).word(s.power_tail as u32);
     let t = &s.turn;
     w.word((t.stage == Stage::Ghouls) as u32)
         .race(t.army)

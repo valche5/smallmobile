@@ -420,6 +420,8 @@ impl<'m> Game<'m> {
             let power = s.power_deck.remove(0);
             s.market.push(Combo { race, power, coins: 0 });
         }
+        s.race_tail = s.race_tail.min(s.race_deck.len() as u8);
+        s.power_tail = s.power_tail.min(s.power_deck.len() as u8);
     }
 
     /// Reprend en main les jetons du peuple, sauf un par région.
@@ -624,8 +626,12 @@ impl<'m> Game<'m> {
         let s = &mut self.state;
         s.races[race.index()] = None;
         // les cartes retournent sous les pioches (une carte en double, impossible en partie, est écartée)
-        let _ = s.race_deck.try_push(race);
-        let _ = s.power_deck.try_push(rs.power);
+        if s.race_deck.try_push(race).is_ok() {
+            s.race_tail = (s.race_tail + 1).min(s.race_deck.len() as u8);
+        }
+        if s.power_deck.try_push(rs.power).is_ok() {
+            s.power_tail = (s.power_tail + 1).min(s.power_deck.len() as u8);
+        }
         let p = &mut s.players[rs.owner];
         p.declined.retain(|&r| r != race);
         if p.active == Some(race) {

@@ -30,7 +30,7 @@ export interface RoomView {
 }
 
 /** État de partie envoyé aux téléphones : sans la carte (envoyée une fois) ni la graine du hasard. */
-export type GameWire = Omit<GameState, 'map'>;
+export type GameWire = Omit<GameState, 'map' | 'record'>;
 
 /** Un état passé de la partie, gardé par le serveur pour rejouer fidèlement ce qu'un téléphone a manqué. */
 export interface Snapshot {
@@ -51,7 +51,8 @@ export interface Replay {
 }
 
 export type ClientMsg =
-  | { t: 'create'; name: string; color: string; size: number; aiLevel: AiLevel; mapSeed: number }
+  /** `opponent` : 'ai' pour jouer seul contre l'IA (la partie commence aussitôt). */
+  | { t: 'create'; name: string; color: string; size: number; aiLevel: AiLevel; mapSeed: number; opponent?: 'human' | 'ai' }
   | { t: 'join'; code: string; name: string; color: string }
   /** `shown` : numéro de journal de la dernière trame affichée sur ce téléphone. */
   | { t: 'resume'; code: string; token: string; shown?: number }

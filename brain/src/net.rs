@@ -121,8 +121,14 @@ fn read_u32(r: &mut impl Read) -> io::Result<u32> {
 }
 
 impl Net {
+    /// Lit un fichier de poids.
     pub fn load(path: &Path) -> io::Result<Net> {
-        let mut f = io::BufReader::new(std::fs::File::open(path)?);
+        Net::from_bytes(&std::fs::read(path)?)
+    }
+
+    /// Lit des poids au format SMNN1.
+    pub fn from_bytes(bytes: &[u8]) -> io::Result<Net> {
+        let mut f = bytes;
         let mut magic = [0; 5];
         f.read_exact(&mut magic)?;
         if &magic != b"SMNN1" {
@@ -306,30 +312,32 @@ fn gemm_acc(a: &[f32], rows: usize, k: usize, b: &[f32], n: usize, c: &mut [f32]
         unsafe { gemm_acc_avx2(a, rows, k, b, n, c) };
         return;
     }
-    gemm_dispatch(a, rows, k, b, n, c);
+    gemm_dispatch::<false>(a, rows, k, b, n, c);
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,fma")]
 unsafe fn gemm_acc_avx2(a: &[f32], rows: usize, k: usize, b: &[f32], n: usize, c: &mut [f32]) {
-    gemm_dispatch(a, rows, k, b, n, c);
+    gemm_dispatch::<true>(a, rows, k, b, n, c);
 }
 
 /// Une version par largeur courante : l'accumulateur d'une ligne tient alors dans les registres.
+/// `FUSED` : multiplication-addition en une instruction (FMA). Sans FMA matériel (WebAssembly),
+/// `mul_add` serait émulé, bien plus lent qu'une multiplication suivie d'une addition.
 #[inline(always)]
-fn gemm_dispatch(a: &[f32], rows: usize, k: usize, b: &[f32], n: usize, c: &mut [f32]) {
+fn gemm_dispatch<const FUSED: bool>(a: &[f32], rows: usize, k: usize, b: &[f32], n: usize, c: &mut [f32]) {
     match n {
-        32 => gemm_block::<32>(a, rows, k, b, n, 0, c),
-        48 => gemm_block::<48>(a, rows, k, b, n, 0, c),
+        32 => gemm_block::<32, FUSED>(a, rows, k, b, n, 0, c),
+        48 => gemm_block::<48, FUSED>(a, rows, k, b, n, 0, c),
         // au-delà de 64 colonnes, l'accumulateur ne tient plus dans les registres : par blocs de 64
         _ if n.is_multiple_of(64) => {
             for col in (0..n).step_by(64) {
-                gemm_block::<64>(a, rows, k, b, n, col, c);
+                gemm_block::<64, FUSED>(a, rows, k, b, n, col, c);
             }
         }
         96 => {
-            gemm_block::<48>(a, rows, k, b, n, 0, c);
-            gemm_block::<48>(a, rows, k, b, n, 48, c);
+            gemm_block::<48, FUSED>(a, rows, k, b, n, 0, c);
+            gemm_block::<48, FUSED>(a, rows, k, b, n, 48, c);
         }
         _ => {
             for i in 0..rows {
@@ -346,7 +354,15 @@ fn gemm_dispatch(a: &[f32], rows: usize, k: usize, b: &[f32], n: usize, c: &mut 
 
 /// Les colonnes `col..col + N` de `c += a · b` (`b` et `c` ont `n` colonnes).
 #[inline(always)]
-fn gemm_block<const N: usize>(a: &[f32], rows: usize, k: usize, b: &[f32], n: usize, col: usize, c: &mut [f32]) {
+fn gemm_block<const N: usize, const FUSED: bool>(
+    a: &[f32],
+    rows: usize,
+    k: usize,
+    b: &[f32],
+    n: usize,
+    col: usize,
+    c: &mut [f32],
+) {
     for i in 0..rows {
         let at = i * n + col;
         let mut acc: [f32; N] = c[at..at + N].try_into().expect("bloc de N");
@@ -354,7 +370,7 @@ fn gemm_block<const N: usize>(a: &[f32], rows: usize, k: usize, b: &[f32], n: us
         for (kk, &x) in a[i * k..(i + 1) * k].iter().enumerate() {
             let bk: &[f32; N] = b[kk * n + col..kk * n + col + N].try_into().expect("bloc de N");
             for j in 0..N {
-                acc[j] = x.mul_add(bk[j], acc[j]);
+                acc[j] = if FUSED { x.mul_add(bk[j], acc[j]) } else { x * bk[j] + acc[j] };
             }
         }
         c[at..at + N].copy_from_slice(&acc);

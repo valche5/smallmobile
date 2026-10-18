@@ -38,7 +38,8 @@ export type PowerId =
   | 'underworld'
   | 'wealthy';
 
-export type AiLevel = 'facile' | 'normal' | 'difficile';
+/** `expert` : l'IA du labo (recherche guidée par un réseau), jouée par le serveur. */
+export type AiLevel = 'facile' | 'normal' | 'difficile' | 'expert';
 
 export interface RegionDef {
   id: number;
@@ -214,6 +215,9 @@ export interface GameState {
   market: ComboSlot[];
   raceDeck: RaceId[];
   powerDeck: PowerId[];
+  /** Cartes du fond des pioches dont l'ordre est public (rendues sous la pioche par un déclin). */
+  raceTail: number;
+  powerTail: number;
   round: number;
   maxRounds: number;
   current: number;
@@ -222,11 +226,46 @@ export interface GameState {
   defense: DefenseTask[];
   peace: Peace[];
   log: LogEntry[];
+  /** De quoi rejouer la partie à l'identique (graines et actions) ; gardé par le serveur seulement. */
+  record?: GameRecord;
   seq: number;
   rng: number;
   lastDie: DieEvent | null;
   /** Dernière région touchée par une action (pour l'animation). */
   lastRegion: number | null;
+}
+
+/** Une partie enregistrée : `createGame` avec ces graines, puis ces actions, redonne la même partie. */
+export interface GameRecord {
+  mapSeed: number;
+  seed: number;
+  /** Début de la partie (ms depuis 1970). */
+  startedAt: number;
+  moves: RecordedMove[];
+}
+
+export interface RecordedMove {
+  /** Le joueur qui agit. */
+  p: number;
+  a: Action;
+  /** Instant de l'action (ms depuis 1970). */
+  t: number;
+  /** Première action d'une décision d'IA : ce qu'elle a coûté. */
+  ai?: AiThought;
+}
+
+/** Une décision d'IA, pour mesurer son temps de calcul pendant les vraies parties. */
+export interface AiThought {
+  level: AiLevel;
+  /** Durée de la décision, attente comprise (ms). */
+  ms: number;
+  /** Expert : actions jouées pour ce coup, itérations, chance de gagner estimée, temps de calcul seul (ms). */
+  actions?: number;
+  iterations?: number;
+  value?: number;
+  computeMs?: number;
+  /** L'Expert n'a pas répondu : l'IA Difficile a joué à sa place. */
+  fallback?: boolean;
 }
 
 export type Action =

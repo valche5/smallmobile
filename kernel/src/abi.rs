@@ -19,7 +19,7 @@ use crate::state::{Occupant, State};
 use crate::wire::{self, Malformed, Writer};
 
 /// Version du protocole : à changer à chaque modification incompatible.
-pub const ABI_VERSION: u32 = 2;
+pub const ABI_VERSION: u32 = 3;
 pub const CAPACITY: usize = 16 * 1024;
 
 pub const MALFORMED: i32 = -1;

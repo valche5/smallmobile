@@ -1,5 +1,6 @@
 /**
- * Construit le module WebAssembly du jeu (public/game-kernel.wasm), chargé par le téléphone et le serveur.
+ * Construit le module WebAssembly du jeu (public/game-kernel.wasm), chargé par le téléphone et le serveur,
+ * et l'IA Expert native du serveur (target/release/expert, voir src/server/expert.ts).
  *   bun kernel/tools/build.ts
  */
 import { gzipSync } from 'node:zlib';
@@ -12,10 +13,14 @@ export const WASM_FILE = join(root, 'public/game-kernel.wasm');
 /** Taille maximale du module livré au téléphone, compressé (les modèles appris en font plus de la moitié). */
 const WASM_BUDGET = 256 * 1024;
 
-export async function build() {
-  const cmd = [cargo, 'build', '--manifest-path', join(root, 'kernel/Cargo.toml'), '--lib', '--target', 'wasm32-unknown-unknown', '--profile', 'web'];
+async function run(cmd: string[]) {
   const p = Bun.spawn(cmd, { cwd: root, stdout: 'inherit', stderr: 'inherit' });
   if ((await p.exited) !== 0) throw new Error(`Échec : ${cmd.join(' ')}`);
+}
+
+export async function build() {
+  await run([cargo, 'build', '--manifest-path', join(root, 'kernel/Cargo.toml'), '--lib', '--target', 'wasm32-unknown-unknown', '--profile', 'web']);
+  await run([cargo, 'build', '--release', '-q', '-p', 'smallmobile-brain', '--bin', 'expert']);
   const wasm = await Bun.file(join(root, 'target/wasm32-unknown-unknown/web/smallmobile_kernel.wasm')).arrayBuffer();
   const module = await WebAssembly.compile(wasm);
   if (WebAssembly.Module.imports(module).length) throw new Error('Le module WebAssembly ne doit rien importer.');

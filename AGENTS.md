@@ -12,7 +12,12 @@ sans délai peut bloquer la session indéfiniment.
 
 - `kernel/` : le jeu en Rust (règles, IA, cartes), compilé en WebAssembly pour le serveur et les
   téléphones (`public/game-kernel.wasm`, hors git, généré par `bun run kernel:build`).
-- `src/` : interface Preact, serveur Bun, et le pont TypeScript vers le noyau (`src/engine/`).
+- `brain/` : l'IA Expert (recherche guidée par le réseau `lab/nets/gen8.bin`), partagée par le labo et
+  le jeu. Dans le jeu, elle tourne seulement sur le serveur : programme natif `target/release/expert`
+  (construit aussi par `bun run kernel:build`), piloté par `src/server/expert.ts`.
+- `src/` : interface Preact, serveur Bun, et le pont TypeScript vers le noyau (`src/engine/`). Toutes
+  les parties se jouent sur le serveur (plus de mode hors ligne) ; il les archive dans `data/games/`
+  (graines, actions, temps de chaque décision d'IA) : `bun lab/tools/games.ts` les résume.
 - Vérifications : `bun run test`, `bun run typecheck`, `cargo test`, `cargo clippy --workspace --all-targets`.
 
 ## Déployer sur mini
@@ -23,6 +28,10 @@ ssh mini.local 'export PATH=$HOME/.cargo/bin:$HOME/.bun/bin:$PATH; cd ~/repos/sm
 
 Le service lance `bun server.ts` directement : il ne recompile pas le noyau, d'où le
 `kernel:build` avant le redémarrage.
+
+Le dépôt de travail sur mini est aussi celui que sert la production (`smallmobile.service`, port
+3120, même utilisateur) : ne jamais arrêter un serveur de test par motif (`pkill -f "bun server.ts"`
+arrête aussi la production) ; tester sur un autre port et arrêter le processus par son numéro.
 
 ## Calcul du labo sur AWS
 

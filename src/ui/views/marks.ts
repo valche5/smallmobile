@@ -1,7 +1,6 @@
 import { foeThreat, lostRegions } from '../../engine/preview';
-import { actingRace, analyzeTarget, currentActor } from '../../engine/rules';
+import { actingRace, analyzeTarget } from '../../engine/rules';
 import type { GameState } from '../../engine/types';
-import { getState } from '../store';
 
 /**
  * Pastilles et marquages de la carte, calculés pour le joueur de ce téléphone (rendus par MapView).
@@ -23,20 +22,9 @@ export interface Mark {
   lost?: boolean;
 }
 
-/** Le joueur pour qui on dessine : mon siège en ligne, sinon l'humain qui a la main ou le dernier qui l'a eue. */
-function me(g: GameState, humanTurn: boolean): number | null {
-  const s = getState();
-  if (s.online) return s.online.seat;
-  const humans = g.players.filter((p) => p.kind === 'human');
-  if (humans.length === 1) return humans[0]!.id;
-  if (humanTurn) return currentActor(g);
-  return s.lastHuman;
-}
-
-/** Ce qu'il faut mettre en évidence sur la carte pour le joueur de ce téléphone. */
-export function computeMarks(g: GameState, humanTurn: boolean): Map<number, Mark> {
+/** Ce qu'il faut mettre en évidence sur la carte pour `pid`, le joueur de ce téléphone (`humanTurn` : c'est à lui). */
+export function computeMarks(g: GameState, pid: number | null, humanTurn: boolean): Map<number, Mark> {
   const marks = new Map<number, Mark>();
-  const pid = me(g, humanTurn);
   const race = actingRace(g);
   const deploying = humanTurn && (g.phase === 'redeploy' || g.phase === 'defend');
   if (humanTurn && g.phase === 'conquest') {

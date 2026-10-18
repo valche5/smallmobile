@@ -194,6 +194,10 @@ pub struct State {
     pub market: ArrayVec<Combo, 6>,
     pub race_deck: ArrayVec<Race, { Race::COUNT }>,
     pub power_deck: ArrayVec<Power, { Power::COUNT }>,
+    /// Cartes du fond des pioches dont l'ordre est public : rendues sous la pioche quand un peuple
+    /// disparaît, un joueur attentif s'en souvient. Le reste de l'ordre est caché.
+    pub race_tail: u8,
+    pub power_tail: u8,
     pub round: i32,
     pub max_rounds: i32,
     pub current: usize,

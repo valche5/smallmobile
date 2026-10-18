@@ -7,14 +7,14 @@ import { NOUNS, POWER_IDS, RACE_IDS, SUFFIXES } from './data';
 import type { Action, AiLevel, GameState, MapDef, Phase, PowerId, RaceId, RegionDef, Terrain } from './types';
 
 /** Version du protocole attendue (`ABI_VERSION` côté Rust). */
-export const KERNEL_ABI = 2;
-const MAGIC = 0x534d4b32;
+export const KERNEL_ABI = 3;
+const MAGIC = 0x534d4b33;
 const NONE = 255;
 const LOST = 254;
 
 const TERRAINS: Terrain[] = ['farmland', 'forest', 'hill', 'mountain', 'swamp', 'sea', 'lake'];
 const PHASES: Phase[] = ['pick', 'conquest', 'redeploy', 'defend', 'gameOver'];
-const LEVELS: AiLevel[] = ['facile', 'normal', 'difficile'];
+const LEVELS: AiLevel[] = ['facile', 'normal', 'difficile', 'expert'];
 const ACTIONS: Action['type'][] = [
   'pick', 'conquer', 'reinforce', 'berserkRoll', 'dragon', 'sorcery', 'abandon', 'decline', 'endConquest',
   'deploy', 'autoDeploy', 'place', 'camp', 'fortress', 'hero', 'endTurn', 'endDefense', 'skipPick',
@@ -138,6 +138,8 @@ export function stateWords(g: GameState): Uint32Array {
   out.push(g.market.length);
   for (const s of g.market) out.push(raceIndex(s.race), POWER_IDS.indexOf(s.power), s.coins);
   out.push(g.raceDeck.length, ...g.raceDeck.map(raceIndex), g.powerDeck.length, ...g.powerDeck.map((p) => POWER_IDS.indexOf(p)));
+  // anciennes sauvegardes : rien de connu au fond des pioches
+  out.push(Math.min(g.raceTail ?? 0, g.raceDeck.length), Math.min(g.powerTail ?? 0, g.powerDeck.length));
   const t = g.turn;
   out.push(
     +(t.stage === 'ghouls'), raceWord(t.army), t.conquests, t.nonEmpty, mask(t.attacked), mask(t.sorcery), +t.dragonUsed,
@@ -209,6 +211,8 @@ export function readState(xs: Uint32Array, template: GameState): GameState {
   const market = list(() => ({ race: RACE_IDS[r.u()]!, power: POWER_IDS[r.u()]!, coins: r.i() }));
   const raceDeck = list(() => RACE_IDS[r.u()]!);
   const powerDeck = list(() => POWER_IDS[r.u()]!);
+  const raceTail = r.u();
+  const powerTail = r.u();
   const members = (m: number) => Array.from({ length: count }, (_, i) => i).filter((i) => m & (1 << i));
   const stage = r.yes() ? ('ghouls' as const) : ('active' as const);
   const army = raceOrNull(r.u());
@@ -231,6 +235,8 @@ export function readState(xs: Uint32Array, template: GameState): GameState {
     market,
     raceDeck,
     powerDeck,
+    raceTail,
+    powerTail,
     round,
     maxRounds,
     current,

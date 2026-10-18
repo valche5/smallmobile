@@ -21,7 +21,6 @@ import {
   analyzeTarget,
   campsOnBoard,
   canAbandon,
-  currentActor,
   defenseParts,
   defenseValue,
   fortressesOnBoard,
@@ -30,7 +29,7 @@ import {
   raceOf,
 } from '../../engine/rules';
 import type { GameState } from '../../engine/types';
-import { act, getState, setState, viewerSeat } from '../store';
+import { act, setState, viewerSeat } from '../store';
 import { Consequences, CostTable, Details, Lines, plural, Sheet, type SheetSize } from './common';
 
 interface Props {
@@ -52,17 +51,13 @@ interface Section {
   footer?: preact.ComponentChildren;
 }
 
-/** Le joueur qui regarde : mon siège en ligne, sinon l'humain qui a la main ou le dernier qui l'a eue. */
-function viewerOf(g: GameState, human: boolean): number | null {
-  return viewerSeat() ?? (human ? currentActor(g) : getState().lastHuman);
-}
 
 /** Fiche d'une région : l'essentiel en quelques lignes, les chiffres sur les boutons, le détail à la demande. */
 export function RegionSheet({ g, region, human, onClose, onHeight }: Props) {
   const def = g.map.regions[region]!;
   const r = g.regions[region]!;
   const race = actingRace(g);
-  const viewer = viewerOf(g, human);
+  const viewer = viewerSeat();
   const owner = r.race && r.race !== 'lost' ? g.players[raceOf(g, r.race).owner] : null;
 
   let section: Section;

@@ -1,7 +1,8 @@
 [workspace]
 # kernel : le jeu (règles, IA, cartes), compilé en WebAssembly pour le téléphone et le serveur.
+# brain : l'IA Expert (recherche guidée par un réseau), jouée par le serveur et par le labo.
 # lab : l'IA hors jeu (recherche et apprentissage), voir lab/JOURNAL.md.
-members = ["kernel", "lab"]
+members = ["kernel", "brain", "lab"]
 resolver = "3"
 
 [profile.release]

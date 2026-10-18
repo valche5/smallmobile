@@ -239,7 +239,7 @@ clean_alarms() { # alarmes des machines qui n'existent plus
 cmd_push() {
   say "envoi du code et des poids"
   tar -czf - --exclude=lab/py/.venv --exclude=__pycache__ \
-    Cargo.toml Cargo.lock rustfmt.toml kernel lab/Cargo.toml lab/src lab/tests lab/py lab/nets lab/runs/*.sh |
+    Cargo.toml Cargo.lock rustfmt.toml kernel brain lab/Cargo.toml lab/src lab/tests lab/py lab/nets lab/runs/*.sh |
     on 'mkdir -p smallmobile && tar -xzf - -C smallmobile'
   say "compilation du labo et environnement Python"
   on 'cd smallmobile && mkdir -p lab/runs lab/data &&

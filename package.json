@@ -7,7 +7,6 @@
   "scripts": {
     "dev": "bun run kernel:build && bun --hot server.ts",
     "start": "bun run kernel:build && NODE_ENV=production bun server.ts",
-    "build": "bun run kernel:build && bun build ./src/index.html --outdir=dist --minify && cp public/* dist/",
     "test": "bun run kernel:build && bun test",
     "typecheck": "tsc --noEmit",
     "kernel:build": "bun kernel/tools/build.ts"

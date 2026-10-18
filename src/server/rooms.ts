@@ -4,7 +4,7 @@ import { applyAction, createGame, RuleError } from '../engine/game';
 import { PRESETS } from '../engine/mapgen';
 import { randomSeed } from '../engine/rng';
 import { currentActor } from '../engine/rules';
-import type { Action, AiLevel, GameState } from '../engine/types';
+import type { Action, AiLevel, AiThought, GameState } from '../engine/types';
 import { FACTOR, isShown, newEvents, playbackMs, REDEPLOY_MS, splitFrames, thinkDelay } from '../shared/pacing';
 import {
   CODE_ALPHABET,
@@ -18,6 +18,8 @@ import {
   type ServerMsg,
   type Snapshot,
 } from '../shared/protocol';
+import { gameId, type GameArchive } from './archive';
+import type { Expert } from './expert';
 
 /** Un téléphone connecté. */
 export interface Client {
@@ -62,6 +64,8 @@ interface Room extends RoomData {
   groupOpen: boolean;
   /** États récents, pour rejouer à un téléphone ce qu'il a manqué (en mémoire seulement). */
   history: Snapshot[];
+  /** Le reste du coup choisi par l'Expert, joué action par action tant que la partie n'a pas bougé. */
+  plan: { seq: number; actions: Action[] } | null;
 }
 
 /** Au plus autant d'états gardés par partie. */
@@ -79,7 +83,7 @@ export interface RoomStore {
 }
 
 const IRREVERSIBLE = new Set<Action['type']>(['reinforce', 'berserkRoll', 'decline', 'endTurn', 'endDefense', 'skipPick']);
-const LEVELS: AiLevel[] = ['facile', 'normal', 'difficile'];
+const LEVELS: AiLevel[] = ['facile', 'normal', 'difficile', 'expert'];
 const SPEEDS: AiSpeed[] = ['lent', 'normal', 'rapide'];
 
 const realScheduler: Scheduler = {
@@ -97,20 +101,35 @@ function validColor(raw: unknown): string | null {
 }
 
 function toWire(game: GameState): GameWire {
-  const { map: _map, ...rest } = game;
+  const { map: _map, record: _record, ...rest } = game;
   // la graine du hasard reste sur le serveur : personne ne peut prédire les dés
   return { ...rest, rng: 0 };
 }
 
+/** Ce que le serveur peut confier à d'autres : l'IA Expert, l'archive des parties jouées, le journal. */
+export interface RoomServices {
+  expert?: Expert | null;
+  archive?: GameArchive | null;
+  /** Le journal du serveur (temps de décision de l'Expert). */
+  log?: (line: string) => void;
+}
+
 export class RoomManager {
   private rooms = new Map<string, Room>();
+  private expert: Expert | null;
+  private archive: GameArchive | null;
+  private log: (line: string) => void;
 
   constructor(
     private store: RoomStore | null = null,
     private scheduler: Scheduler = realScheduler,
+    services: RoomServices = {},
   ) {
+    this.expert = services.expert ?? null;
+    this.archive = services.archive ?? null;
+    this.log = services.log ?? ((line) => console.log(line));
     for (const data of store?.loadAll() ?? []) {
-      const room: Room = { ...data, clients: new Set(), undo: [], timer: null, busyUntil: 0, groupOpen: false, history: [] };
+      const room: Room = { ...data, clients: new Set(), undo: [], timer: null, busyUntil: 0, groupOpen: false, history: [], plan: null };
       this.rooms.set(room.code, room);
       this.scheduleAi(room);
     }
@@ -184,6 +203,7 @@ export class RoomManager {
   private create(client: Client, msg: Extract<ClientMsg, { t: 'create' }>) {
     const size = PRESETS[msg.size] ? msg.size : 2;
     const aiLevel = LEVELS.includes(msg.aiLevel) ? msg.aiLevel : 'normal';
+    const solo = msg.opponent === 'ai';
     const code = this.newCode();
     const token = crypto.randomUUID();
     const now = Date.now();
@@ -197,7 +217,9 @@ export class RoomManager {
       speed: 'normal',
       seats: [
         { name: cleanName(msg.name, 'Joueur 1'), color: validColor(msg.color) ?? PLAYER_COLORS[0]!.color, kind: 'human', ai: aiLevel, token, replaced: false },
-        { name: 'Joueur 2', color: '', kind: 'human', ai: aiLevel, token: null, replaced: false },
+        solo
+          ? { name: AI_NAMES[size - 2]!, color: '', kind: 'ai', ai: aiLevel, token: null, replaced: false }
+          : { name: 'Joueur 2', color: '', kind: 'human', ai: aiLevel, token: null, replaced: false },
       ],
       game: null,
       clients: new Set(),
@@ -206,6 +228,7 @@ export class RoomManager {
       busyUntil: 0,
       groupOpen: false,
       history: [],
+      plan: null,
     };
     this.resizeSeats(room);
     this.rooms.set(code, room);
@@ -213,6 +236,8 @@ export class RoomManager {
     client.send({ t: 'joined', code, token, seat: 0 });
     this.broadcastRoom(room);
     this.touch(room);
+    // seul contre l'IA : personne à attendre
+    if (solo) this.start(client);
   }
 
   private join(client: Client, msg: Extract<ClientMsg, { t: 'join' }>) {
@@ -305,6 +330,7 @@ export class RoomManager {
     room.undo = [];
     room.history = [];
     room.groupOpen = false;
+    room.plan = null;
     for (const c of room.clients) c.send({ t: 'map', map: room.game.map });
     this.broadcastRoom(room);
     this.broadcastState(room, null);
@@ -425,18 +451,100 @@ export class RoomManager {
       if (!cur || cur.phase === 'gameOver') return;
       const who = currentActor(cur);
       if (who === null || !this.isAi(room, who)) return;
+      const level = cur.players[who]!.ai;
+      const planned = room.plan?.seq === cur.seq ? room.plan.actions[0] : undefined;
+      room.plan = null;
+      if (planned && this.play(room, cur, planned)) return;
+      if (level === 'expert' && this.expert) return this.askExpert(room, cur, who);
+      const start = performance.now();
+      let action: Action;
       try {
-        room.game = applyAction(cur, aiAction(cur));
+        action = aiAction(cur);
       } catch (e) {
         console.error(`IA bloquée dans la partie ${room.code}`, e);
         return;
       }
-      room.undo = [];
-      this.markBusy(room, cur, room.game);
-      this.broadcastState(room, null);
-      this.touch(room);
-      this.scheduleAi(room);
+      this.play(room, cur, action, { level, ms: Math.round(performance.now() - start) });
     }, delay);
+  }
+
+  /** L'Expert réfléchit hors du serveur ; la partie ne doit pas avoir bougé quand il répond. */
+  private askExpert(room: Room, cur: GameState, who: number) {
+    const start = performance.now();
+    // la salle reste occupée : aucun autre tour d'IA ne part pendant la réflexion
+    room.timer = 'expert';
+    this.expert!.decide(cur).then(
+      (move) => {
+        room.timer = null;
+        if (room.game !== cur || !this.rooms.has(room.code)) return this.scheduleAi(room);
+        const ms = Math.round(performance.now() - start);
+        const value = Number.isNaN(move.value) ? undefined : Math.round(move.value * 1000) / 1000;
+        const thought: AiThought = {
+          level: 'expert',
+          ms,
+          actions: move.actions.length,
+          iterations: move.iterations,
+          computeMs: Math.round(move.computeMs),
+          ...(value !== undefined ? { value } : {}),
+        };
+        if (move.iterations) {
+          const chance = value !== undefined ? `, chance ${Math.round(value * 100)} %` : '';
+          this.log(
+            `[expert] ${room.code} siège ${who + 1} manche ${cur.round} : ${ms} ms (calcul ${thought.computeMs} ms, n=${move.iterations}, ${move.actions.length} action(s)${chance})`,
+          );
+        }
+        const [first, ...rest] = move.actions;
+        if (!this.play(room, cur, first!, thought)) return this.fallback(room, cur, start, 'coup refusé par les règles');
+        if (rest.length) room.plan = { seq: room.game!.seq, actions: rest };
+      },
+      (e: Error) => {
+        room.timer = null;
+        if (room.game !== cur || !this.rooms.has(room.code)) return this.scheduleAi(room);
+        this.fallback(room, cur, start, e.message);
+      },
+    );
+  }
+
+  /** L'Expert n'a pas pu jouer : l'IA Difficile joue à sa place cette fois. */
+  private fallback(room: Room, cur: GameState, start: number, why: string) {
+    this.log(`[expert] ${room.code} : ${why} ; l'IA Difficile joue à sa place`);
+    let action: Action;
+    try {
+      action = aiAction(cur);
+    } catch (e) {
+      console.error(`IA bloquée dans la partie ${room.code}`, e);
+      return;
+    }
+    this.play(room, cur, action, { level: 'expert', ms: Math.round(performance.now() - start), fallback: true });
+  }
+
+  /** Joue une action d'IA et prévoit la suite ; faux si les règles la refusent. */
+  private play(room: Room, cur: GameState, action: Action, thought?: AiThought): boolean {
+    try {
+      room.game = applyAction(cur, action, thought);
+    } catch (e) {
+      console.error(`Action d'IA refusée dans la partie ${room.code}`, e);
+      return false;
+    }
+    room.undo = [];
+    this.markBusy(room, cur, room.game);
+    this.broadcastState(room, null);
+    this.touch(room);
+    if (room.game.phase === 'gameOver') this.logThinking(room);
+    this.scheduleAi(room);
+    return true;
+  }
+
+  /** Fin de partie : le temps de réflexion de l'Expert, en bref (le détail est dans l'archive). */
+  private logThinking(room: Room) {
+    const times = (room.game?.record?.moves ?? []).flatMap((m) => (m.ai?.level === 'expert' && m.ai.iterations ? [m.ai.ms] : []));
+    if (!times.length) return;
+    times.sort((a, b) => a - b);
+    const at = (q: number) => times[Math.min(times.length - 1, Math.floor(q * times.length))]!;
+    const total = times.reduce((a, b) => a + b, 0);
+    this.log(
+      `[expert] ${room.code} fin de partie : ${times.length} décisions, médiane ${at(0.5)} ms, 90 % sous ${at(0.9)} ms, max ${times[times.length - 1]} ms, total ${Math.round(total / 1000)} s`,
+    );
   }
 
   // --- Outils -----------------------------------------------------------------
@@ -572,13 +680,29 @@ export class RoomManager {
 
   private touch(room: Room) {
     room.updatedAt = Date.now();
+    this.archiveGame(room);
     if (!this.store) return;
-    const { clients: _c, undo: _u, timer: _t, busyUntil: _b, groupOpen: _o, history: _h, ...data } = room;
+    const { clients: _c, undo: _u, timer: _t, busyUntil: _b, groupOpen: _o, history: _h, plan: _p, ...data } = room;
     this.store.save(data);
   }
 
+  /** La partie en cours, pour le labo : rejouable à l'identique, avec le temps de chaque décision d'IA. */
+  private archiveGame(room: Room) {
+    const g = room.game;
+    if (!this.archive || !g?.record) return;
+    this.archive.save({
+      id: gameId(room.code, g.record.startedAt),
+      code: room.code,
+      updatedAt: room.updatedAt,
+      players: g.players.map((p) => ({ name: p.name, kind: p.kind, ai: p.ai })),
+      coins: g.phase === 'gameOver' ? g.players.map((p) => p.coins) : null,
+      record: g.record,
+    });
+  }
+
   private removeRoom(room: Room) {
-    if (room.timer) this.scheduler.clear(room.timer);
+    // une réflexion de l'Expert en cours s'achèvera sur une salle disparue, sans effet
+    if (room.timer && room.timer !== 'expert') this.scheduler.clear(room.timer);
     this.rooms.delete(room.code);
     this.store?.remove(room.code);
   }

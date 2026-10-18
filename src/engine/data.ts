@@ -1,4 +1,4 @@
-import type { PowerId, RaceId, Terrain } from './types';
+import type { AiLevel, PowerId, RaceId, Terrain } from './types';
 
 export interface RaceDef {
   id: RaceId;
@@ -507,6 +507,14 @@ export const PLAYER_COLORS = [
 
 /** Noms donnés aux IA qui complètent la table. */
 export const AI_NAMES = ['Gorbak', 'Ysolde', 'Thorvald', 'Mirabelle', 'Zéphyr'];
+
+/** Les niveaux d'IA proposés, du plus faible au plus fort. */
+export const AI_LEVELS: { id: AiLevel; label: string }[] = [
+  { id: 'facile', label: 'Facile' },
+  { id: 'normal', label: 'Normale' },
+  { id: 'difficile', label: 'Difficile' },
+  { id: 'expert', label: 'Expert' },
+];
 
 export function comboName(race: RaceId, power: PowerId): string {
   return `${RACES[race].name} ${POWERS[power].name}`;

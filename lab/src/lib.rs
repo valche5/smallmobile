@@ -2,6 +2,9 @@
 //! sans limite de temps, et pour le mesurer. Le jeu lui-même (`smallmobile-kernel`) n'est pas touché :
 //! on le joue tel quel.
 //!
+//! L'IA Expert (`smallmobile-brain`) est partagée avec le jeu : `know`, `moves`, `encode`, `net`,
+//! `rand` en viennent, `az` en est la recherche vue comme un joueur du labo.
+//!
 //! - `table` : une partie à jouer (carte, joueurs), et son résultat ;
 //! - `know` : ce qu'un joueur sait vraiment (pioches et dés cachés) et des mondes possibles ;
 //! - `moves` : les coups d'un joueur, regroupés pour que la recherche ait peu de choix à la fois ;
@@ -15,12 +18,9 @@
 pub mod agent;
 pub mod arena;
 pub mod az;
-pub mod encode;
-pub mod know;
 pub mod label;
 pub mod mcts;
-pub mod moves;
-pub mod net;
-pub mod rand;
 pub mod selfplay;
 pub mod table;
+
+pub use smallmobile_brain::{encode, know, moves, net, rand};

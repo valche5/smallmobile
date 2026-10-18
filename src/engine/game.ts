@@ -7,8 +7,8 @@ import { engine, kernelFor } from './engine';
 import { KernelRefusal, type KernelEvent } from './kernel';
 import { generateMap } from './mapgen';
 import { reasonText } from './reasons';
-import { scoreLine } from './rules';
-import type { Action, AiLevel, GameState, LogEntry, LogKind, TurnState } from './types';
+import { currentActor, scoreLine } from './rules';
+import type { Action, AiLevel, AiThought, GameState, LogEntry, LogKind, TurnState } from './types';
 
 export class RuleError extends Error {}
 
@@ -59,6 +59,8 @@ export function createGame(setup: GameSetup): GameState {
     market: [],
     raceDeck: [],
     powerDeck: [],
+    raceTail: 0,
+    powerTail: 0,
     round: 1,
     maxRounds: map.rounds,
     current: 0,
@@ -76,11 +78,15 @@ export function createGame(setup: GameSetup): GameState {
   const events = k.newGame(template, setup.seed);
   const g = k.snapshot();
   g.log = narrate(g, events);
+  g.record = { mapSeed: setup.mapSeed, seed: setup.seed, startedAt: Date.now(), moves: [] };
   return g;
 }
 
-/** Joue l'action et renvoie le nouvel état ; `RuleError` (avec la raison) si les règles la refusent. */
-export function applyAction(g0: GameState, a: Action): GameState {
+/**
+ * Joue l'action et renvoie le nouvel état ; `RuleError` (avec la raison) si les règles la refusent.
+ * `ai` : l'action ouvre une décision d'IA, dont on garde le coût dans l'enregistrement de la partie.
+ */
+export function applyAction(g0: GameState, a: Action, ai?: AiThought): GameState {
   const k = kernelFor(g0);
   let events: KernelEvent[];
   try {
@@ -92,6 +98,10 @@ export function applyAction(g0: GameState, a: Action): GameState {
   const g = k.snapshot();
   const log = [...g0.log, ...narrate(g, events)];
   g.log = log.length > LOG_SIZE ? log.slice(log.length - LOG_SIZE) : log;
+  if (g0.record) {
+    const move = { p: currentActor(g0) ?? g0.current, a, t: Date.now(), ...(ai ? { ai } : {}) };
+    g.record = { ...g0.record, moves: [...g0.record.moves, move] };
+  }
   return g;
 }
 

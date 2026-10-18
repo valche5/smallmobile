@@ -1350,36 +1350,11 @@ button {
 
 /* ---------- En ligne ---------- */
 
-.mode-tabs {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin: 14px 0 0;
+.wide-seg {
+  margin: 4px 0 10px;
 }
-.mode-tabs button {
-  border: 2px solid var(--line);
-  background: var(--card);
-  border-radius: 16px;
-  padding: 12px 8px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  font-size: 12.5px;
-  color: var(--muted);
-  text-align: center;
-}
-.mode-tabs button .emo {
-  font-size: 24px;
-}
-.mode-tabs button b {
-  font-size: 16px;
-  color: var(--ink);
-}
-.mode-tabs button.on {
-  border-color: var(--primary);
-  background: #eef3fd;
-  box-shadow: 0 2px 0 var(--primary);
+.wide-seg button {
+  flex: 1;
 }
 .card.highlight {
   border: 2px solid var(--good);
