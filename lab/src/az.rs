@@ -38,6 +38,11 @@ pub struct Config {
     pub depth: usize,
     /// Nombre de fins simulées par position nouvelle (leur moyenne : moins de bruit, plus de calcul).
     pub rollouts: usize,
+    /// Qui joue les fins simulées : 0, l'IA Normal du jeu ; 1, le réseau (d'après sa politique) ;
+    /// 2, le réseau pour le joueur qui cherche, l'IA Normal pour les autres.
+    pub net_rollouts: u8,
+    /// Fins jouées par le réseau : température du tirage des coups (0 : toujours le préféré).
+    pub rollout_temp: f32,
     /// Valeurs des coups ramenées entre 0 et 1 dans chaque nœud (comme MuZero) : les petits écarts
     /// de valeur comptent autant que l'a priori.
     pub normalize: bool,
@@ -56,6 +61,8 @@ impl Default for Config {
             rollout: 0.0,
             depth: 0,
             rollouts: 1,
+            net_rollouts: 0,
+            rollout_temp: 0.0,
             normalize: true,
         }
     }
@@ -79,6 +86,8 @@ impl Config {
                 "norm" => cfg.normalize = v != "0",
                 "depth" => cfg.depth = v.parse().ok()?,
                 "rolls" => cfg.rollouts = v.parse::<usize>().ok()?.max(1),
+                "rp" => cfg.net_rollouts = v.parse().ok()?,
+                "rt" => cfg.rollout_temp = v.parse().ok()?,
                 _ => return None,
             }
         }
@@ -161,13 +170,41 @@ fn dirichlet(rng: &mut Rng, alpha: f32, n: usize) -> Vec<f32> {
     xs.iter().map(|x| (x / sum) as f32).collect()
 }
 
+/// Le coup préféré du réseau (`temp` = 0), ou tiré selon `softmax(logits / temp)`.
+fn pick(legal: &[moves::Choice], logits: &[f32], temp: f32, rng: &mut Rng) -> Move {
+    let best = legal.iter().max_by(|a, b| logits[a.key as usize].total_cmp(&logits[b.key as usize])).expect("des coups");
+    if temp <= 0.0 {
+        return best.mv;
+    }
+    let top = logits[best.key as usize];
+    let weights: Vec<f64> = legal.iter().map(|c| (((logits[c.key as usize] - top) / temp) as f64).exp()).collect();
+    let mut x = rng.unit() * weights.iter().sum::<f64>();
+    for (c, w) in legal.iter().zip(&weights) {
+        if x < *w {
+            return c.mv;
+        }
+        x -= w;
+    }
+    best.mv
+}
+
 impl Az {
     pub fn new(cfg: Config, net: Arc<Net>, label: String) -> Self {
         Az { cfg, tuning: Tuning::default(), net, label }
     }
 
     /// Valeur et a priori d'une position (le nœud n'a pas encore d'arêtes).
-    fn expand(&self, node: &mut Node, w: &Game, k: &Knowledge, legal: &[moves::Choice], rng: &mut Rng) -> Value {
+    /// `me` : le joueur qui cherche.
+    #[allow(clippy::too_many_arguments)]
+    fn expand(
+        &self,
+        node: &mut Node,
+        w: &Game,
+        k: &Knowledge,
+        legal: &[moves::Choice],
+        me: usize,
+        rng: &mut Rng,
+    ) -> Value {
         let eval = self.net.eval(&encode(w, k.race_tail), w.map);
         let top = legal.iter().map(|c| eval.logits[c.key as usize]).fold(f32::NEG_INFINITY, f32::max);
         let exps: Vec<f32> = legal.iter().map(|c| (eval.logits[c.key as usize] - top).exp()).collect();
@@ -192,7 +229,8 @@ impl Az {
         let mut r = [0.0; 2 * MAX_PLAYERS];
         for i in 0..self.cfg.rollouts {
             // la première dans ce monde-ci, les suivantes dans d'autres mondes possibles (pioches, dés)
-            let one = if i == 0 { self.simulate(w, k) } else { self.simulate(&determinize(w, k, rng), k) };
+            let world = if i == 0 { *w } else { determinize(w, k, rng) };
+            let one = if self.cfg.net_rollouts > 0 { self.simulate_net(&world, k, me, rng) } else { self.simulate(&world, k) };
             r.iter_mut().zip(one).for_each(|(a, b)| *a += b / self.cfg.rollouts as f32);
         }
         let mut out = [0.0; 2 * MAX_PLAYERS];
@@ -232,6 +270,52 @@ impl Az {
             }
             let a = ai.decide(&end, Restrictions::default()).expect("l'IA du jeu trouve un coup");
             end.apply(&a, &mut smallmobile_kernel::NoJournal).expect("coup de l'IA du jeu");
+            if end.state.current != current {
+                current = end.state.current;
+                turns += 1;
+            }
+        }
+        self.terminal(&end)
+    }
+
+    /// Comme `simulate`, mais les coups sont ceux que préfère le réseau (tirés selon sa politique si
+    /// `rollout_temp` > 0) : la suite d'un joueur fort plutôt que celle de l'IA Normal. Avec
+    /// `net_rollouts` = 2, seul `me` joue ainsi ; l'IA Normal joue pour les autres.
+    fn simulate_net(&self, w: &Game, k: &Knowledge, me: usize, rng: &mut Rng) -> Value {
+        let mut end = *w;
+        for p in end.state.players.as_mut_slice() {
+            p.level = Level::Normal;
+        }
+        let ai = Ai::new(&self.tuning);
+        let mut kw = *k;
+        let mut turns = 0;
+        let mut current = end.state.current;
+        while end.state.phase != Phase::GameOver {
+            let reached = self.cfg.depth > 0 && turns >= self.cfg.depth;
+            if !reached && self.cfg.net_rollouts == 2 && end.state.actor() != Some(me) {
+                let a = ai.decide(&end, Restrictions::default()).expect("l'IA du jeu trouve un coup");
+                let mut ret = Returns::default();
+                moves::play(&mut end, &Move::Act(a), &mut ret).expect("coup de l'IA du jeu");
+                kw.observe(ret.0, &end.state);
+                if end.state.current != current {
+                    current = end.state.current;
+                    turns += 1;
+                }
+                continue;
+            }
+            let legal = moves::legal(&end);
+            let mv = if legal.len() == 1 && !reached {
+                legal[0].mv
+            } else {
+                let eval = self.net.eval(&encode(&end, kw.race_tail), end.map);
+                if reached {
+                    return self.judge(&end, &eval);
+                }
+                pick(&legal, &eval.logits, self.cfg.rollout_temp, rng)
+            };
+            let mut ret = Returns::default();
+            moves::play(&mut end, &mv, &mut ret).expect("coup de la fin simulée");
+            kw.observe(ret.0, &end.state);
             if end.state.current != current {
                 current = end.state.current;
                 turns += 1;
@@ -282,7 +366,7 @@ impl Az {
             };
         }
         let mut nodes: Vec<Node> = vec![Node::default()];
-        let root_value = self.expand(&mut nodes[0], root, k, &legal, rng);
+        let root_value = self.expand(&mut nodes[0], root, k, &legal, me, rng);
         nodes[0].visits = 1;
         nodes[0].total = root_value;
         if noise > 0.0 {
@@ -310,7 +394,7 @@ impl Az {
                 }
                 let n = &mut nodes[node as usize];
                 if !n.expanded {
-                    break self.expand(n, &w, &kw, &legal, rng);
+                    break self.expand(n, &w, &kw, &legal, me, rng);
                 }
                 let pid = w.state.actor().expect("un joueur doit agir");
                 // les coups de ce monde-ci ; un coup jamais vu reçoit un a priori moyen
@@ -412,6 +496,9 @@ impl Agent for Az {
         let mut depth = if c.depth > 0 { format!(", depth={}", c.depth) } else { String::new() };
         if c.rollouts > 1 {
             depth += &format!(", rolls={}", c.rollouts);
+        }
+        if c.net_rollouts > 0 {
+            depth += &format!(", rp={}, rt={}", c.net_rollouts, c.rollout_temp);
         }
         format!("az({}, n={}, c={}, w={}, roll={}{depth})", self.label, c.iterations, c.c_puct, c.win_weight, c.rollout)
     }

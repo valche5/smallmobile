@@ -337,3 +337,28 @@ Difficile (200 donnes) :
 Un jugement bien moins bruité n'apporte presque rien : la précision de la valeur ne limite plus.
 Détail contre l'IA Difficile : 2 joueurs 75,5 % (attendu 50 %), 3 joueurs 64 %, 4 joueurs 58,5 %,
 5 joueurs 50,8 % (attendu 20 %).
+
+## 2026-10-18 — Des fins simulées jouées par le réseau
+
+Contre l'IA Difficile (gen6, 200 donnes), plus de calcul aide un peu : n=800 +37,5, profondeur 8
++34,5, les deux +35,6 (n=200, profondeur 5 : +30,8).
+
+Le réseau seul, sans recherche (n=1, son coup préféré), fait +27,6 contre l'IA Normal et +16,6
+contre l'IA Difficile : il joue bien mieux que l'IA Normal qui joue les fins simulées.
+`rp=1` : le réseau joue les fins simulées pour tout le monde ; `rp=2` : pour le joueur qui
+cherche seulement, l'IA Normal pour les autres ; `rt` : température du tirage des coups.
+Une évaluation du réseau : 72 µs (une décision de l'IA Normal : ~8 µs).
+
+| fins simulées (n=200, profondeur 5) | 2 j. | 3 j. | 4 j. | 5 j. | écart | durée |
+| --- | --- | --- | --- | --- | --- | --- |
+| IA Normal pour tous | 75,5 % | 64,0 % | 58,5 % | 50,8 % | +30,8 | 6 min |
+| réseau pour tous | 93,0 % | 55,7 % | 48,2 % | 44,8 % | +26,4 | 14 min |
+| réseau pour tous, rt=0,5 | 91,0 % | 66,7 % | 62,7 % | 49,6 % | +34,4 | 13 min |
+| réseau pour tous, profondeur 3 | 90,0 % | 60,7 % | 45,2 % | 54,4 % | +29,6 | 9 min |
+| réseau pour moi, Normal pour les autres | 89,0 % | 71,3 % | 63,2 % | 56,2 % | +37,6 | 6 min |
+| idem, rt=0,5 | 86,0 % | 70,7 % | 72,5 % | 58,2 % | **+40,4** | 6 min |
+
+À deux, jouer soi-même fort dans les fins simulées change tout. À plusieurs, ce qui compte est de
+prévoir les adversaires : l'IA Normal ressemble à l'IA Difficile (mêmes heuristiques), un réseau
+qui simule des adversaires à son image se trompe sur eux. `rp=2` prend le meilleur des deux, pour
+le même temps de calcul.
