@@ -87,13 +87,14 @@ def main():
     ap.add_argument("--q-weight", type=float, default=0.5, help="part des pièces attendues par la recherche")
     ap.add_argument("--lazy", action="store_true", help="lire les données à la demande (plus grosses que la mémoire)")
     ap.add_argument("--policy-temp", type=float, default=1.0, help="cible de politique : visites^(1/T)")
+    ap.add_argument("--seed", type=int, default=0, help="tirage des parties gardées (`@part`) et ordre des lots")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if args.threads:
         torch.set_num_threads(args.threads)
-    recs, keys, value_mask, policy_mask = load(args.data, with_value=True, lazy=args.lazy)
-    rng = np.random.default_rng(0)
+    recs, keys, value_mask, policy_mask = load(args.data, seed=args.seed, with_value=True, lazy=args.lazy)
+    rng = np.random.default_rng(args.seed)
     # validation sur des parties entières, choisies par une règle fixe (`in_validation`) : aucune
     # position d'une partie vue à l'entraînement, ni par cette génération ni par les suivantes
     is_val = in_validation(keys, args.val_share)
