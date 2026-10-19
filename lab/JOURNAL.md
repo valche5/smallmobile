@@ -11,9 +11,10 @@ Le labo peut chercher longtemps ; la version du jeu doit aussi être évaluée a
 réflexion disponible sur mini. Conserver ces deux mesures de force.
 
 **Prochain levier : apprendre politique et valeur sur du jeu fort, après avoir fiabilisé les
-mesures et choisi une référence parmi les Expert.** Une génération identique à gen8 a peu de
-rendement. L'adaptation aux adversaires mérite un essai séparé ; sa réussite ne doit pas
-conditionner le lancement de ce nouvel apprentissage.
+mesures.** L'enseignant est gen8 `rp=1` : en auto-apprentissage, les adversaires sont le réseau.
+Le choix de l'Expert livré (P1) se fait à côté, sans bloquer cet apprentissage. Une génération
+identique à gen8 a peu de rendement. L'adaptation aux adversaires mérite un essai séparé ; sa
+réussite ne doit pas conditionner le lancement de ce nouvel apprentissage.
 
 Règle d'honnêteté : connaître seulement ce qu'un humain attentif peut savoir. Les scores se
 reconstituent à partir des gains annoncés. Le contenu des pioches et l'ordre des cartes rendues
@@ -34,7 +35,9 @@ pour décider. Voir `brain/src/know.rs` et le correctif P0.
   `bun run kernel:build` construit le noyau WebAssembly et cet exécutable.
 - Archives réelles : `data/games/`, graines, actions et temps de décision ; résumé par
   `bun lab/tools/games.ts`. Les quelques parties humaines disponibles ne suffisent pas encore
-  à entraîner un modèle des humains.
+  à entraîner un modèle des humains. Les 4 parties archivées au 19 octobre réunissent 1 ou
+  2 humains et 1 à 3 Expert : l'Expert affronte surtout d'autres Expert, qu'il simule pourtant
+  comme Normal (`rp=2`).
 
 Réglage livré, à garder comme témoin figé :
 
@@ -72,6 +75,12 @@ est le total sur les tailles, sauf mention contraire.
 Les anciens intervalles ne regroupent pas les parties par donne. Les graines 61/62 ont beaucoup
 servi à sélectionner les réglages. P0/P1 doivent confirmer les résultats avec une mesure
 adaptée et des graines inédites.
+
+Ordres de grandeur, tirés des ± des journaux (parties supposées indépendantes) : 400 donnes
+donnent environ ±2,5 points sur le total d'un réglage, donc environ ±3,5 sur la différence de
+deux réglages ; à 2 joueurs, 100 donnes donnent ±6,9 points. Les réglages `w`, `s` et `c` ont
+été choisis sur 200 donnes contre Normal avec d'anciens réseaux, dans le bruit (`w=0.5`/`1` :
++55,4/+53,1, ±2,7 chacun) : ils ne sont pas établis.
 
 ### Recherche et premiers apprentissages
 
@@ -115,6 +124,10 @@ Dans l'autre sens, `rp=2` parmi des `rp=1` fait −7,0. Mais contre Difficile, `
 contre +42,4 pour `rp=2` sur la graine 61. Le classement dépend fortement des adversaires.
 Battre davantage Difficile ne suffit plus à démontrer un progrès général.
 
+Coût : passer le seul joueur testé en `rp=1` allonge la campagne de 40 % (684 s contre 489 s
+pour 1 400 parties sur 64 cœurs). Une décision `rp=1` coûterait donc environ 3,5 fois une
+décision `rp=2` ; estimation indirecte, à mesurer.
+
 ### Progression des réseaux et rendement du calcul
 
 Contre Difficile, `n=200,depth=3,rp=2,w=0.5,c=2.5` :
@@ -143,6 +156,13 @@ pour une seule, au prix d'environ trois fois plus de temps. Quatre fins complèt
 **Cela limite l'intérêt de moyenner davantage ces fins ; cela n'établit pas que la valeur
 serait suffisante face aux Expert.** Moyenner ne corrige pas un modèle adverse inadéquat.
 
+La valeur seule passe mal à l'échelle : `roll=0` gagne 3,4 points de n=200 à n=3 200, seize
+fois plus de calcul, quand `rp=2` fait déjà +35,1 à n=25. L'erreur de pièces de gen8 est la même
+à l'entraînement et en validation (0,031 et 0,030) : le réseau n'apprend pas mieux ses propres
+données. Plus de données n'a pas réduit l'erreur ; le réseau 128×6 et les 20 passes n'ont rien
+apporté en jeu. Une information manquante dans l'encodage est une explication possible
+(diagnostic en P0).
+
 ### Données et modèles à réutiliser
 
 Les dossiers désignent le générateur : `data/gen7` contient les parties de gen7 qui ont servi
@@ -167,6 +187,16 @@ pas une estimation des fins entièrement jouées par le réseau.
 Dans `train.py`, `:policy` exclut la valeur d'une source ; `@0.5` sous-échantillonne les blocs,
 ce n'est pas un poids de perte. `--q-weight` mélange résultat et pièces attendues par la
 recherche, sans modifier la cible de victoire. `--lazy` lit les données à la demande.
+`train.py` n'utilise pas la validation pour choisir un état : nombre de passes fixe, dernier
+état exporté. Le découpage par blocs n'a donc faussé que les chiffres affichés, pas les réseaux.
+Les enregistrements gardent les pièces attendues par la recherche (`qgain`), pas ses chances
+de victoire, ni la graine et les actions de la partie.
+
+Les frontières des parties se retrouvent dans les fichiers existants : les positions d'une
+partie se suivent et partagent la même carte. Sur `gen7/s6acfc7-00.v2.bin`, le triplet
+(joueurs, régions, voisinages) découpe 23 122 positions en 322 segments, tous de cartes
+distinctes, de longueur médiane 49 à 2 joueurs et 91 à 5 joueurs, au plus 117 : des parties
+entières (64 fichiers, environ 20 000 parties).
 
 ## Hypothèses à départager
 
@@ -177,12 +207,17 @@ recherche, sans modifier la cible de victoire. `--lazy` lit les données à la d
 2. **Adaptation adverse.** `brain/src/opponents.rs` contient deux modèles, Normal et le coup
    préféré du réseau, avec mise à jour bayésienne. `search_against` reçoit les croyances,
    mais leur observation n'est pas branchée dans l'arène ou le jeu. `rp=3` via `search` est
-   donc un mélange 50/50 sans adaptation. Aucun gain adaptatif n'est mesuré.
+   donc un mélange 50/50 sans adaptation. Aucun gain adaptatif n'est mesuré. Les types de
+   places (humain, Expert, niveau d'IA) sont publics : simuler chaque place selon son type est
+   honnête et ne demande aucune croyance ; seul le jeu des humains reste à deviner.
 3. **Cibles de politique.** Une recherche à 200 itérations peut bien jouer sans suffisamment
    améliorer la politique qu'elle doit enseigner. Comparer les recettes à coût total comparable.
 4. **Coups absents.** `brain/src/moves.rs` fixe certains placements de pouvoirs et limite les
    plans de redéploiement/défense. La recherche ne peut choisir un plan absent. L'importance
    de cette restriction n'a pas été mesurée.
+5. **Entrées de la valeur.** L'erreur de valeur ne baisse ni avec les données ni avec la taille
+   du réseau, et l'erreur d'entraînement égale celle de validation. Il peut manquer une
+   information dans l'encodage ; de nouvelles cibles n'y changeraient rien.
 
 ## Protocole commun
 
@@ -197,13 +232,22 @@ recherche, sans modifier la cible de victoire. `--lazy` lit les données à la d
   L'ancien score peut être publié séparément ; ne pas mélanger les deux.
 - Rééchantillonner les donnes entières pour les intervalles, séparément par taille, en conservant
   les paires A/B. Les places d'une donne ne sont pas indépendantes.
-- Présélection : 300 à 500 donnes au total par confrontation. Confirmation du candidat retenu :
-  2 000 à 4 000 nouvelles donnes au total, soit 500 à 1 000 par taille. Fixer ce nombre avant
-  le calcul ; ne pas répéter jusqu'à obtenir un résultat favorable.
+- Présélection : 300 à 500 donnes au total par confrontation. Elle ne départage que des écarts
+  d'au moins 4 à 5 points : assez pour les réglages de P1, pas pour les branches de P2, qui
+  passent directement à la taille de confirmation.
+- Confirmation du candidat retenu : nouvelles donnes, en nombre déduit de la variance par donne
+  mesurée en P0 (ordre de grandeur : 2 000 à 4 000 au total, 500 à 1 000 par taille, peut-être
+  davantage). Fixer ce nombre avant le calcul ; ne pas répéter jusqu'à obtenir un résultat
+  favorable. Les campagnes coûtent peu : 1 400 parties entre Expert `rp=2` prennent 8 à 11 min
+  sur c7a.16xlarge, donc 4 000 donnes de 1 h 20 à 2 h, au plus 2 $ de calcul au plafond Spot.
+  Dimensionner pour la précision.
 - Promotion : gain sur le score principal choisi à l'avance, intervalle à 95 % de la différence
-  au-dessus de zéro ; examiner chaque taille et le coût. Tolérance proposée de régression :
-  2 points par taille/étalon. Si l'incertitude ne permet pas d'exclure une régression supérieure,
-  le résultat est **indécis**, pas une preuve d'équivalence.
+  au-dessus de zéro ; examiner chaque taille et le coût. Tolérance de régression : 2 points sur
+  le score global, par étalon. Par taille, l'intervalle d'une différence reste trop large pour
+  exclure 2 points (environ ±3 à ±4,5 à 2 joueurs pour 500 à 1 000 donnes) : une taille ne
+  bloque la promotion que si son recul est significatif. Si l'incertitude ne permet pas
+  d'exclure une régression supérieure à la tolérance, le résultat est **indécis**, pas une
+  preuve d'équivalence.
 - Tests ciblés pour chaque modification, puis vérifications Rust du projet avec timeout.
   Entraînement et campagnes de parties se font sur AWS.
 
@@ -214,63 +258,94 @@ recherche, sans modifier la cible de victoire. `--lazy` lit les données à la d
 **Préalable aux nouveaux résultats.**
 
 1. Échantillonner un monde avant l'expansion initiale dans `brain/src/search.rs`. Actuellement,
-   elle précède `determinize` et sa première fin simulée peut utiliser les vrais dés/pioche
-   dans le labo. `Expert::decide` protège déjà son entrée. Ajouter un test d'indépendance aux
-   dés cachés et vérifier arène/auto-apprentissage. Incidence historique inconnue : remesurer
-   les témoins après correction.
-2. Ajouter un identifiant stable de partie aux données ou à un index associé. Remplacer les
-   blocs arbitraires de 256 positions de `lab/py/data.py`. Réserver une validation stable entre
-   générations ; le checkpoint initial ne doit pas l'avoir déjà apprise. Pour les anciens
-   fichiers, régénérer une validation indépendante plutôt que prétendre retrouver exactement
-   des frontières non enregistrées.
+   elle précède `determinize` et sa première fin simulée utilise les vrais dés/pioche dans le
+   labo : `Az::act` (`lab/src/az.rs`) et l'auto-apprentissage passent la vraie partie.
+   `Expert::decide` protège déjà son entrée : le jeu n'est pas touché. Ampleur : une valeur sur
+   n+1 à la racine (0,5 % à n=200, 2 % à n=50), qui agit sur la valeur des coups jamais essayés,
+   la normalisation et `qgain`. Ajouter un test d'indépendance aux dés cachés et vérifier
+   arène/auto-apprentissage. Pas de campagne de remesure dédiée : les mesures de P1, sur graines
+   inédites, en tiennent lieu.
+2. Ajouter un identifiant stable de partie aux nouvelles données, ou un index associé. Pour les
+   fichiers existants, reconstruire cet index à partir des cartes (voir « Données et modèles à
+   réutiliser ») ; vérifier la méthode sur les fichiers `label` et les anciens fichiers v1.
+   Remplacer les blocs de 256 positions de `lab/py/data.py`. La validation des réseaux issus de
+   gen8 doit venir de parties que gen8 n'a pas vues : réserver des parties de P2 dès leur
+   génération. Indispensable si P2 choisit ses checkpoints sur la validation.
 3. Exporter les résultats par donne/place et calculer les différences selon le protocole.
    Préparer des tables mixtes : l'arène actuelle ne propose qu'un héros contre un champ homogène.
+   Ajouter une option de recherche qui reçoit le modèle de chaque place selon son type (réseau
+   pour un Expert, Normal pour une IA du jeu), mesurée en P1.
+4. Mesurer la variance par donne et la corrélation des paires A/B sur une première arène
+   d'environ 400 donnes inédites, qui peut servir de présélection P1. En déduire les nombres de
+   donnes de la suite.
+5. Diagnostic de la valeur, sans bloquer P2 : erreur de gen8 par manche et par taille sur des
+   positions jugées qu'il n'a pas vues (petit `label` neuf). Si elle reste forte en fin de
+   partie, chercher l'information manquante dans l'encodage (P5) avant d'investir dans de
+   nouvelles cibles de valeur.
 
 **Livrable :** tests ciblés passants, partitions vérifiables, résultats individuels reproductibles,
-témoins remesurés. Toutes les étapes suivantes utilisent ce code corrigé.
+variance par donne mesurée. Toutes les étapes suivantes utilisent ce code corrigé.
 
 ### P1 — Choisir une référence de recherche face aux joueurs forts
 
 **Hypothèse :** le meilleur réglage gen8 dépend du champ adverse et du budget de réflexion.
+P1 choisit l'Expert livré et les réglages des générations suivantes ; il ne bloque pas P2.
 
-- Poids figés gen8 ; comparer `roll=1,rp=2,n=200,depth=3`,
-  `roll=1,rp=1,n=200,depth=3` et `roll=0,n=800`.
-  Fixer `w=0.5,c=2.5,rt=0`, sans bruit à la racine. Ces n sont des points de départ,
-  pas une affirmation d'égalité de coût.
+- Poids figés gen8 ; comparer `roll=1,rp=2,n=200,depth=3`, `roll=1,rp=1,n=200,depth=3`,
+  `roll=0,n=800` et le modèle par type de place (P0). Fixer `w=0.5,c=2.5,rt=0`, sans bruit à la
+  racine ; ajouter `w=1` à la présélection, le critère étant la victoire. Ces n sont des points
+  de départ, pas une affirmation d'égalité de coût.
 - Adversaires figés : Difficile, gen8 `rp=2`, gen8 `rp=1`. Après présélection, ajouter des
-  tables mixtes avec composition et rotation des places consignées. Confronter aussi les
-  candidats retenus entre eux, dans les deux sens à plusieurs joueurs.
+  tables mixtes avec composition et rotation des places consignées. Pour l'Expert livré,
+  privilégier des tables proches de la production : plusieurs Expert, des IA du jeu à la place
+  des humains. Confronter aussi les candidats retenus entre eux, dans les deux sens à plusieurs
+  joueurs.
 - Mesurer les temps sur un court échantillon AWS et régler n pour une seconde comparaison
-  à temps moyen comparable, sur la même machine ; contrôler aussi le p95.
+  à temps moyen comparable, sur la même machine ; contrôler aussi le p95. Si `rp=1` coûte
+  bien 3,5 fois `rp=2`, il prendrait de l'ordre de 0,6 s de médiane sur mini à n=200, contre
+  170 ms aujourd'hui. Étalonner le rapport de vitesse AWS/mini sur quelques décisions.
 - Ensuite seulement, essayer profondeur 5 pour le meilleur hybride. À 4/5 joueurs, profondeur 3
   ne couvre pas une rotation complète : tester cette rotation est un essai distinct, avec surcoût.
 
-**Décision :** figer une référence forte pour l'apprentissage et une référence au temps du jeu.
-Si aucun réglage ne domine, garder plusieurs témoins et publier le compromis. Un gain face à
-Difficile seul ne suffit pas pour changer l'Expert livré.
+**Décision :** figer une référence forte pour les générations suivantes et une référence au
+temps du jeu. Si aucun réglage ne domine, garder plusieurs témoins et publier le compromis. Un
+gain face à Difficile seul ne suffit pas pour changer l'Expert livré.
 
 ### P2 — Faire apprendre politique et valeur sur du jeu fort
 
 **Priorité d'entraînement. Hypothèse :** renouveler les deux cibles permet de dépasser le plateau.
-Dépend de P0/P1, pas de P3.
+Dépend de P0 seulement, ni de P1 ni de P3.
 
-1. Pilote de **5 000 parties**, équilibrées entre tailles, enseignant gen8 figé, `rp=1` ou
-   réglage fort retenu par P1. Garder d'abord 200/50 itérations et 50 % de décisions complètes
-   pour ne pas changer simultanément la qualité des recherches. Enregistrer visites, résultats
-   finaux et identifiants de partie.
-2. Nouvelles cibles de valeur : résultats finaux de ces parties, victoire et pièces.
-   Fixer `q-weight=0` dans toutes les branches pour ce premier essai ; les anciennes cibles
-   `label` restent leurs moyennes Normal. Si ces résultats sont trop bruités, essayer ensuite
-   des fins jugées par un réseau figé ou un mélange avec les estimations de recherche.
-   Garder une composante de résultats observés pour ne pas entretenir les erreurs du réseau.
-3. Depuis le même checkpoint gen8, entraîner les quatre branches suivantes.
+1. Pilote de **5 000 parties**, équilibrées entre tailles, enseignant gen8 figé `rp=1` : en
+   auto-apprentissage, les adversaires sont le réseau, que `rp=2` simulerait en Normal. P1 peut
+   changer ce réglage pour les générations suivantes. Garder d'abord 200/50 itérations et 50 %
+   de décisions complètes pour ne pas changer simultanément la qualité des recherches.
+   Enregistrer visites, résultats finaux, chances de victoire estimées par la recherche pour
+   chaque joueur, identifiant, graine et actions de chaque partie (pour réencoder ou rejuger
+   plus tard). Réserver des parties entières à la validation. Durée estimée : environ 1 h sur
+   64 cœurs (20 000 parties `rp=2` : 66 min ; `rp=1` environ 3,5 fois plus cher), à mesurer.
+2. Nouvelles cibles de valeur, deux sources :
+   - **positions jugées par le réseau** : `lab label` avec un juge dont les fins sont jouées par
+     la politique de gen8 (`rt=0`) au lieu de Normal, sur des positions de jeu fort (pilote ou
+     `label --agent`). Mêmes positions et même moyenne que l'ancienne recette : seul le juge
+     change. C'est le test direct de l'hypothèse 1. Les fins vont jusqu'au bout : aucune erreur
+     de valeur ne s'auto-entretient. Coût à mesurer ; si 32 fins sont trop chères, en garder 8 ;
+   - **résultats finaux du pilote**, victoire et pièces, avec `q-weight=0` : seulement 5 000
+     résultats indépendants, bruités ; en complément, pas comme seule source.
+
+   Les anciennes cibles `label` restent leurs moyennes Normal. Si les deux sources échouent,
+   essayer des fins tronquées jugées par un réseau figé, ou un mélange avec les estimations de
+   recherche, en gardant une composante de résultats observés.
+3. Depuis le même checkpoint gen8, entraîner les quatre branches suivantes. Les nouvelles
+   sources **s'ajoutent** aux anciennes : les remplacer comparerait surtout des volumes de
+   données (le pilote donne environ 370 000 positions, contre des millions d'anciennes).
 
 | Branche | Cible de politique | Cible de valeur |
 | --- | --- | --- |
 | A, témoin réentraîné | Ancienne | Ancienne |
-| B | Nouvelle | Ancienne |
-| C | Ancienne | Nouvelle |
-| D | Nouvelle | Nouvelle |
+| B | Ancienne + nouvelle | Ancienne |
+| C | Ancienne | Ancienne + nouvelle |
+| D | Ancienne + nouvelle | Ancienne + nouvelle |
 
 « Ancienne politique » : sources de gen8 ; « ancienne valeur » : `label1` à `label4`.
 Ajouter si nécessaire `:value` : seul `:policy` existe actuellement. Changer une source ne
@@ -278,11 +353,12 @@ signifie pas geler une tête : le tronc reste partagé. Fixer proportions des pe
 mises à jour, exemples par cible et sélection des checkpoints pour rendre les branches
 comparables. Mesurer aussi gen8 intact pour détecter l'effet du simple réentraînement.
 
-**Mesures :** arène P1 ; calibration de victoire et erreur en pièces sur des parties fortes
-indépendantes, par phase et taille. La victoire reste le critère principal.
+**Mesures :** arène P1, à la taille de confirmation dès le départ : les écarts attendus, de 1 à
+3 points, sont sous le seuil de la présélection. Calibration de victoire et erreur en pièces sur
+des parties fortes indépendantes, par phase et taille. La victoire reste le critère principal.
 
 **Décision :** confirmer la branche gagnante, idéalement avec une seconde graine d'entraînement,
-puis étendre à 20 000 parties. Si le pilote est indécis, examiner variance et apprentissage
+puis étendre à 20 000 parties (environ 4 h en `rp=1`). Si le pilote est indécis, examiner variance et apprentissage
 avant d'étendre. Si B gagne et C/D reculent, travailler les cibles de valeur ; si C/D gagnent,
 renouveler la valeur dans la boucle suivante. Si aucune ne progresse, diagnostiquer via P4/P5
 plutôt que répéter mécaniquement des générations.
@@ -305,8 +381,9 @@ Son efficacité dans SmallMobile reste à mesurer.
 - Le modèle actuel récompense seulement le coup préféré. Plusieurs ordres de conquête peuvent
   se valoir et les coups sont corrélés : quelques accords peuvent produire trop de confiance.
   Calibrer température/plancher de probabilité sur des parties réservées.
-- Pour les bots connus, ajouter un témoin utilisant leur type pour choisir le modèle de
-  simulation. Ne pas supposer qu'un humain joue comme le réseau.
+- Témoin : le modèle par type de place (P0, mesuré en P1). Pour les bots, les croyances doivent
+  faire au moins aussi bien ; leur vrai intérêt concerne les humains. Ne pas supposer qu'un
+  humain joue comme le réseau.
 - Mesurer victoires, coût d'observation, évolution des croyances et prédiction par adversaire.
   Une meilleure prédiction sans gain en jeu ne suffit pas.
 
@@ -345,6 +422,10 @@ d'un jeton, autre région pour un héros/forteresse, autre répartition des camp
 leurs suites, puis la force en arène. Vérifier légalité, clés d'actions et compatibilité des
 formats ; de nouvelles clés nécessitent un apprentissage.
 
+**Entrées du réseau :** si le diagnostic de P0 montre une erreur de valeur forte même en fin de
+partie, compléter l'encodage. Un nouvel encodage rend les anciens tenseurs inutilisables ; les
+graines et actions enregistrées depuis P2 permettent de réencoder.
+
 **Recherche :** si davantage d'itérations aide toujours peu après P2/P4, examiner le regroupement
 en boucle ouverte. Une même suite d'actions peut mener à des marchés ou dés différents ; tester
 sur un petit cas la séparation des observations publiques avant une refonte de l'arbre.
@@ -360,10 +441,10 @@ quelques parties disponibles. Réexaminer si les nouvelles mesures le justifient
 
 ## Les machines AWS
 
-**Aucun calcul lourd sur mini**, qui sert la production. Arène, génération, étiquetage et
-entraînement passent par `lab/tools/cloud.sh`. Une commande par étape, avec timeout estimé
-avant lancement et marge raisonnable ; informer l'utilisateur à chaque étape. Aucun calcul
-AWS sans son accord pour l'instant ; ce plan n'autorise pas une dépense.
+Règles d'usage (aucun calcul lourd sur mini, `lab/tools/cloud.sh`, une commande par étape avec
+délai estimé, utilisateur informé à chaque étape, `cloud.sh status` après chaque calcul) :
+voir `AGENTS.md`. Aucun calcul AWS sans son accord pour l'instant ; ce plan n'autorise pas une
+dépense.
 
 Configuration constatée le 19 octobre 2026, à revérifier avant de dépenser :
 
@@ -379,9 +460,6 @@ Configuration constatée le 19 octobre 2026, à revérifier avant de dépenser :
   automatique. Sauvegarder les résultats utiles dans S3 au fil des étapes.
 - Bucket `s3://smallai-lab-631245464763/data/`, rôle machine `smallai-worker`, politiques dans
   `lab/tools/aws/`. Synchroniser ensuite les résultats sur mini.
-- Ne pas modifier `cloud.sh` sur place pendant qu'il tourne : écrire une copie puis la renommer.
-  Après chaque calcul : `cloud.sh status`, vérifier l'absence de ressources restantes, donner
-  la dépense estimée par le script. La facturation AWS arrive avec retard.
 
 Budget global avant crédits `Credits-Semaine-19-25-Oct-2026-110USD`, compte de gestion
 `051299608012` : **110 $ du 19 octobre 00:00 UTC au 26 octobre 00:00 UTC**, alertes à
@@ -412,7 +490,8 @@ Ne pas lancer toute la feuille de route d'un seul bloc. L'en-tête de `tools/clo
 
 Après chaque expérience, mettre à jour la synthèse et le statut de l'étape concernée. Garder
 dans `lab/runs/` scripts, résultats détaillés et manifeste : hypothèse, code/poids, sources,
-graines, paramètres, budget, résultats par taille, incertitude et décision. Sauvegarder les
-artefacts hors Git sur mini et/ou S3, avec leur emplacement consigné. Ne pas recréer une
+graines, paramètres, budget, résultats par taille, incertitude et décision. `lab/runs/` est
+ignoré par Git : sauvegarder ces fichiers et les autres artefacts sur mini et/ou S3, avec leur
+emplacement consigné. Ne pas recréer une
 chronologie exhaustive ici : conserver ce qui change une décision, les échecs qui évitent
 de refaire un essai et les prochaines actions concrètes.
