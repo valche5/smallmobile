@@ -333,6 +333,13 @@ entières (64 fichiers, environ 20 000 parties).
   `rp=2` prennent 8 à 11 min sur c7a.16xlarge, donc 3 600 donnes de 1 h 15 à 1 h 45, au plus
   2 $ de calcul au plafond Spot. Une arène témoin sert à plusieurs candidats de même graine.
   Dimensionner pour la précision.
+- Arrêt anticipé (`lab arena --stop 3`, depuis le 19 octobre) : pour une question « le candidat
+  gagne-t-il 3 points ou rien ? », l'arène s'arrête dès que le test séquentiel conclut (5 %
+  d'erreur de chaque côté, un regard toutes les 23 donnes par taille). Rejoué sur les 9 arènes
+  de P1 et P2 : 3,5 fois moins de donnes, mêmes conclusions. Le score d'une arène arrêtée est
+  moins précis (C : +7,5 ± 3,8 après 184 donnes, +6,1 ± 1,6 sur 920) et un peu flatté par
+  l'arrêt : jouer l'arène entière quand l'ampleur compte (comparer deux candidats entre eux,
+  tableaux du journal).
 - Promotion : gain sur le score principal choisi à l'avance, intervalle à 95 % de la différence
   au-dessus de zéro ; examiner chaque taille et le coût. Tolérance de régression : 2 points sur
   le score global, par étalon. Par taille, l'intervalle d'une différence reste trop large pour

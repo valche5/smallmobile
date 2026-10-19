@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! lab arena --hero hard --field normal [--players 2,3,4,5] [--deals 100] [--threads N] [--seed 1] [--out r.tsv]
+//!     [--stop 3]   (arrêt dès que le score du joueur testé est clairement 0 ou 3 points : test séquentiel)
 //! lab arena --table 'az:net=poids.bin,rp=4|hard|normal' [--deals 100] [--out r.tsv]   (table fixe)
 //! lab bench --agent random [--players 2] [--games 20]
 //! lab selfplay --agent mcts:n=200 --games 1000 --out lab/data/gen0 [--players 2,3,4,5] [--sample-rounds 2]
@@ -18,7 +19,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use smallmobile_lab::agent::{self, Agent};
-use smallmobile_lab::arena::{self, Config, Lineup, play_game};
+use smallmobile_lab::arena::{self, Config, Lineup, Sequential, play_game};
 use smallmobile_lab::selfplay;
 use smallmobile_lab::table::Table;
 
@@ -43,7 +44,8 @@ fn main() {
 
 fn usage() -> ! {
     eprintln!(
-        "usage : lab arena --hero A --field B [--players 2,3,4,5] [--deals N] [--threads N] [--seed S] [--out F]"
+        "usage : lab arena --hero A --field B [--players 2,3,4,5] [--deals N] [--threads N] [--seed S] [--out F] \
+         [--stop D]"
     );
     eprintln!("        lab arena --table 'A|B|B' [--deals N] [--threads N] [--seed S] [--out F]");
     eprintln!("        lab bench --agent A [--players N] [--games N]");
@@ -92,8 +94,18 @@ fn threads() -> usize {
 /// une table fixe, chaque joueur passant à chaque place (les places d'un même joueur sont comptées
 /// ensemble). `--out` : le résultat de chaque place de chaque partie, pour `lab/py/score.py`.
 fn arena_cmd(opts: &HashMap<String, String>) {
-    let cfg =
-        Config { deals: get(opts, "deals", 100), threads: get(opts, "threads", threads()), seed: get(opts, "seed", 1) };
+    // --stop D : le joueur testé gagne-t-il D points ou rien ? Regard toutes les 23 donnes par taille
+    let stop = opts.get("stop").map(|d| Sequential { role: 0, delta: d.parse().unwrap_or_else(|_| usage()), look: 23 });
+    if stop.is_some() && opts.contains_key("table") {
+        eprintln!("--stop : seulement avec --hero et --field");
+        std::process::exit(2)
+    }
+    let cfg = Config {
+        deals: get(opts, "deals", 100),
+        threads: get(opts, "threads", threads()),
+        seed: get(opts, "seed", 1),
+        stop,
+    };
     let (agents, specs): (Vec<Box<dyn Agent>>, Option<Vec<usize>>) = match opts.get("table") {
         Some(table) => {
             let mut distinct: Vec<&str> = Vec::new();
@@ -127,6 +139,21 @@ fn arena_cmd(opts: &HashMap<String, String>) {
         let others: Vec<&str> = names.iter().enumerate().filter(|&(r, _)| r != role).map(|(_, n)| n.as_str()).collect();
         print!("{}", arena::describe(&arena::report(&run, role), name, &others.join(" + ")));
         println!("temps par décision : {}", arena::describe_times(&run.times[role]));
+    }
+    if let Some(stop) = cfg.stop {
+        let shown = arena::score(&arena::deal_values(&run.results, 0))
+            .map_or(String::new(), |(s, se)| format!(" ; score {s:+.1} ± {:.1} points", 1.96 * se));
+        let delta = stop.delta;
+        match run.verdict {
+            Some(true) => println!(
+                "arrêt après {} donnes sur {} : gain de {delta} points plutôt que 0{shown}",
+                run.deals, cfg.deals
+            ),
+            Some(false) => {
+                println!("arrêt après {} donnes sur {} : 0 plutôt que {delta} points{shown}", run.deals, cfg.deals)
+            }
+            None => println!("test séquentiel sans conclusion après {} donnes{shown}", run.deals),
+        }
     }
     if let Some(path) = opts.get("out") {
         let written =

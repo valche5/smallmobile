@@ -8,6 +8,9 @@
 //! Chaque joueur connaît le type des autres places (`Agent::model`), comme dans le jeu où l'on voit
 //! quelles places sont des IA. Le résultat de chaque place de chaque partie peut être écrit
 //! (`write`) pour `lab/py/score.py`, qui calcule le score et ses intervalles par donne.
+//!
+//! Une arène peut s'arrêter dès que son résultat est clair (`Sequential`) : elle garde alors les
+//! premières donnes, les mêmes que dans l'arène complète.
 
 use std::io::Write;
 use std::sync::Mutex;
@@ -105,6 +108,119 @@ pub struct Config {
     pub deals: usize,
     pub threads: usize,
     pub seed: u64,
+    /// Arrêt dès que le résultat d'un rôle est clair ; sans lui, toutes les donnes.
+    pub stop: Option<Sequential>,
+}
+
+/// Arrêt anticipé : test séquentiel de Wald sur le score d'un rôle (`score`), dans son
+/// approximation normale, comme les bancs d'essai des moteurs d'échecs. H0 « score 0 » contre H1
+/// « score `delta` points », 5 % d'erreur de chaque côté. Le score est regardé toutes les `look`
+/// donnes par table, sur les premières donnes (équilibrées entre les tailles), à partir du
+/// deuxième regard ; sans conclusion, l'arène va jusqu'au bout.
+#[derive(Clone, Copy, Debug)]
+pub struct Sequential {
+    pub role: usize,
+    pub delta: f64,
+    pub look: usize,
+}
+
+/// ln(0,95 / 0,05) : les bornes du rapport de vraisemblance pour 5 % d'erreur de chaque côté.
+const BOUND: f64 = 2.944;
+
+/// Le score d'un rôle en points au-dessus de l'attendu (1/n), tailles à poids égaux, et son
+/// écart-type, d'après la valeur de chaque donne : `(joueurs, écart moyen des places du rôle à 1/n,
+/// en points)`, comme `lab/py/score.py`. `None` si une taille a moins de deux donnes.
+pub fn score(deals: &[(usize, f64)]) -> Option<(f64, f64)> {
+    let mut sizes = [(0usize, 0.0f64, 0.0f64); 6];
+    for &(n, x) in deals {
+        let s = &mut sizes[n];
+        *s = (s.0 + 1, s.1 + x, s.2 + x * x);
+    }
+    let used: Vec<_> = sizes.iter().filter(|s| s.0 > 0).collect();
+    if used.is_empty() || used.iter().any(|s| s.0 < 2) {
+        return None;
+    }
+    let k = used.len() as f64;
+    let (mut score, mut var) = (0.0, 0.0);
+    for &&(count, sum, squares) in &used {
+        let c = count as f64;
+        let mean = sum / c;
+        score += mean / k;
+        var += (squares - c * mean * mean).max(0.0) / (c - 1.0) / c;
+    }
+    Some((score, var.sqrt() / k))
+}
+
+/// La conclusion du test séquentiel pour un score et son écart-type : `Some(true)` si le rôle gagne
+/// `delta` points plutôt que 0, `Some(false)` dans le cas contraire, `None` pour continuer.
+pub fn verdict(score: f64, se: f64, delta: f64) -> Option<bool> {
+    let llr = delta * (score - delta / 2.0) / (se * se);
+    (llr.abs() >= BOUND).then_some(llr > 0.0)
+}
+
+/// La valeur de chaque donne pour un rôle : `(joueurs, écart moyen de ses places à 1/n, en points)`.
+pub fn deal_values(results: &[SeatResult], role: usize) -> Vec<(usize, f64)> {
+    let mut sums: std::collections::BTreeMap<usize, (usize, f64, usize)> = Default::default();
+    for r in results.iter().filter(|r| r.role == role) {
+        let e = sums.entry(r.deal).or_insert((r.players, 0.0, 0));
+        e.1 += 100.0 * (r.win - 1.0 / r.players as f64);
+        e.2 += 1;
+    }
+    sums.into_values().map(|(n, sum, seats)| (n, sum / seats as f64)).collect()
+}
+
+/// Les donnes finies, pour le test séquentiel.
+struct Progress {
+    players: Vec<usize>,
+    /// Parties de chaque donne encore à jouer.
+    left: Vec<usize>,
+    /// Somme des écarts à 1/n des places du rôle (points), et nombre de ces places.
+    value: Vec<f64>,
+    seats: Vec<usize>,
+    /// Les donnes `0..complete` sont finies.
+    complete: usize,
+    /// Prochain regard (nombre de donnes), et écart entre deux regards.
+    look: usize,
+    step: usize,
+    verdict: Option<bool>,
+}
+
+impl Progress {
+    fn new(players: Vec<usize>, step: usize) -> Progress {
+        let deals = players.len();
+        Progress {
+            left: players.clone(),
+            players,
+            value: vec![0.0; deals],
+            seats: vec![0; deals],
+            complete: 0,
+            look: 2 * step,
+            step,
+            verdict: None,
+        }
+    }
+
+    /// Compte une partie de la donne `d` ; si le test conclut, renvoie le nombre de donnes à garder.
+    fn add(&mut self, d: usize, value: f64, seats: usize, delta: f64) -> Option<usize> {
+        self.value[d] += value;
+        self.seats[d] += seats;
+        self.left[d] -= 1;
+        while self.complete < self.left.len() && self.left[self.complete] == 0 {
+            self.complete += 1;
+        }
+        while self.verdict.is_none() && self.look <= self.complete {
+            let deals: Vec<(usize, f64)> = (0..self.look)
+                .filter(|&d| self.seats[d] > 0)
+                .map(|d| (self.players[d], self.value[d] / self.seats[d] as f64))
+                .collect();
+            self.verdict = score(&deals).and_then(|(s, se)| verdict(s, se, delta));
+            if self.verdict.is_some() {
+                return Some(self.look);
+            }
+            self.look += self.step;
+        }
+        None
+    }
 }
 
 /// Une table avant rotation : le joueur de chaque place, et son rôle. Les places d'un même rôle
@@ -146,66 +262,94 @@ pub struct Run {
     pub results: Vec<SeatResult>,
     /// Durée de chaque décision (s), par rôle.
     pub times: Vec<Vec<f32>>,
+    /// Donnes jouées : `cfg.deals`, ou moins si le test séquentiel a conclu (`verdict`).
+    pub deals: usize,
+    pub verdict: Option<bool>,
 }
 
 /// Joue `cfg.deals` donnes ; la donne `d` se joue à la table `lineups[d % lineups.len()]`, une fois
 /// par rotation.
 pub fn run(cfg: &Config, lineups: &[Lineup]) -> Run {
     let roles = lineups.iter().flat_map(|l| l.roles.iter()).max().map_or(0, |r| r + 1);
+    let players: Vec<usize> = (0..cfg.deals).map(|d| lineups[d % lineups.len()].seats.len()).collect();
     let jobs: Vec<(usize, usize)> =
-        (0..cfg.deals).flat_map(|d| (0..lineups[d % lineups.len()].seats.len()).map(move |shift| (d, shift))).collect();
+        players.iter().enumerate().flat_map(|(d, &n)| (0..n).map(move |shift| (d, shift))).collect();
     let next = AtomicUsize::new(0);
-    let all = Mutex::new(Run { results: Vec::new(), times: vec![Vec::new(); roles] });
+    // les donnes à jouer : toutes, ou les premières si le test séquentiel conclut
+    let limit = AtomicUsize::new(cfg.deals);
+    let step = cfg.stop.map_or(1, |s| s.look.max(1) * lineups.len());
+    let progress = Mutex::new(Progress::new(players, step));
     let start = Instant::now();
     let done = AtomicUsize::new(0);
-    std::thread::scope(|scope| {
-        for _ in 0..cfg.threads {
-            scope.spawn(|| {
-                let mut mine = Run { results: Vec::new(), times: vec![Vec::new(); roles] };
-                loop {
-                    let j = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(&(d, shift)) = jobs.get(j) else { break };
-                    let lineup = &lineups[d % lineups.len()];
-                    let n = lineup.seats.len();
-                    // la place `seat` de la table reçoit la place `from(seat)` d'avant la rotation
-                    let from = |seat: usize| (seat + n - shift) % n;
-                    let seats: Vec<&dyn Agent> = (0..n).map(|seat| lineup.seats[from(seat)]).collect();
-                    let deal = mix(cfg.seed, d as u64);
-                    let table = Table::new(n, deal % 1_000_000_007);
-                    let played = play_game(&table, mix(deal, 1) as u32, &seats, mix(deal, 2 + shift as u64));
-                    let o = &played.outcome;
-                    for (seat, times) in played.times.iter().enumerate() {
-                        let role = lineup.roles[from(seat)];
-                        mine.results.push(SeatResult {
-                            deal: d,
-                            players: n,
-                            shift,
-                            seat,
-                            role,
-                            win: o.win[seat],
-                            coins: o.coins[seat],
-                            margin: o.margin(seat),
-                            rank: o.rank[seat],
-                            decisions: times.len(),
-                            seconds: times.iter().map(|&t| t as f64).sum(),
-                        });
-                        mine.times[role].extend(times);
+    // par fil : les résultats, et la durée des décisions de chaque place (donne, rôle, durées)
+    type Part = (Vec<SeatResult>, Vec<(usize, usize, Vec<f32>)>);
+    let parts: Vec<Part> = std::thread::scope(|scope| {
+        let threads: Vec<_> = (0..cfg.threads)
+            .map(|_| {
+                scope.spawn(|| {
+                    let (mut results, mut times) = (Vec::new(), Vec::new());
+                    loop {
+                        let j = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(&(d, shift)) = jobs.get(j) else { break };
+                        if d >= limit.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let lineup = &lineups[d % lineups.len()];
+                        let n = lineup.seats.len();
+                        // la place `seat` de la table reçoit la place `from(seat)` d'avant la rotation
+                        let from = |seat: usize| (seat + n - shift) % n;
+                        let seats: Vec<&dyn Agent> = (0..n).map(|seat| lineup.seats[from(seat)]).collect();
+                        let deal = mix(cfg.seed, d as u64);
+                        let table = Table::new(n, deal % 1_000_000_007);
+                        let played = play_game(&table, mix(deal, 1) as u32, &seats, mix(deal, 2 + shift as u64));
+                        let o = &played.outcome;
+                        let first = results.len();
+                        for (seat, seat_times) in played.times.into_iter().enumerate() {
+                            let role = lineup.roles[from(seat)];
+                            results.push(SeatResult {
+                                deal: d,
+                                players: n,
+                                shift,
+                                seat,
+                                role,
+                                win: o.win[seat],
+                                coins: o.coins[seat],
+                                margin: o.margin(seat),
+                                rank: o.rank[seat],
+                                decisions: seat_times.len(),
+                                seconds: seat_times.iter().map(|&t| t as f64).sum(),
+                            });
+                            times.push((d, role, seat_times));
+                        }
+                        if let Some(stop) = cfg.stop {
+                            let mine = results[first..].iter().filter(|r| r.role == stop.role);
+                            let value = mine.clone().map(|r| 100.0 * (r.win - 1.0 / n as f64)).sum();
+                            if let Some(kept) = progress.lock().unwrap().add(d, value, mine.count(), stop.delta) {
+                                limit.store(kept, Ordering::Relaxed);
+                            }
+                        }
+                        let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
+                        if finished.is_multiple_of(50) || finished == jobs.len() {
+                            eprint!("\r{finished}/{} parties, {:.0} s", jobs.len(), start.elapsed().as_secs_f64());
+                        }
                     }
-                    let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    if finished.is_multiple_of(50) || finished == jobs.len() {
-                        eprint!("\r{finished}/{} parties, {:.0} s", jobs.len(), start.elapsed().as_secs_f64());
-                    }
-                }
-                let mut all = all.lock().unwrap();
-                all.results.extend(mine.results);
-                for (a, b) in all.times.iter_mut().zip(mine.times) {
-                    a.extend(b);
-                }
-            });
-        }
+                    (results, times)
+                })
+            })
+            .collect();
+        threads.into_iter().map(|t| t.join().expect("fil de l'arène")).collect()
     });
     eprintln!();
-    let mut run = all.into_inner().unwrap();
+    let deals = limit.into_inner();
+    let verdict = progress.into_inner().unwrap().verdict;
+    let mut run = Run { results: Vec::new(), times: vec![Vec::new(); roles], deals, verdict };
+    for (results, times) in parts {
+        // les parties commencées après la conclusion ne comptent pas
+        run.results.extend(results.into_iter().filter(|r| r.deal < deals));
+        for (_, role, t) in times.into_iter().filter(|(d, _, _)| *d < deals) {
+            run.times[role].extend(t);
+        }
+    }
     run.results.sort_by_key(|r| (r.deal, r.shift, r.seat));
     run
 }
@@ -265,7 +409,7 @@ pub fn describe_times(times: &[f32]) -> String {
 /// Écrit le résultat de chaque place de chaque partie, pour `lab/py/score.py` : un en-tête commenté
 /// (graine, rôles), puis une ligne par place, séparée par des tabulations.
 pub fn write(out: &mut impl Write, cfg: &Config, roles: &[String], run: &Run) -> std::io::Result<()> {
-    writeln!(out, "# graine {}, {} donnes", cfg.seed, cfg.deals)?;
+    writeln!(out, "# graine {}, {} donnes", cfg.seed, run.deals)?;
     for (r, name) in roles.iter().enumerate() {
         writeln!(out, "# rôle {r} : {name}")?;
     }

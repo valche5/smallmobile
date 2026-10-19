@@ -152,7 +152,7 @@ fn the_arena_puts_every_player_at_every_seat() {
     use smallmobile_lab::agent::KernelAi;
     use smallmobile_lab::arena::{self, Config, Lineup};
     let (easy, normal) = (KernelAi::new(Level::Easy), KernelAi::new(Level::Normal));
-    let cfg = Config { deals: 6, threads: 3, seed: 4 };
+    let cfg = Config { deals: 6, threads: 3, seed: 4, stop: None };
     let lineups: Vec<Lineup> = [2, 3, 4].into_iter().map(|n| Lineup::hero(n, &easy, &normal)).collect();
     let run = arena::run(&cfg, &lineups);
     // donnes à 2, 3, 4, 2, 3, 4 joueurs ; une partie par rotation, une ligne par place
@@ -171,6 +171,36 @@ fn the_arena_puts_every_player_at_every_seat() {
         run.results.iter().map(|r| (r.deal, r.shift, r.seat, r.role, r.coins, r.rank)).collect()
     };
     assert_eq!(key(&arena::run(&cfg, &lineups)), key(&run));
+}
+
+#[test]
+fn the_arena_score_weighs_sizes_equally() {
+    use smallmobile_lab::arena::{score, verdict};
+    // 2 joueurs : 10 et 30 (moyenne 20, variance 200) ; 3 joueurs : 0, 0 et 6 (moyenne 2, variance 12)
+    let (s, se) = score(&[(2, 10.0), (3, 0.0), (2, 30.0), (3, 0.0), (3, 6.0)]).unwrap();
+    assert!((s - 11.0).abs() < 1e-9 && (se - (200.0 / 2.0 + 12.0 / 3.0f64).sqrt() / 2.0).abs() < 1e-9);
+    assert_eq!(score(&[(2, 10.0), (2, 30.0), (3, 0.0)]), None, "une seule donne à 3 joueurs");
+    assert_eq!(verdict(s, se, 3.0), None);
+    assert_eq!(verdict(6.0, 0.8, 3.0), Some(true));
+    assert_eq!(verdict(0.0, 0.8, 3.0), Some(false));
+}
+
+#[test]
+fn a_clear_arena_stops_early_and_keeps_its_first_deals() {
+    use smallmobile_kernel::Level;
+    use smallmobile_lab::agent::KernelAi;
+    use smallmobile_lab::arena::{self, Config, Lineup, Sequential};
+    let (normal, easy) = (KernelAi::new(Level::Normal), KernelAi::new(Level::Easy));
+    let lineups: Vec<Lineup> = [2, 3].into_iter().map(|n| Lineup::hero(n, &normal, &easy)).collect();
+    let stop = Some(Sequential { role: 0, delta: 10.0, look: 2 });
+    let stopped = arena::run(&Config { deals: 60, threads: 4, seed: 9, stop }, &lineups);
+    assert_eq!(stopped.verdict, Some(true), "Normal bat nettement Facile");
+    assert!(stopped.deals < 60 && stopped.deals.is_multiple_of(4), "{} donnes", stopped.deals);
+    let full = arena::run(&Config { deals: 60, threads: 4, seed: 9, stop: None }, &lineups);
+    assert_eq!((full.deals, full.verdict), (60, None));
+    let key = |r: &arena::SeatResult| (r.deal, r.shift, r.seat, r.role, r.coins, r.rank);
+    let first: Vec<_> = full.results.iter().filter(|r| r.deal < stopped.deals).map(key).collect();
+    assert_eq!(stopped.results.iter().map(key).collect::<Vec<_>>(), first, "les mêmes premières donnes, entières");
 }
 
 #[test]
