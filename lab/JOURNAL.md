@@ -460,10 +460,28 @@ aide aussi, surtout à 2 joueurs ; les deux ensemble ne s'additionnent pas ici. 
 validation ne se comparent pas entre branches (ensembles de validation différents ; la valeur
 des résultats de parties, presque binaire, est plus bruitée).
 
-Non séparé : la part des résultats de parties (`p2:value`) et celle des fins du réseau
-(`p2-judged`) dans le gain de C. Prochaines étapes, à décider : séparer ces deux sources et
-confirmer C avec une seconde graine d'entraînement (environ 1 h 30, 1,2 $ : données, quatre
-entraînements, quatre arènes), puis étendre à 20 000 parties.
+**Confirmation faite le 19 octobre** (`lab/runs/p2-confirm.sh`, résultats `lab/runs/p2-confirm`
+sur mini ; 92 min de c7a.16xlarge, 1,19 $). Mêmes réglages ; C1 : résultats des parties seuls
+(`p2:value`, 377 000 positions) ; C2 : fins du réseau seules (`p2-judged`, 221 000) ; C′ : C
+refait avec la graine 1 (`train.py --seed 1` : autres parties anciennes gardées, autre ordre des
+lots). Arènes parmi des A, graine 501, sauf la dernière (graine 502, donnes neuves) :
+
+| Joueur testé | Champ | Score | Par taille (2, 3, 4, 5 j.) |
+| --- | --- | --- | --- |
+| C1, résultats seuls | A | +3,7 ± 1,5 | +4,3, +3,8, +3,9, +2,7 |
+| C2, fins du réseau seules | A | +1,4 ± 1,5 | +0,2, +2,5, +0,2, +2,8 |
+| C′, C graine 1 | A | +4,7 ± 1,5 | +3,6, +3,2, +8,2, +4,0 |
+| C | gen8 | **+5,3 ± 1,6** | +3,5, +6,3, +6,7, +4,8 |
+
+Mêmes donnes : C − C1 +2,4 ± 2,2 ; C − C2 +4,7 ± 2,1 ; C2 − C1 −2,3 ± 2,1 ; C′ − C −1,4 ± 2,1,
+indécis. **Le gain de C se confirme** : deux graines (+6,1 et +4,7), et +5,3 face à gen8 sur des
+donnes neuves. Les résultats des parties en font l'essentiel ; les fins du réseau, faibles seules,
+ajoutent encore quelque chose aux résultats (C bat C1). Recette retenue pour la suite : valeur
+apprise des résultats des parties et des fins du réseau, avec les anciennes sources.
+
+Prochaine étape, à décider : étendre à 20 000 parties avec cette recette (génération et jugement
+environ 4 h sur une machine, 3 $). C est aussi un candidat pour le jeu (+5,3 face à gen8 aux
+réglages livrés) ; il cumulerait avec `rp=4`, non mesuré ensemble.
 
 Juge réseau sur les mêmes 3 968 positions de l'IA Normal qu'en P0 (`lab noise --judge`, même
 graine ; `lab/runs/p2/noise-net.txt` contre `lab/runs/p0/noise-gen8.txt`), avance en pièces,
@@ -646,8 +664,8 @@ ne s'appliquent plus. Dernier relevé du 19 octobre : 8,31 $ consommés sur la p
 123,23 $ de crédits restants estimés, soit 101,69 $ de dépenses supplémentaires dans ce budget
 et 21,54 $ de réserve. Depuis ce relevé, estimations de `cloud.sh` : P0 0,87 $, essais Spot
 0,02 $, P1 1,11 $, pilote P2 0,86 $, entraînement et arènes P2 1,54 $ (dont 0,10 $ perdus sur un
-script non exécutable, et une reprise par AWS à 20 h 30, sans perte grâce à `--save`), soit
-4,40 $. **Montants datés : consulter coûts et crédits du compte de gestion
+script non exécutable, et une reprise par AWS à 20 h 30, sans perte grâce à `--save`),
+confirmation P2 1,19 $, soit 5,59 $. **Montants datés : consulter coûts et crédits du compte de gestion
 avant chaque campagne. Les crédits ne se renouvellent pas chaque semaine.**
 
 Pour chaque étape autorisée : mesurer un petit échantillon sur AWS, estimer durée et coût total
