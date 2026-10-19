@@ -44,7 +44,8 @@ Tout part sur des machines AWS via `lab/tools/cloud.sh` (en-tête du script : mo
   (quota 64 vCPU, à la demande ; le Spot est interdit dans ce projet AWS).
 - Après chaque calcul : `lab/tools/cloud.sh status` (rien ne doit rester) et donner la dépense
   (estimée par le script à la destruction ; AWS l'affiche avec quelques heures de retard).
-- Plafond de dépense du projet : 50 $/mois, compté avant les crédits.
+- Budget : les crédits AWS (160 $ en octobre 2026 ; `cloud.sh status` donne ce qu'il en reste). Le
+  plafond du compte est bien au-dessus (l'ancien plafond de 50 $/mois ne vaut plus).
 - Les données produites sur la machine vont dans le bucket (`aws s3 sync` depuis la machine), puis
   sur mini (`AWS_PROFILE=smallai aws s3 sync s3://smallai-lab-631245464763/data/X lab/data/X`).
 - Ne pas modifier `cloud.sh` sur place pendant qu'un calcul l'utilise (bash relit le fichier) :

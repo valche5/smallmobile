@@ -15,6 +15,7 @@ use crate::encode::encode;
 use crate::know::{Knowledge, Returns, determinize};
 use crate::moves::{self, Key, Move};
 use crate::net::Net;
+use crate::opponents::{Beliefs, Model};
 use crate::outcome::Outcome;
 use crate::rand::Rng;
 
@@ -39,7 +40,9 @@ pub struct Config {
     /// Nombre de fins simulées par position nouvelle (leur moyenne : moins de bruit, plus de calcul).
     pub rollouts: usize,
     /// Qui joue les fins simulées : 0, l'IA Normal du jeu ; 1, le réseau (d'après sa politique) ;
-    /// 2, le réseau pour le joueur qui cherche, l'IA Normal pour les autres.
+    /// 2, le réseau pour le joueur qui cherche, l'IA Normal pour les autres ; 3, le réseau pour le
+    /// joueur qui cherche, et pour chaque adversaire le modèle qui prévoit le mieux ses coups
+    /// (`opponents`, tiré à chaque fin simulée).
     pub net_rollouts: u8,
     /// Fins jouées par le réseau : température du tirage des coups (0 : toujours le préféré).
     pub rollout_temp: f32,
@@ -208,7 +211,7 @@ impl Az {
     }
 
     /// Valeur et a priori d'une position (le nœud n'a pas encore d'arêtes).
-    /// `me` : le joueur qui cherche.
+    /// `me` : le joueur qui cherche ; `beliefs` : ce qu'il sait du jeu des autres.
     #[allow(clippy::too_many_arguments)]
     fn expand(
         &self,
@@ -217,6 +220,7 @@ impl Az {
         k: &Knowledge,
         legal: &[moves::Choice],
         me: usize,
+        beliefs: &Beliefs,
         rng: &mut Rng,
     ) -> Value {
         let eval = self.net.eval(&encode(w, k.race_tail), w.map);
@@ -245,7 +249,7 @@ impl Az {
             // la première dans ce monde-ci, les suivantes dans d'autres mondes possibles (pioches, dés)
             let world = if i == 0 { *w } else { determinize(w, k, rng) };
             let one = if self.cfg.net_rollouts > 0 {
-                self.simulate_net(&world, k, me, rng)
+                self.simulate_net(&world, k, me, beliefs, rng)
             } else {
                 self.simulate(&world, k)
             };
@@ -298,8 +302,15 @@ impl Az {
 
     /// Comme `simulate`, mais les coups sont ceux que préfère le réseau (tirés selon sa politique si
     /// `rollout_temp` > 0) : la suite d'un joueur fort plutôt que celle de l'IA Normal. Avec
-    /// `net_rollouts` = 2, seul `me` joue ainsi ; l'IA Normal joue pour les autres.
-    fn simulate_net(&self, w: &Game, k: &Knowledge, me: usize, rng: &mut Rng) -> Value {
+    /// `net_rollouts` = 2, seul `me` joue ainsi ; l'IA Normal joue pour les autres ; avec 3, chaque
+    /// adversaire joue selon un modèle tiré d'après `beliefs`.
+    fn simulate_net(&self, w: &Game, k: &Knowledge, me: usize, beliefs: &Beliefs, rng: &mut Rng) -> Value {
+        let who: [Model; MAX_PLAYERS] = std::array::from_fn(|q| match self.cfg.net_rollouts {
+            _ if q == me => Model::Net,
+            1 => Model::Net,
+            2 => Model::Normal,
+            _ => beliefs.sample(q, rng),
+        });
         let mut end = *w;
         for p in end.state.players.as_mut_slice() {
             p.level = Level::Normal;
@@ -310,7 +321,8 @@ impl Az {
         let mut current = end.state.current;
         while end.state.phase != Phase::GameOver {
             let reached = self.cfg.depth > 0 && turns >= self.cfg.depth;
-            if !reached && self.cfg.net_rollouts == 2 && end.state.actor() != Some(me) {
+            let actor = end.state.actor().expect("un joueur doit agir");
+            if !reached && who[actor] == Model::Normal {
                 let a = ai.decide(&end, Restrictions::default()).expect("l'IA du jeu trouve un coup");
                 let mut ret = Returns::default();
                 moves::play(&mut end, &Move::Act(a), &mut ret).expect("coup de l'IA du jeu");
@@ -370,8 +382,25 @@ impl Az {
         self.search_with(root, k, rng, self.cfg.iterations, self.cfg.noise)
     }
 
+    /// Une recherche qui tient compte de ce qu'on sait du jeu des adversaires (`net_rollouts` = 3).
+    pub fn search_against(&self, root: &Game, k: &Knowledge, beliefs: &Beliefs, rng: &mut Rng) -> Searched {
+        self.run(root, k, beliefs, rng, self.cfg.iterations, self.cfg.noise)
+    }
+
     /// Une recherche de `iterations` itérations ; `noise` : part du bruit de Dirichlet à la racine.
     pub fn search_with(&self, root: &Game, k: &Knowledge, rng: &mut Rng, iterations: usize, noise: f32) -> Searched {
+        self.run(root, k, &Beliefs::default(), rng, iterations, noise)
+    }
+
+    fn run(
+        &self,
+        root: &Game,
+        k: &Knowledge,
+        beliefs: &Beliefs,
+        rng: &mut Rng,
+        iterations: usize,
+        noise: f32,
+    ) -> Searched {
         let legal = moves::legal(root);
         let me = root.state.actor().expect("un joueur doit agir");
         if legal.len() == 1 {
@@ -384,7 +413,7 @@ impl Az {
             };
         }
         let mut nodes: Vec<Node> = vec![Node::default()];
-        let root_value = self.expand(&mut nodes[0], root, k, &legal, me, rng);
+        let root_value = self.expand(&mut nodes[0], root, k, &legal, me, beliefs, rng);
         nodes[0].visits = 1;
         nodes[0].total = root_value;
         if noise > 0.0 {
@@ -412,7 +441,7 @@ impl Az {
                 }
                 let n = &mut nodes[node as usize];
                 if !n.expanded {
-                    break self.expand(n, &w, &kw, &legal, me, rng);
+                    break self.expand(n, &w, &kw, &legal, me, beliefs, rng);
                 }
                 let pid = w.state.actor().expect("un joueur doit agir");
                 // les coups de ce monde-ci ; un coup jamais vu reçoit un a priori moyen

@@ -583,3 +583,49 @@ Pistes ouvertes, par ordre d'intérêt :
 3. Les parties humaines archivées (`data/games/`) : le temps réel de l'Expert, puis un modèle des
    humains pour les fins simulées.
 4. Encore un tour d'auto-apprentissage : ~1 point, ~10 $ ; seulement avec un autre levier.
+
+## 2026-10-19 — Pourquoi les tours d'auto-apprentissage ne rapportent plus : l'ancrage sur l'IA Normale
+
+Les deux cibles du réseau dépendent de l'IA Normale :
+- la valeur s'apprend sur `label1` à `label4`, positions jugées par des fins de partie jouées par
+  l'IA Normale (`lab/src/label.rs`) : le réseau apprend « comment finit la partie si tout le monde
+  joue comme l'IA Normale » ;
+- la politique s'apprend sur des recherches `rp=2`, où les adversaires des fins simulées sont l'IA
+  Normale : le réseau apprend la meilleure réponse à des adversaires moyens.
+
+Dans AlphaZero, la boucle est récursive : chaque génération apprend contre une version d'elle-même,
+plus forte. Ici, la référence reste l'IA Normale : un plafond, d'où des gains qui fondent (+2,9,
+puis ~+1). Et l'IA Difficile, de la même famille, ne suffit plus à mesurer.
+
+Budget : les crédits AWS (123 $ restants ce soir) ; l'ancien plafond de 50 $/mois ne vaut plus
+(AGENTS.md).
+
+En cours (pas encore mesuré) : `brain/src/opponents.rs` devine comment joue chaque adversaire
+pendant la partie. À chacun de ses choix de peuple et de conquête, deux modèles disent ce qu'ils
+auraient fait (l'IA Normale, le coup préféré du réseau) ; Bayes, avec 20 % de coups imprévisibles,
+en tire un crédit par modèle (`Beliefs`). `rp=3` : dans chaque fin simulée, chaque adversaire joue
+selon un modèle tiré d'après ce crédit (`Az::search_against`). Une partie ne donne que 30 à 60
+choix par adversaire : trop peu pour réentraîner un réseau, assez pour reconnaître un style. Sans
+croyances (`search`), `rp=3` tire 50/50.
+
+## 2026-10-19 — Point d'étape (la suite)
+
+Pas de calcul AWS sans l'accord de l'utilisateur pour l'instant. Pistes, dans l'ordre :
+1. Adaptation, en local : brancher `Beliefs` dans l'arène (chaque joueur `az` observe les coups des
+   autres et cherche avec `search_against`), tests, diagnostic (part des choix bien prévus par
+   modèle et par adversaire).
+2. La mesurer (un calcul, ~1 h, 3 à 4 $) : `rp=3` contre `rp=2` et `rp=1`, contre l'IA Difficile,
+   parmi des Expert `rp=2`, parmi des Expert `rp=1`. Réussite : au niveau du meilleur réglage dans
+   chaque cas.
+3. Si elle gagne, dans le jeu : le serveur garde les croyances de chaque partie et transmet au
+   programme `expert` les coups observés depuis sa dernière décision ; les journaux disent à quoi
+   ressemble chaque joueur.
+4. Des simulations plus rapides (doubler n rapporte ~1,5 point) : d'abord mesurer où part le temps
+   d'une décision (quelques secondes sur mini) ; puis, du moins cher au plus cher : réutiliser
+   l'arbre d'une décision à la suivante (une suite de conquêtes repart de zéro à chaque fois), un
+   cache des évaluations du réseau, un réseau plus rapide (entiers 8 bits, ou petit réseau appris à
+   imiter gen8), plusieurs cœurs pour une décision dans le jeu.
+5. Le plus gros levier : désancrer l'auto-apprentissage. Positions jugées par des fins jouées par
+   le réseau (`lab label` avec des fins `rp=1`), parties contre lui-même avec des adversaires à son
+   image (`rp=1` ou `rp=3`), progrès mesuré parmi des Expert (l'IA Difficile en garde-fou).
+   ~10 à 15 $.
