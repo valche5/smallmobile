@@ -42,7 +42,8 @@ Vous avez au plus un **peuple actif**, et en général un seul peuple **en décl
 
 **Goules en déclin** : si vous avez des Goules en déclin encore présentes, elles jouent d'abord une
 étape complète (conquêtes, redéploiement, `endTurn`) avant votre peuple actif ; votre tour continue
-ensuite avec le peuple actif.
+ensuite avec le peuple actif. Le `endTurn` de cette étape ne prend ni `peace` ni `stout` : ce sont
+des options du peuple actif, à la fin de son étape.
 
 ## 4. Conquérir une région
 
@@ -75,6 +76,11 @@ là, après le décompte. Au tour suivant, vous choisissez un nouveau peuple au 
 
 Vous ne gardez qu'**un seul peuple en déclin** : le précédent disparaît de la carte (sauf pouvoir
 Spirituels). Le bon moment pour décliner : quand votre peuple est trop étalé pour encore conquérir.
+
+**Paix des Diplomates** : à la fin de son tour, un joueur dont le peuple actif a le pouvoir
+Diplomates peut désigner un adversaire dont il n'a pas attaqué le peuple actif pendant ce tour. Au
+prochain tour de cet adversaire, aucun de ses peuples (Goules en déclin comprises) ne peut attaquer
+le peuple actif du Diplomate ; ses peuples en déclin restent attaquables.
 
 ## 6. La carte
 
@@ -163,7 +169,10 @@ Les pièces de chacun sont données : un joueur attentif les reconstitue à part
 L'ordre des pioches et les dés à venir restent cachés.
 
 Dans la carte, chaque ligne donne : `id · nom · terrain · particularités · voisines → occupant`.
-L'occupant s'écrit `J2 Orques ×3` (joueur, peuple, nombre de jetons).
+L'occupant s'écrit `J2 Orques ×3` (joueur, peuple, nombre de jetons). Pour chaque peuple actif (et
+des Goules en déclin), la liste des joueurs donne aussi les jetons qu'il aura en main au début du
+prochain tour de son joueur si la carte ne change pas d'ici là : sa main plus ses jetons sur la
+carte sauf un par région, sans les bonus du tour (Amazones, Squelettes).
 
 ### Les actions
 

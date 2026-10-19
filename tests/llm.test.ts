@@ -3,13 +3,13 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aiAction } from '../src/engine/ai';
-import { RACE_IDS, RACES } from '../src/engine/data';
-import { applyAction } from '../src/engine/game';
+import { PLAYER_COLORS, RACE_IDS, RACES } from '../src/engine/data';
+import { applyAction, createGame } from '../src/engine/game';
 import { currentActor } from '../src/engine/rules';
 import type { Action, GameState } from '../src/engine/types';
 import { FileGameArchive, type ArchivedGame, type GameArchive } from '../src/server/archive';
 import type { Expert, ExpertMove } from '../src/server/expert';
-import { LlmError, LlmGames, llmRoutes, llmRules, type LlmView } from '../src/server/llm';
+import { legalActions, LlmError, LlmGames, llmRoutes, llmRules, type LlmView } from '../src/server/llm';
 
 /** Un Expert de test : l'IA du noyau, qui joue d'un coup toute sa fin de tour (comme l'Expert). */
 class FakeExpert implements Expert {
@@ -180,6 +180,23 @@ describe('parties pour un LLM', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test('à la fin de l’étape des Goules en déclin, ni paix ni déclin des Robustes', () => {
+    let stages = 0;
+    for (let seed = 1; seed <= 60 && stages < 3; seed++) {
+      const players = [0, 1, 2].map((i) => ({ name: `IA ${i}`, color: PLAYER_COLORS[i]!.color, kind: 'ai' as const, ai: 'difficile' as const }));
+      let g = createGame({ players, mapSeed: seed, seed });
+      while (g.phase !== 'gameOver') {
+        if (g.phase === 'redeploy' && g.turn.stage === 'ghouls') {
+          const ends = legalActions(g).filter((l) => l.action.type === 'endTurn');
+          expect(ends.map((l) => l.action)).toEqual([{ type: 'endTurn' }]);
+          stages++;
+        }
+        g = applyAction(g, aiAction(g));
+      }
+    }
+    expect(stages).toBeGreaterThan(0);
   });
 
   test('les routes HTTP et le mode d’emploi', async () => {

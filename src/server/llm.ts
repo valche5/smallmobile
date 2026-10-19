@@ -408,11 +408,16 @@ function describe(entry: LlmGame, events: string[], legal: LlmView['legal'], fin
     if (p.active) {
       const rs = g.races[p.active]!;
       const n = regionsOf(g, p.active).length;
-      parts.push(`actif : ${RACES[p.active].name} + ${POWERS[rs.power].name} (${n} régions, ${tokensOnBoard(g, p.active)} jetons posés, ${rs.hand} en main)`);
+      parts.push(
+        `actif : ${RACES[p.active].name} + ${POWERS[rs.power].name} (${n} régions, ${tokensOnBoard(g, p.active)} jetons posés, ` +
+          `${rs.hand} en main, ${readied(g, p.active)} en main au début de son prochain tour)`,
+      );
     } else parts.push('aucun peuple actif');
     for (const d of p.declined) {
       const rs = g.races[d];
-      parts.push(`en déclin : ${RACES[d].name}${rs ? ` + ${POWERS[rs.power].name}` : ''} (${regionsOf(g, d).length} régions)`);
+      // les Goules en déclin gardent leurs jetons et jouent encore
+      const ghouls = d === 'ghouls' ? `, ${readied(g, d)} jetons en main au début de son prochain tour` : '';
+      parts.push(`en déclin : ${RACES[d].name}${rs ? ` + ${POWERS[rs.power].name}` : ''} (${regionsOf(g, d).length} régions${ghouls})`);
     }
     const level = p.kind === 'ai' ? `IA ${p.ai}` : 'vous';
     out.push(`- J${p.id + 1} ${p.name} (${p.id === me ? 'vous' : level}) : ${parts.join(' ; ')}`);
@@ -479,6 +484,16 @@ function describe(entry: LlmGame, events: string[], legal: LlmView['legal'], fin
   return out.join('\n');
 }
 
+/**
+ * Les jetons d'un peuple en main au début du prochain tour de son joueur, si la carte ne change pas
+ * d'ici là : sa main, plus ses jetons sur la carte sauf un par région (sans les bonus du tour,
+ * Amazones ou Squelettes).
+ */
+function readied(g: GameState, race: RaceId): number {
+  const onBoard = regionsOf(g, race).reduce((s, r) => s + g.regions[r]!.tokens - 1, 0);
+  return (g.races[race]?.hand ?? 0) + onBoard;
+}
+
 /** Les coups permis au joueur qui doit agir : chaque candidat est essayé par le noyau (l'état ne change pas). */
 export function legalActions(g: GameState): LlmView['legal'] {
   const allowed = (a: Action) => {
@@ -534,6 +549,11 @@ export function legalActions(g: GameState): LlmView['legal'] {
         add({ type: 'camp', region: r, delta: -1 }, `retirer un campement de ${name(r)}`);
         add({ type: 'fortress', region: r }, `forteresse sur ${name(r)} (ou la retirer si posée ce tour)`);
         add({ type: 'hero', region: r }, `héros sur ${name(r)} (ou le retirer)`);
+      }
+      if (g.turn.stage === 'ghouls') {
+        // le noyau accepte paix et déclin des Robustes à la fin de l'étape des Goules, sans effet : on ne les propose pas
+        add({ type: 'endTurn' }, "finir l'étape des Goules en déclin (le peuple actif joue ensuite)");
+        break;
       }
       add({ type: 'endTurn' }, 'finir le tour (décompte des pièces)');
       add({ type: 'endTurn', stout: true }, 'finir le tour et passer en déclin juste après le décompte (Robustes)');
