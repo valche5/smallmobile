@@ -483,6 +483,22 @@ Prochaine étape, à décider : étendre à 20 000 parties avec cette recette (g
 environ 4 h sur une machine, 3 $). C est aussi un candidat pour le jeu (+5,3 face à gen8 aux
 réglages livrés) ; il cumulerait avec `rp=4`, non mesuré ensemble.
 
+**Extension lancée le 20 octobre** : 20 000 parties de C (`lab/nets/p2c.bin`) et leurs positions
+rejugées par C (`lab/runs/gen9-data.sh`, `lab/data/gen9` et `gen9-judged`), puis entraînement de
+gen9 (`lab/runs/gen9-train.sh`). L'Expert du jeu reste gen8 en attendant.
+
+**Partie perdue contre la paix des Diplomates** (API LLM, 20 octobre, `gpt-6-astra`, 110 à 65) :
+à 2 joueurs, des Tritons Diplomates ont imposé la paix à l'Expert à chacun des 10 tours, ce que la
+règle officielle permet (elle reste telle quelle). L'Expert le voit : au tour 3, il s'estime à
+3,6 % de chances avec la paix, 67 % sur la même position sans elle. Mais, perdu, il cesse de
+jouer : ses Squelettes, 11 jetons en main, finissent trois tours sans conquérir deux entrées
+libres à 1 jeton. À 200 itérations, tous les coups valent environ 3,6 % ; gen8 donne 41 % d'a
+priori à « finir les conquêtes » (les attaques sur les Tritons, qu'il préfère, sont interdites).
+Sur cette position, à 200 itérations : gen8 et A finissent ; B conquiert de justesse ; **C et D
+conquièrent nettement**, leur valeur jugeant « finir » plus bas d'un point environ. À 2 000
+itérations, gen8 conquiert aussi. Mesurer l'avance par rapport à celle prévue à la racine (comme
+KataGo) ne suffit pas à 200 itérations : essai abandonné. La nouvelle valeur corrige ce défaut.
+
 Juge réseau sur les mêmes 3 968 positions de l'IA Normal qu'en P0 (`lab noise --judge`, même
 graine ; `lab/runs/p2/noise-net.txt` contre `lab/runs/p0/noise-gen8.txt`), avance en pièces,
 juge Normal → juge réseau :
