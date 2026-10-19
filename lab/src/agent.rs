@@ -104,7 +104,7 @@ fn level_named(name: &str) -> Option<Level> {
 }
 
 /// `az:net=chemin,n=400,c=1.5,…`
-fn az_named(name: &str) -> Option<crate::az::Az> {
+pub fn az_named(name: &str) -> Option<crate::az::Az> {
     let opts = name.strip_prefix("az:")?;
     let mut net = None;
     let rest: Vec<&str> = opts

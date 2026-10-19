@@ -14,10 +14,12 @@
 //! u8 × REGIONS × NODE  entrées par région
 //! u8 × GLOBAL  entrées de la partie
 //! f32 × 5  pièces que la recherche attendait encore pour chaque joueur relatif (NaN : inconnu)
+//! f32 × 5  part de victoire que la recherche attendait pour chaque joueur relatif (NaN : inconnu)
 //! ```
 //!
-//! La dernière ligne n'existe que dans les fichiers `*.v2.bin` ; les `*.bin` plus anciens s'arrêtent
-//! avant.
+//! Les fichiers `*.v3.bin` ont tout ; les `*.v2.bin` s'arrêtent avant la dernière ligne, les `*.bin`
+//! avant les deux dernières. À côté de chaque fichier : `games_file` (positions de chaque partie)
+//! et, depuis la version 3, `moves_file` (de quoi rejouer chaque partie, `GameLog`).
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -26,7 +28,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use smallmobile_kernel::ids::MAX_PLAYERS;
-use smallmobile_kernel::{Game, Phase};
+use smallmobile_kernel::wire::{self, Writer};
+use smallmobile_kernel::{Action, Game, Phase};
 
 use crate::az::Searched;
 use crate::encode::{Encoded, GLOBAL, NODE, REGIONS, encode};
@@ -36,7 +39,8 @@ use crate::rand::{Rng, mix};
 use crate::table::{Outcome, Table};
 
 pub const RECORD_V1: usize = 4 + 20 + 20 + KEYS * 2 + REGIONS * 8 + REGIONS * NODE + GLOBAL;
-pub const RECORD: usize = RECORD_V1 + 20;
+pub const RECORD_V2: usize = RECORD_V1 + 20;
+pub const RECORD: usize = RECORD_V2 + 20;
 pub const ILLEGAL: u16 = u16::MAX;
 
 /// Une IA qui cherche, et rend les visites de la racine.
@@ -81,7 +85,8 @@ impl Searcher for crate::mcts::Mcts {
         } else {
             stats.iter().map(|s| (s.0, s.1)).collect()
         };
-        Searched { mv, visits, finals: [f32::NAN; MAX_PLAYERS], details: vec![], value: value as f32 }
+        let unknown = [f32::NAN; MAX_PLAYERS];
+        Searched { mv, visits, finals: unknown, wins: unknown, details: vec![], value: value as f32 }
     }
 }
 
@@ -112,6 +117,7 @@ impl Searcher for crate::agent::KernelAi {
             mv: c.mv,
             visits: vec![(c.key, 1)],
             finals: [f32::NAN; MAX_PLAYERS],
+            wins: [f32::NAN; MAX_PLAYERS],
             details: vec![],
             value: f32::NAN,
         }
@@ -126,6 +132,7 @@ pub struct Record<'a> {
     pub gain: [f32; MAX_PLAYERS],
     pub visits: &'a [u16; KEYS],
     pub qgain: [f32; MAX_PLAYERS],
+    pub qwin: [f32; MAX_PLAYERS],
 }
 
 impl Record<'_> {
@@ -151,7 +158,7 @@ impl Record<'_> {
             buf.extend_from_slice(row);
         }
         buf.extend_from_slice(&self.enc.global);
-        for x in &self.qgain {
+        for x in self.qgain.iter().chain(&self.qwin) {
             buf.extend_from_slice(&x.to_le_bytes());
         }
         debug_assert_eq!(buf.len(), RECORD);
@@ -164,8 +171,9 @@ struct Pending {
     actor: usize,
     coins: [i32; MAX_PLAYERS],
     visits: [u16; KEYS],
-    /// Pièces finales attendues par la recherche (joueurs réels).
+    /// Pièces finales et part de victoire attendues par la recherche (joueurs réels).
     finals: [f32; MAX_PLAYERS],
+    wins: [f32; MAX_PLAYERS],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -178,6 +186,14 @@ pub struct Options {
     pub fast: usize,
 }
 
+/// Une partie jouée : son résultat, le nombre de positions écrites, et les actions du noyau de
+/// chaque coup.
+pub struct Played {
+    pub outcome: Outcome,
+    pub positions: usize,
+    pub moves: Vec<Vec<Action>>,
+}
+
 /// Joue une partie ; écrit un enregistrement par position cherchée (plus d'un coup possible).
 pub fn play(
     table: &Table,
@@ -186,10 +202,11 @@ pub fn play(
     opts: Options,
     rng: &mut Rng,
     out: &mut impl Write,
-) -> std::io::Result<(Outcome, usize)> {
+) -> std::io::Result<Played> {
     let mut g = table.game(seed);
     let mut k = Knowledge::default();
     let mut pending: Vec<Pending> = Vec::new();
+    let mut played = Vec::new();
     while g.state.phase != Phase::GameOver {
         let legal = moves::legal(&g);
         let full = rng.unit() < opts.full_share;
@@ -213,7 +230,14 @@ pub fn play(
             for (q, c) in coins.iter_mut().enumerate().take(g.state.player_count()) {
                 *c = g.state.players[q].coins;
             }
-            pending.push(Pending { enc: encode(&g, k.race_tail), actor, coins, visits, finals: s.finals });
+            pending.push(Pending {
+                enc: encode(&g, k.race_tail),
+                actor,
+                coins,
+                visits,
+                finals: s.finals,
+                wins: s.wins,
+            });
             if g.state.round <= opts.sample_rounds {
                 let total: u32 = s.visits.iter().map(|v| v.1).sum();
                 let mut pick = rng.below(total.max(1) as usize) as u32;
@@ -230,6 +254,7 @@ pub fn play(
                 s.mv
             }
         };
+        played.push(moves::actions(&g, &mv).expect("coup découpé en actions"));
         let mut ret = Returns::default();
         moves::play(&mut g, &mv, &mut ret).expect("coup possible");
         k.observe(ret.0, &g.state);
@@ -239,17 +264,110 @@ pub fn play(
     for p in &pending {
         let mut win = [0.0; MAX_PLAYERS];
         let mut gain = [0.0; MAX_PLAYERS];
-        let mut qgain = [f32::NAN; MAX_PLAYERS];
+        let (mut qgain, mut qwin) = ([f32::NAN; MAX_PLAYERS], [f32::NAN; MAX_PLAYERS]);
         for r in 0..n {
             let q = (p.actor + r) % n;
             win[r] = o.win[q] as f32;
             gain[r] = (o.coins[q] - p.coins[q]) as f32;
             qgain[r] = p.finals[q] - p.coins[q] as f32;
+            qwin[r] = p.wins[q];
         }
-        let rec = Record { enc: &p.enc, map: &table.map, win, gain, visits: &p.visits, qgain };
+        let rec = Record { enc: &p.enc, map: &table.map, win, gain, visits: &p.visits, qgain, qwin };
         out.write_all(&rec.bytes())?;
     }
-    Ok((o, pending.len()))
+    Ok(Played { outcome: o, positions: pending.len(), moves: played })
+}
+
+/// De quoi rejouer une partie : la donne et les actions du noyau de chaque coup. Une ligne par
+/// partie dans `moves_file`, séparée par des tabulations : donne, joueurs, graine de la carte,
+/// graine de la partie, pièces finales (séparées par des virgules), puis les coups séparés par des
+/// espaces ; un coup est une suite d'actions séparées par « / », une action ses mots `wire`
+/// séparés par des virgules.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GameLog {
+    pub deal: u64,
+    pub players: usize,
+    pub map_seed: u64,
+    pub seed: u32,
+    pub coins: Vec<i32>,
+    /// Les mots de chaque action de chaque coup.
+    pub moves: Vec<Vec<Vec<u32>>>,
+}
+
+impl GameLog {
+    pub fn new(deal: u64, map_seed: u64, seed: u32, table: &Table, played: &Played) -> GameLog {
+        let regions = table.map.len();
+        let mut buffer = vec![0u32; 8 + regions];
+        let moves = played
+            .moves
+            .iter()
+            .map(|actions| {
+                actions
+                    .iter()
+                    .map(|a| {
+                        let mut w = Writer::new(&mut buffer);
+                        wire::encode_action(a, regions, &mut w);
+                        w.written().to_vec()
+                    })
+                    .collect()
+            })
+            .collect();
+        let coins = played.outcome.coins[..table.players].to_vec();
+        GameLog { deal, players: table.players, map_seed, seed, coins, moves }
+    }
+
+    pub fn line(&self) -> String {
+        let join = |xs: &[u32]| xs.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+        let coins: Vec<String> = self.coins.iter().map(i32::to_string).collect();
+        let moves: Vec<String> =
+            self.moves.iter().map(|m| m.iter().map(|a| join(a)).collect::<Vec<_>>().join("/")).collect();
+        format!(
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            self.deal,
+            self.players,
+            self.map_seed,
+            self.seed,
+            coins.join(","),
+            moves.join(" ")
+        )
+    }
+
+    pub fn parse(line: &str) -> Option<GameLog> {
+        let mut f = line.split('\t');
+        let (deal, players, map_seed, seed) =
+            (f.next()?.parse().ok()?, f.next()?.parse().ok()?, f.next()?.parse().ok()?, f.next()?.parse().ok()?);
+        let coins = f.next()?.split(',').map(|c| c.parse().ok()).collect::<Option<Vec<i32>>>()?;
+        let words = |a: &str| a.split(',').map(|w| w.parse().ok()).collect::<Option<Vec<u32>>>();
+        let moves = f.next()?.split(' ').map(|m| m.split('/').map(words).collect()).collect::<Option<Vec<_>>>()?;
+        Some(GameLog { deal, players, map_seed, seed, coins, moves })
+    }
+
+    /// La table de la partie.
+    pub fn table(&self) -> Table {
+        Table::new(self.players, self.map_seed)
+    }
+
+    /// Rejoue la partie sur sa table : `visit` voit chaque position avant un coup, avec ce que sait
+    /// le joueur qui agit. Renvoie la partie finie.
+    pub fn replay<'m>(
+        &self,
+        table: &'m Table,
+        mut visit: impl FnMut(&Game<'m>, &Knowledge),
+    ) -> Result<Game<'m>, String> {
+        let mut g = table.game(self.seed);
+        let mut k = Knowledge::default();
+        for mv in &self.moves {
+            visit(&g, &k);
+            let mut ret = Returns::default();
+            for words in mv {
+                let a =
+                    wire::decode_action(words, table.map.len()).map_err(|e| format!("action illisible : {}", e.0))?;
+                g.apply(&a, &mut ret).map_err(|e| format!("action refusée {a:?} : {e:?}"))?;
+            }
+            k.observe(ret.0, &g.state);
+        }
+        Ok(g)
+    }
 }
 
 pub struct Config {
@@ -268,7 +386,15 @@ pub fn games_file(path: &Path) -> std::path::PathBuf {
     name.into()
 }
 
-/// Des parties d'entraînement en parallèle, un fichier par fil dans `dir` (et son `games_file`).
+/// Le fichier qui accompagne un fichier de positions (version 3) : une ligne `GameLog` par partie.
+pub fn moves_file(path: &Path) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".moves");
+    name.into()
+}
+
+/// Des parties d'entraînement en parallèle, un fichier par fil dans `dir` (avec `games_file` et
+/// `moves_file`).
 pub fn run(cfg: &Config, searcher: &dyn Searcher, dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let next = AtomicUsize::new(0);
@@ -279,9 +405,10 @@ pub fn run(cfg: &Config, searcher: &dyn Searcher, dir: &Path) -> std::io::Result
         for t in 0..cfg.threads {
             let (next, positions) = (&next, &positions);
             handles.push(scope.spawn(move || -> std::io::Result<()> {
-                let path = dir.join(format!("s{:x}-{t:02}.v2.bin", cfg.seed));
+                let path = dir.join(format!("s{:x}-{t:02}.v3.bin", cfg.seed));
                 let mut out = BufWriter::new(File::create(&path)?);
                 let mut games = BufWriter::new(File::create(games_file(&path))?);
+                let mut logs = BufWriter::new(File::create(moves_file(&path))?);
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     if i >= cfg.games {
@@ -289,10 +416,13 @@ pub fn run(cfg: &Config, searcher: &dyn Searcher, dir: &Path) -> std::io::Result
                     }
                     let n = cfg.players[i % cfg.players.len()];
                     let deal = mix(cfg.seed, i as u64);
-                    let table = Table::new(n, deal % 1_000_000_007);
+                    let (map_seed, seed) = (deal % 1_000_000_007, mix(deal, 1) as u32);
+                    let table = Table::new(n, map_seed);
                     let mut rng = Rng::new(mix(deal, 99));
-                    let (_, count) = play(&table, mix(deal, 1) as u32, searcher, cfg.opts, &mut rng, &mut out)?;
+                    let played = play(&table, seed, searcher, cfg.opts, &mut rng, &mut out)?;
+                    let count = played.positions;
                     games.write_all(&(count as u32).to_le_bytes())?;
+                    writeln!(logs, "{}", GameLog::new(deal, map_seed, seed, &table, &played).line())?;
                     let total = positions.fetch_add(count, Ordering::Relaxed) + count;
                     let secs = start.elapsed().as_secs_f64();
                     eprintln!(
@@ -303,6 +433,7 @@ pub fn run(cfg: &Config, searcher: &dyn Searcher, dir: &Path) -> std::io::Result
                     );
                 }
                 out.flush()?;
+                logs.flush()?;
                 games.flush()
             }));
         }
@@ -315,7 +446,7 @@ pub fn run(cfg: &Config, searcher: &dyn Searcher, dir: &Path) -> std::io::Result
 
 /// Relit un enregistrement : la position encodée et les voisines de chaque région.
 pub fn read_record(rec: &[u8]) -> (Encoded, Vec<Vec<u8>>) {
-    assert!(rec.len() == RECORD || rec.len() == RECORD_V1);
+    assert!([RECORD_V1, RECORD_V2, RECORD].contains(&rec.len()));
     let players = rec[0] as usize;
     let regions = rec[1] as usize;
     let mut at = 4 + 20 + 20 + KEYS * 2;

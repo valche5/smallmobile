@@ -182,8 +182,16 @@ fn position_files_say_how_many_positions_each_game_has() {
     let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1 };
     let cfg = selfplay::Config { players: vec![2, 3], games: 5, threads: 2, seed: 3, opts };
     selfplay::run(&cfg, &KernelAi::new(Level::Normal), &dir.join("play")).unwrap();
-    let cfg =
-        label::Config { players: vec![2, 5], games: 4, threads: 2, seed: 3, share: 0.1, rollouts: 2, random: 0.1 };
+    let cfg = label::Config {
+        players: vec![2, 5],
+        games: 4,
+        threads: 2,
+        seed: 3,
+        share: 0.1,
+        rollouts: 2,
+        random: 0.1,
+        judge: label::Judge::Normal,
+    };
     label::run(&cfg, None, &dir.join("label")).unwrap();
     for (sub, games) in [("play", 5), ("label", 4)] {
         let (mut total, mut positions) = (0, 0);
@@ -206,6 +214,85 @@ fn position_files_say_how_many_positions_each_game_has() {
         assert_eq!(total, games, "{sub} : une ligne par partie");
         assert!(positions > 0);
     }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn self_play_games_can_be_replayed() {
+    use smallmobile_kernel::Level;
+    use smallmobile_lab::agent::KernelAi;
+    use smallmobile_lab::selfplay::{self, GameLog};
+    use smallmobile_lab::table::Outcome;
+    let dir = std::env::temp_dir().join(format!("smallmobile-replay-{}", std::process::id()));
+    let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1 };
+    let cfg = selfplay::Config { players: vec![2, 4], games: 4, threads: 2, seed: 5, opts };
+    selfplay::run(&cfg, &KernelAi::new(Level::Normal), &dir).unwrap();
+    let mut games = 0;
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "bin") {
+            continue;
+        }
+        let counts: Vec<u32> = std::fs::read(selfplay::games_file(&path))
+            .unwrap()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
+            .collect();
+        let text = std::fs::read_to_string(selfplay::moves_file(&path)).unwrap();
+        let logs: Vec<GameLog> = text.lines().map(|l| GameLog::parse(l).expect("ligne lisible")).collect();
+        assert_eq!(logs.len(), counts.len());
+        for (log, &count) in logs.iter().zip(&counts) {
+            assert_eq!(GameLog::parse(&log.line()).as_ref(), Some(log));
+            let table = log.table();
+            // une position enregistrée par coup où il y avait le choix, et le même résultat
+            let mut choices = 0;
+            let end = log.replay(&table, |g, _| choices += usize::from(moves::legal(g).len() > 1)).unwrap();
+            assert_eq!(choices, count as usize);
+            assert_eq!(&Outcome::of(&end).coins[..log.players], &log.coins[..]);
+            games += 1;
+        }
+    }
+    assert_eq!(games, 4);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn played_games_can_be_judged_again_by_the_network() {
+    use smallmobile_kernel::Level;
+    use smallmobile_lab::agent::{KernelAi, az_named};
+    use smallmobile_lab::label::{self, Judge};
+    use smallmobile_lab::selfplay::{self, GameLog};
+    let dir = std::env::temp_dir().join(format!("smallmobile-judge-{}", std::process::id()));
+    let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1 };
+    let cfg = selfplay::Config { players: vec![3, 5], games: 2, threads: 1, seed: 8, opts };
+    selfplay::run(&cfg, &KernelAi::new(Level::Normal), &dir.join("play")).unwrap();
+    let mut logs = Vec::new();
+    for entry in std::fs::read_dir(dir.join("play")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.to_string_lossy().ends_with(".moves") {
+            logs.extend(std::fs::read_to_string(&path).unwrap().lines().map(|l| GameLog::parse(l).unwrap()));
+        }
+    }
+    let net = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nets/gen8.bin");
+    let judge = Judge::Net(Box::new(az_named(&format!("az:net={}", net.display())).unwrap()));
+    label::rejudge(&logs, 0.1, 2, &judge, 1, 2, &dir.join("judged")).unwrap();
+    let mut positions = 0;
+    for entry in std::fs::read_dir(dir.join("judged")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "bin") {
+            for rec in std::fs::read(&path).unwrap().as_chunks::<{ selfplay::RECORD }>().0 {
+                // la part de victoire de chaque joueur, d'après des fins jouées jusqu'au bout
+                let win: f32 = (0..rec[0] as usize)
+                    .map(|r| f32::from_le_bytes(rec[4 + 4 * r..8 + 4 * r].try_into().unwrap()))
+                    .sum();
+                assert!((win - 1.0).abs() < 1e-4, "parts de victoire : {win}");
+                positions += 1;
+            }
+        }
+    }
+    assert!(positions > 0);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

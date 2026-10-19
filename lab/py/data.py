@@ -24,10 +24,19 @@ FIELDS = (
         ("glob", "u1", GLOBAL),
     ]
 )
-# anciens fichiers (*.bin) : sans les pièces attendues par la recherche
+# anciens fichiers (*.bin) : sans ce qu'attendait la recherche
 RECORD_V1 = np.dtype(FIELDS)
 # fichiers *.v2.bin : pièces encore attendues par la recherche pour chaque joueur relatif (NaN : inconnu)
-RECORD = np.dtype(FIELDS + [("qgain", "<f4", 5)])
+RECORD_V2 = np.dtype(FIELDS + [("qgain", "<f4", 5)])
+# fichiers *.v3.bin : et part de victoire attendue par la recherche (NaN : inconnue)
+RECORD = np.dtype(FIELDS + [("qgain", "<f4", 5), ("qwin", "<f4", 5)])
+
+
+def dtype_of(f):
+    """Le format des enregistrements d'un fichier, d'après son nom."""
+    if f.name.endswith(".v3.bin"):
+        return RECORD
+    return RECORD_V2 if f.name.endswith(".v2.bin") else RECORD_V1
 
 
 # fichier `x.bin.games` à côté de `x.bin` : le nombre de positions de chaque partie, dans l'ordre
@@ -65,13 +74,13 @@ class Records:
 
 
 def fill(dst, src):
-    """Copie des enregistrements (anciens ou nouveaux) dans un tableau `RECORD`."""
+    """Copie des enregistrements (anciens ou nouveaux) dans un tableau `RECORD` ; ce qui manque aux
+    anciens vaut NaN."""
     if src.dtype == RECORD:
         dst[...] = src
-    else:
-        for name in RECORD_V1.names:
-            dst[name] = src[name]
-        dst["qgain"] = np.nan
+        return
+    for name in RECORD.names:
+        dst[name] = src[name] if name in src.dtype.names else np.nan
 
 
 def games(f, dtype, count):
@@ -130,22 +139,24 @@ def in_validation(keys, share):
 
 def load(paths, seed=0, with_value=False, lazy=False):
     """Les enregistrements des fichiers (ou dossiers) donnés. `dossier@0.2` n'en garde que 20 %, par
-    parties entières ; `dossier:policy` ne sert qu'à la politique (sa valeur n'est pas apprise).
+    parties entières ; `dossier:policy` ne sert qu'à la politique (sa valeur n'est pas apprise),
+    `dossier:value` qu'à la valeur.
 
     Renvoie les enregistrements, la clé de la partie de chacun (`map_keys`, pour séparer la
-    validation) et, si `with_value`, si sa valeur s'apprend. `lazy` : les enregistrements restent
-    dans les fichiers (`Records`), lus à chaque lot."""
+    validation) et, si `with_value`, si sa valeur puis sa politique s'apprennent. `lazy` : les
+    enregistrements restent dans les fichiers (`Records`), lus à chaque lot."""
     rng = np.random.default_rng(seed)
     # premier passage : quels enregistrements garder (sans tout lire), pour tout écrire d'un coup
     # dans un seul tableau (pas de copie : les données peuvent occuper la moitié de la mémoire)
     plan = []
     for spec in paths:
         spec, _, tag = str(spec).partition(":")
+        assert tag in ("", "policy", "value"), f"{spec}:{tag} : :policy ou :value"
         path, _, share = spec.partition("@")
         share = float(share) if share else 1.0
         p = Path(path)
         for f in sorted(p.rglob("*.bin")) if p.is_dir() else [p]:
-            dtype = RECORD if f.name.endswith(".v2.bin") else RECORD_V1
+            dtype = dtype_of(f)
             count = f.stat().st_size // dtype.itemsize
             counts = games(f, dtype, count)
             starts = np.cumsum(counts) - counts
@@ -156,17 +167,20 @@ def load(paths, seed=0, with_value=False, lazy=False):
             if share < 1.0:
                 mask = np.repeat(rng.random(len(counts)) < share, counts)
                 ids = ids[mask]
-            plan.append((f, dtype, count, mask, ids, tag != "policy"))
+            plan.append((f, dtype, count, mask, ids, tag))
     total = sum(len(ids) for *_, ids, _ in plan)
     keys = np.concatenate([ids for *_, ids, _ in plan]) if plan else np.zeros(0, np.uint64)
-    values = np.concatenate([np.full(len(ids), v) for *_, ids, v in plan]) if plan else np.zeros(0, bool)
+    learns = lambda skip: (
+        np.concatenate([np.full(len(ids), tag != skip) for *_, ids, tag in plan]) if plan else np.zeros(0, bool)
+    )
+    values, policies = learns("policy"), learns("value")
     if lazy:
         sources = [
             (f, dtype, count, np.arange(count) if mask is None else np.flatnonzero(mask))
             for f, dtype, count, mask, _, _ in plan
         ]
         recs = Records(sources)
-        return (recs, keys, values) if with_value else (recs, keys)
+        return (recs, keys, values, policies) if with_value else (recs, keys)
     recs = np.empty(total, dtype=RECORD)
     at = 0
     for f, dtype, count, mask, ids, _ in plan:
@@ -176,4 +190,4 @@ def load(paths, seed=0, with_value=False, lazy=False):
         fill(recs[at : at + len(ids)], src)
         at += len(ids)
         del src
-    return (recs, keys, values) if with_value else (recs, keys)
+    return (recs, keys, values, policies) if with_value else (recs, keys)

@@ -99,9 +99,12 @@ impl Config {
     }
 }
 
-/// Par joueur : la valeur (0 à 1), puis les pièces finales attendues (`COINS + joueur`).
-type Value = [f32; 2 * MAX_PLAYERS];
+/// Par joueur : la valeur (0 à 1), les pièces finales attendues (`COINS + joueur`), puis la part de
+/// victoire attendue seule (`WINS + joueur`), sans l'avance en pièces que mêle la valeur.
+type Value = [f32; VALUE];
+const VALUE: usize = 3 * MAX_PLAYERS;
 const COINS: usize = MAX_PLAYERS;
+const WINS: usize = 2 * MAX_PLAYERS;
 type PerPlayer = [f32; MAX_PLAYERS];
 const NO_CHILD: u32 = u32::MAX;
 
@@ -127,6 +130,8 @@ pub struct Searched {
     pub visits: Vec<(Key, u32)>,
     /// Pièces finales attendues de chaque joueur (réel) selon la recherche ; NaN si inconnues.
     pub finals: [f32; MAX_PLAYERS],
+    /// Part de victoire attendue de chaque joueur (réel) selon la recherche ; NaN si inconnue.
+    pub wins: [f32; MAX_PLAYERS],
     /// Pour chaque coup de la racine : a priori du réseau et valeur moyenne pour le joueur qui agit.
     pub details: Vec<(Key, f32, f32)>,
     /// Valeur de la racine pour le joueur qui agit.
@@ -231,13 +236,7 @@ impl Az {
         node.edges = legal
             .iter()
             .zip(&exps)
-            .map(|(c, &e)| Edge {
-                key: c.key,
-                prior: e / sum,
-                child: NO_CHILD,
-                visits: 0,
-                total: [0.0; 2 * MAX_PLAYERS],
-            })
+            .map(|(c, &e)| Edge { key: c.key, prior: e / sum, child: NO_CHILD, visits: 0, total: [0.0; VALUE] })
             .collect();
         node.expanded = true;
         let v = self.judge(w, &eval);
@@ -245,7 +244,7 @@ impl Az {
         if lambda <= 0.0 {
             return v;
         }
-        let mut r = [0.0; 2 * MAX_PLAYERS];
+        let mut r = [0.0; VALUE];
         for i in 0..self.cfg.rollouts {
             // la première dans ce monde-ci, les suivantes dans d'autres mondes possibles (pioches, dés)
             let world = if i == 0 { *w } else { determinize(w, k, rng) };
@@ -256,7 +255,7 @@ impl Az {
             };
             r.iter_mut().zip(one).for_each(|(a, b)| *a += b / self.cfg.rollouts as f32);
         }
-        let mut out = [0.0; 2 * MAX_PLAYERS];
+        let mut out = [0.0; VALUE];
         for (o, (a, b)) in out.iter_mut().zip(v.iter().zip(r)) {
             *o = (1.0 - lambda) * a + lambda * b;
         }
@@ -355,6 +354,27 @@ impl Az {
         self.terminal(&end)
     }
 
+    /// Joue la partie jusqu'au bout, le réseau choisissant pour tous (son coup préféré, ou tiré selon
+    /// sa politique si `rollout_temp` > 0) : les fins de partie du juge de `lab label`. `w` est un
+    /// monde possible (`determinize`).
+    pub fn play_out<'m>(&self, w: &Game<'m>, k: &Knowledge, rng: &mut Rng) -> Game<'m> {
+        let mut end = *w;
+        let mut kw = *k;
+        while end.state.phase != Phase::GameOver {
+            let legal = moves::legal(&end);
+            let mv = if legal.len() == 1 {
+                legal[0].mv
+            } else {
+                let eval = self.net.eval(&encode(&end, kw.race_tail), end.map);
+                pick(&legal, &eval.logits, self.cfg.rollout_temp, rng)
+            };
+            let mut ret = Returns::default();
+            moves::play(&mut end, &mv, &mut ret).expect("coup de la fin de partie");
+            kw.observe(ret.0, &end.state);
+        }
+        end
+    }
+
     /// La valeur d'une partie finie.
     fn terminal(&self, g: &Game) -> Value {
         let o = Outcome::of(g);
@@ -369,9 +389,10 @@ impl Az {
     /// La valeur de chaque joueur : victoire et avance en pièces (finales ou prévues) mêlées.
     fn blend(&self, win: &PerPlayer, finals: &PerPlayer, n: usize) -> Value {
         let w = self.cfg.win_weight;
-        let mut v = [0.0; 2 * MAX_PLAYERS];
+        let mut v = [0.0; VALUE];
         for q in 0..n {
             v[COINS + q] = finals[q];
+            v[WINS + q] = win[q];
             let rival = (0..n).filter(|&o| o != q).map(|o| finals[o]).fold(f32::NEG_INFINITY, f32::max);
             let lead = 1.0 / (1.0 + (-(finals[q] - rival) / self.cfg.scale).exp());
             v[q] = w * win[q] + (1.0 - w) * lead;
@@ -409,6 +430,7 @@ impl Az {
                 mv: legal[0].mv,
                 visits: vec![(legal[0].key, 1)],
                 finals: [f32::NAN; MAX_PLAYERS],
+                wins: [f32::NAN; MAX_PLAYERS],
                 details: vec![],
                 value: f32::NAN,
             };
@@ -454,13 +476,7 @@ impl Az {
                         Some(ei) => ei,
                         None => {
                             let prior = 1.0 / legal.len() as f32;
-                            n.edges.push(Edge {
-                                key: c.key,
-                                prior,
-                                child: NO_CHILD,
-                                visits: 0,
-                                total: [0.0; 2 * MAX_PLAYERS],
-                            });
+                            n.edges.push(Edge { key: c.key, prior, child: NO_CHILD, visits: 0, total: [0.0; VALUE] });
                             n.edges.len() - 1
                         }
                     };
@@ -532,10 +548,10 @@ impl Az {
         let details = root_node.edges.iter().map(|e| (e.key, e.prior, e.total[me] / e.visits.max(1) as f32)).collect();
         let best = root_node.edges.iter().max_by_key(|e| (e.visits, (e.prior * 1e6) as u64)).expect("des coups").key;
         let mv = legal.iter().find(|c| c.key == best).expect("coup de la racine").mv;
-        let mut finals = [0.0; MAX_PLAYERS];
-        for (q, f) in finals.iter_mut().enumerate() {
-            *f = root_node.total[COINS + q] / root_node.visits as f32;
-        }
-        Searched { mv, visits, finals, details, value: root_node.total[me] / root_node.visits as f32 }
+        let average = |at: usize| -> [f32; MAX_PLAYERS] {
+            std::array::from_fn(|q| root_node.total[at + q] / root_node.visits as f32)
+        };
+        let (finals, wins) = (average(COINS), average(WINS));
+        Searched { mv, visits, finals, wins, details, value: root_node.total[me] / root_node.visits as f32 }
     }
 }

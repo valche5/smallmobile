@@ -7,7 +7,10 @@
 //! lab selfplay --agent mcts:n=200 --games 1000 --out lab/data/gen0 [--players 2,3,4,5] [--sample-rounds 2]
 //! lab check-net --net poids.bin --data parties.bin [--count 5]   (comparaison avec lab/py/check.py)
 //! lab label --games 20000 --out lab/data/label1 [--share 0.1] [--rollouts 32] [--random 0.1] [--agent az:net=poids.bin,n=50]
-//! lab noise --net poids.bin [--positions 2000] [--rollouts 32]   (bruit des cibles, erreur du réseau)
+//!     [--judge az:net=poids.bin]   (fins de partie jouées par le réseau plutôt que par l'IA Normal)
+//! lab judge --games lab/data/p2 --out lab/data/p2-judged [--share 0.1] [--rollouts 32] [--judge az:net=poids.bin]
+//!     (positions de parties déjà jouées, fichiers .moves de lab selfplay)
+//! lab noise --net poids.bin [--positions 2000] [--rollouts 32] [--judge az:…]   (bruit des cibles, erreur du réseau)
 //! lab analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par lab/tools/export-room.ts)
 //! ```
 
@@ -32,6 +35,7 @@ fn main() {
         "agree" => agree_cmd(&opts),
         "trace" => trace_cmd(&opts),
         "label" => label_cmd(&opts),
+        "judge" => judge_cmd(&opts),
         "noise" => noise_cmd(&opts),
         _ => usage(),
     }
@@ -192,7 +196,13 @@ fn check_net_cmd(opts: &HashMap<String, String>) {
     let start = Instant::now();
     let mut evals = 0;
     let path = opts.get("data").unwrap();
-    let size = if path.ends_with(".v2.bin") { selfplay::RECORD } else { selfplay::RECORD_V1 };
+    let size = if path.ends_with(".v3.bin") {
+        selfplay::RECORD
+    } else if path.ends_with(".v2.bin") {
+        selfplay::RECORD_V2
+    } else {
+        selfplay::RECORD_V1
+    };
     for rec in data.chunks_exact(size).take(count) {
         let (e, adj) = selfplay::read_record(rec);
         let ev = net.eval_with(&e, |i| &adj[i]);
@@ -320,6 +330,7 @@ fn label_cmd(opts: &HashMap<String, String>) {
         share: get(opts, "share", 0.1),
         rollouts: get(opts, "rollouts", 32),
         random: get(opts, "random", 0.1),
+        judge: judge_option(opts),
     };
     let out = opts.get("out").unwrap_or_else(|| usage());
     let player = opts.contains_key("agent").then(|| agent(opts, "agent"));
@@ -329,6 +340,59 @@ fn label_cmd(opts: &HashMap<String, String>) {
         std::process::exit(1)
     }
     println!("{} parties en {:.0} s", cfg.games, start.elapsed().as_secs_f64());
+}
+
+/// `--judge az:…` : les fins de partie qui jugent sont jouées par ce réseau ; l'IA Normal sinon.
+fn judge_option(opts: &HashMap<String, String>) -> smallmobile_lab::label::Judge {
+    use smallmobile_lab::label::Judge;
+    match opts.get("judge") {
+        None => Judge::Normal,
+        Some(name) => Judge::Net(Box::new(agent::az_named(name).unwrap_or_else(|| {
+            eprintln!("juge inconnu : {name} (az:net=poids.bin,…)");
+            std::process::exit(2)
+        }))),
+    }
+}
+
+/// Juge à nouveau les positions de parties déjà jouées : les fichiers `.moves` de `--games`.
+fn judge_cmd(opts: &HashMap<String, String>) {
+    use smallmobile_lab::selfplay::GameLog;
+    fn moves_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{} : {e}", dir.display())) {
+            let path = entry.expect("dossier lisible").path();
+            if path.is_dir() {
+                moves_files(&path, out);
+            } else if path.to_string_lossy().ends_with(".moves") {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    moves_files(std::path::Path::new(opts.get("games").unwrap_or_else(|| usage())), &mut files);
+    files.sort();
+    let mut logs = Vec::new();
+    for path in &files {
+        let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{} : {e}", path.display()));
+        logs.extend(
+            text.lines().map(|l| GameLog::parse(l).unwrap_or_else(|| panic!("ligne illisible : {}", path.display()))),
+        );
+    }
+    let out = opts.get("out").unwrap_or_else(|| usage());
+    let start = Instant::now();
+    let judged = smallmobile_lab::label::rejudge(
+        &logs,
+        get(opts, "share", 0.1),
+        get(opts, "rollouts", 32),
+        &judge_option(opts),
+        get(opts, "seed", 1),
+        get(opts, "threads", threads()),
+        std::path::Path::new(out),
+    );
+    if let Err(e) = judged {
+        eprintln!("échec : {e}");
+        std::process::exit(1)
+    }
+    println!("{} parties ({} fichiers) rejugées en {:.0} s", logs.len(), files.len(), start.elapsed().as_secs_f64());
 }
 
 /// Bruit des positions jugées et erreur du réseau : chaque position (parties de l'IA Normal, 10 % de
@@ -349,6 +413,7 @@ fn noise_cmd(opts: &HashMap<String, String>) {
     let rollouts: usize = get(opts, "rollouts", 32);
     let threads: usize = get(opts, "threads", threads());
     let seed: u64 = get(opts, "seed", 9);
+    let by = judge_option(opts);
     /// Une position : joueurs, manches restantes, puis pour l'avance du joueur qui agit sur son
     /// meilleur rival : jugement A, jugement B, réseau.
     struct Sample {
@@ -360,7 +425,7 @@ fn noise_cmd(opts: &HashMap<String, String>) {
     let samples = std::sync::Mutex::new(Vec::<Sample>::new());
     std::thread::scope(|scope| {
         for t in 0..threads {
-            let (net, samples) = (&net, &samples);
+            let (net, samples, by) = (&net, &samples, &by);
             scope.spawn(move || {
                 let normal = KernelAi::new(Level::Normal);
                 let mut rng = Rng::new(mix(seed, t as u64));
@@ -374,8 +439,8 @@ fn noise_cmd(opts: &HashMap<String, String>) {
                     while g.state.phase != Phase::GameOver && local.len() < positions / threads {
                         let legal = moves::legal(&g);
                         if legal.len() > 1 && rng.unit() < 0.05 {
-                            let (_, fa) = judge(&g, &k, rollouts, &mut rng);
-                            let (_, fb) = judge(&g, &k, rollouts, &mut rng);
+                            let (_, fa) = judge(&g, &k, rollouts, by, &mut rng);
+                            let (_, fb) = judge(&g, &k, rollouts, by, &mut rng);
                             let s = &g.state;
                             let n = s.player_count();
                             let me = s.actor().expect("un joueur doit agir");

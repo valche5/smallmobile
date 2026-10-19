@@ -185,20 +185,24 @@ cmd_up() {
   fi
   user_data > "$STATE/user-data.sh"
   # La zone la moins chère d'abord, la suivante si elle n'a plus de machines de ce type.
-  local zone p subnet
+  local zone p subnet attempt
   while read -r zone p subnet; do
     say "lancement d'une $TYPE dans $zone ($p \$/h, disque $DISK Go, au plus $MAX_HOURS h)"
-    if id=$(aws ec2 run-instances --image-id "$ami" --instance-type "$TYPE" --count 1 \
-      --subnet-id "$subnet" --key-name $KEYNAME --security-group-ids "$(sg_id)" \
-      --iam-instance-profile Name=$PROFILE_NAME --instance-initiated-shutdown-behavior terminate \
-      --metadata-options HttpTokens=required "${market[@]}" \
-      --block-device-mappings "[{\"DeviceName\":\"$rootdev\",\"Ebs\":{\"VolumeSize\":$DISK,\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]" \
-      --user-data "file://$STATE/user-data.sh" \
-      --tag-specifications "ResourceType=instance,Tags=[{Key=Project,Value=smallai},{Key=Name,Value=smallai-$TYPE}]" \
-      "ResourceType=volume,Tags=[{Key=Project,Value=smallai}]" \
-      --query 'Instances[0].InstanceId' --output text 2> "$STATE/run-error" < /dev/null); then
-      break
-    fi
+    # Une machine détruite il y a peu compte encore quelques instants dans le quota Spot.
+    for attempt in 1 2 3 4 5; do
+      id=$(aws ec2 run-instances --image-id "$ami" --instance-type "$TYPE" --count 1 \
+        --subnet-id "$subnet" --key-name $KEYNAME --security-group-ids "$(sg_id)" \
+        --iam-instance-profile Name=$PROFILE_NAME --instance-initiated-shutdown-behavior terminate \
+        --metadata-options HttpTokens=required "${market[@]}" \
+        --block-device-mappings "[{\"DeviceName\":\"$rootdev\",\"Ebs\":{\"VolumeSize\":$DISK,\"VolumeType\":\"gp3\",\"DeleteOnTermination\":true}}]" \
+        --user-data "file://$STATE/user-data.sh" \
+        --tag-specifications "ResourceType=instance,Tags=[{Key=Project,Value=smallai},{Key=Name,Value=smallai-$TYPE}]" \
+        "ResourceType=volume,Tags=[{Key=Project,Value=smallai}]" \
+        --query 'Instances[0].InstanceId' --output text 2> "$STATE/run-error" < /dev/null) && break 2
+      grep -q MaxSpotInstanceCountExceeded "$STATE/run-error" && [ "$attempt" -lt 5 ] || break
+      say "quota Spot encore occupé : nouvel essai dans 60 s"
+      sleep 60
+    done
     grep -q -E 'InsufficientInstanceCapacity|Unsupported' "$STATE/run-error" || die "$(cat "$STATE/run-error")"
     say "pas de place dans $zone, zone suivante"
     id=""
