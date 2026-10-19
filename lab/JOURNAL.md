@@ -509,3 +509,77 @@ Pistes ouvertes, par ordre d'intérêt :
    jugées (`lab label --agent` avec gen8) si elle redevient le facteur limitant.
 3. Mettre cette IA dans le jeu : mesurer le temps d'une décision (n=200, `rp=2`, profondeur 3) sur
    un téléphone, chercher une version allégée.
+
+## 2026-10-19 — gen8 sur 4 000 donnes : ~1 point de mieux que gen7
+
+3 000 donnes de plus (graine 62), les mêmes pour gen7 et gen8 (`lab/runs/gen8-d.sh`), ajoutées aux
+1 000 de la graine 61 :
+
+| réseau | graine 61 | graine 62 | 4 000 donnes |
+| --- | --- | --- | --- |
+| gen7 | +40,9 | +39,6 | +39,9 |
+| gen8 | +42,4 | +40,4 | **+40,9** ± 0,8 |
+
+Face à face sur 1 200 donnes dans chaque sens : gen8 contre des gen7 +1,6, gen7 contre des gen8
+−1,4. gen8 est meilleur d'environ 1 point : les tours d'auto-apprentissage ne rapportent presque
+plus (+2,9 puis ~+1). Coût : 71 min, 4,2 $.
+
+## 2026-10-19 — L'IA Expert dans le jeu
+
+`brain/` : la recherche guidée par le réseau, partagée par le labo et le jeu (`know`, `moves`,
+`encode`, `net`, `search` viennent du labo, qui les réexporte et joue à l'identique). Le noyau suit
+le fond public des pioches dans l'état (`race_tail`, `power_tail`, ce que suivait `Knowledge`).
+Dans le jeu, l'Expert (gen8, n=200, profondeur 3, `rp=2`) est un programme natif à côté du serveur
+(`brain/src/bin/expert.rs`) ; toutes les parties se jouent sur le serveur, qui les archive
+(`data/games/`, graines, actions, temps de chaque décision ; `bun lab/tools/games.ts`).
+
+Sur mini (i5-8500T, un cœur, natif) : 80 à 250 ms par décision, médiane ~170 ms. Premières
+parties humaines : un duel perdu 55 à 126, une partie à 4 contre trois Expert perdue de 7 pièces.
+
+Moins de recherche (gen8 contre l'IA Difficile, 1 000 donnes, graine 61 ; `gen8-n.sh`) :
+
+| recherche | écart | calcul |
+| --- | --- | --- |
+| n=200, `rp=2` (le jeu) | +42,4 | 1 |
+| n=100, `rp=2` | +41,6 | ½ |
+| n=50, `rp=2` | +37,6 | ¼ |
+| n=25, `rp=2` | +35,1 | ⅛ |
+| n=200, IA Normale pour tous | +37,1 | ½ |
+
+n=100 vaut presque n=200 ; à calcul égal, `rp=2` reste devant. Coût : 12 min, 0,75 $.
+
+## 2026-10-19 — Le modèle des adversaires : l'IA Difficile ne suffit plus comme étalon
+
+Qui joue les adversaires dans les fins simulées ? Mesuré cette fois **parmi des Expert du jeu**
+(gen8, n=200, profondeur 3, `rp=2`), 400 donnes, graine 71 (`gen8-rp.sh`, `gen8-rp2.sh`) :
+
+| recherche du joueur testé | 2 j. | 3 j. | 4 j. | 5 j. | écart |
+| --- | --- | --- | --- | --- | --- |
+| `rp=2` (témoin) | 49,0 % | 33,3 % | 27,6 % | 16,9 % | −0,5 |
+| `rp=1` (le réseau pour tous) | 65,0 % | 51,0 % | 37,4 % | 32,2 % | **+13,8** ± 2,6 |
+| `rp=1, rt=0,5` | 64,0 % | 51,5 % | 41,9 % | 27,7 % | +13,5 |
+
+Dans l'autre sens, `rp=2` parmi des `rp=1` : −7,0. Mais contre l'IA Difficile (graine 61), `rp=1`
+ne fait que +34,6 (`rp=2` : +42,4). Le meilleur modèle d'un adversaire est de le simuler comme ce
+qu'il est : l'IA Normale prévoit très bien l'IA Difficile (mêmes heuristiques), mal un joueur fort.
+Le +42 contre l'IA Difficile surestimait donc `rp=2` en général. Coût : 32 + 35 min, 4,0 $.
+
+AlphaZero pur, sans fin simulée (`roll=0`, le réseau seul juge les positions nouvelles), contre
+l'IA Difficile (graine 61 ; `gen8-roll0.sh`) : n=200 +33,2, n=800 +35,5, n=3 200 +36,6. Le
+jugement du réseau limite encore ; mais comme `rp=1`, `roll=0` simule les adversaires « à son
+image » et n'a pas été mesuré parmi des Expert. Coût : 29 min, 1,8 $.
+
+## 2026-10-19 — Point d'étape (l'Expert dans le jeu)
+
+L'Expert du jeu : gen8, n=200, profondeur 3, `rp=2` ; +40,9 contre l'IA Difficile (4 000 donnes).
+Dépense du mois sur AWS : ~38 $ (plafond 50 $).
+
+Pistes ouvertes, par ordre d'intérêt :
+1. Simuler chaque adversaire selon sa nature : l'IA Normale pour les places d'IA du jeu, le réseau
+   pour les Expert et les humains (aujourd'hui `rp` vaut pour toute la table). Puis mesurer parmi
+   des Expert et contre l'IA Difficile, et passer l'Expert du jeu à ce réglage.
+2. Mesurer désormais les réglages aussi parmi des Expert, pas seulement contre l'IA Difficile (dont
+   `roll=0` à n=800, `rp=1` à profondeur 5).
+3. Les parties humaines archivées (`data/games/`) : le temps réel de l'Expert, puis un modèle des
+   humains pour les fins simulées.
+4. Encore un tour d'auto-apprentissage : ~1 point, ~10 $ ; seulement avec un autre levier.
