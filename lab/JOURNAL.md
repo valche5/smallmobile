@@ -129,9 +129,51 @@ Dans l'autre sens, `rp=2` parmi des `rp=1` fait −7,0. Mais contre Difficile, `
 contre +42,4 pour `rp=2` sur la graine 61. Le classement dépend fortement des adversaires.
 Battre davantage Difficile ne suffit plus à démontrer un progrès général.
 
-Coût : passer le seul joueur testé en `rp=1` allonge la campagne de 40 % (684 s contre 489 s
-pour 1 400 parties sur 64 cœurs). Une décision `rp=1` coûterait donc environ 3,5 fois une
-décision `rp=2` ; estimation indirecte, à mesurer.
+Coût mesuré le 19 octobre (ci-dessous) : une décision `rp=1` prend 2,4 fois une décision `rp=2`.
+
+### Mesures du 19 octobre : graines inédites, code corrigé (P0)
+
+Graines 201 à 203, jamais utilisées ; recherche honnête à la racine ; scores du protocole
+(`lab/py/score.py`, tailles à poids égaux, intervalles à 95 % par donne). Résultats par place :
+`lab/runs/p0/*.tsv` sur mini ; script `lab/runs/p0-variance.sh`. 57 min de c7a.16xlarge, 0,87 $.
+
+Parmi des Expert livrés (`rp=2`), 400 donnes, 100 par taille, graine 201 :
+
+| Joueur testé | Score | Différence avec le témoin | Temps moyen / p95 |
+| --- | --- | --- | --- |
+| `rp=2`, témoin | −0,5 ± 2,1 | — | 132 / 219 ms |
+| `rp=1` | +11,7 ± 2,4 | **+12,1 ± 3,0** | 320 / 561 ms |
+| `roll=0,n=800` | +0,7 ± 2,3 | +1,2 ± 3,1, indécis | 109 / 158 ms |
+| `w=1` | −0,8 ± 2,2 | −0,4 ± 3,0, indécis | 133 / 218 ms |
+
+`rp=1` confirme son avance sur des graines neuves, à toutes les tailles (+15,0, +15,2, +11,6,
++6,8). `w` ne change rien de mesurable : garder 0,5. Temps sur une machine pleine (64 parties
+à la fois) : à comparer entre eux, pas à la latence de mini.
+
+Tables mixtes proches de la production, 400 donnes, chaque joueur à chaque place :
+
+| Table | `rp=4` | `rp=2` | `rp=1` | Difficile |
+| --- | --- | --- | --- | --- |
+| 3 joueurs, graine 202 | +30,8 ± 2,6 | −9,0 ± 2,4 | — | −21,8 ± 1,8 |
+| 4 joueurs, graine 203 | +17,4 ± 2,4 | −4,0 ± 1,9 | +1,7 ± 2,1 | −15,0 ± 1,4 |
+
+Différences à la même table : `rp=4` − `rp=2` +39,9 ± 4,6 (3 j.) et +21,4 ± 3,7 (4 j.) ;
+`rp=4` − `rp=1` +15,7 ± 3,8 ; `rp=1` − `rp=2` +5,7 ± 3,2. Simuler chaque adversaire selon son
+type gagne nettement : `rp=2` se trompe sur les Expert, `rp=1` sur Difficile. Parmi des Expert
+seulement, `rp=4` joue comme `rp=1`. Coût de `rp=4` : 202 ms (3 j.) et 296 ms (4 j.) par
+décision, selon le nombre d'Expert à simuler par le réseau.
+
+Variance : l'écart-type par donne du score d'un joueur va de 16 à 28 points selon la taille,
+le plus fort à 2 joueurs. Entre deux arènes de même graine, la corrélation par donne est
+presque nulle (−0,13 à 0,26) : l'appariement ne gagne presque rien, et une même arène témoin
+peut servir à plusieurs candidats. Pour la différence de deux réglages : environ 100 donnes par
+taille pour ±3 points, 230 pour ±2, 900 pour ±1. À la même table, deux candidats se disputent
+la victoire (corrélation −0,3 à −0,7) : la comparaison y est moins précise par donne.
+
+Valeur de gen8 (`lab noise`, 3 968 positions de l'IA Normal, avance en pièces) : erreur 6,2
+(gen6 : 6,9) ; dernière manche 2,4 (bruit 0,13) ; 1 à 2 manches restantes 3,6 ; 3 à 5 : 6,6 ;
+6 ou plus : 7,3 (gen6 : 8,6). gen8 a progressé en début de partie ; le plancher de fin de partie
+n'a pas bougé.
 
 ### Progression des réseaux et rendement du calcul
 
@@ -237,14 +279,14 @@ entières (64 fichiers, environ 20 000 parties).
   L'ancien score peut être publié séparément ; ne pas mélanger les deux.
 - Rééchantillonner les donnes entières pour les intervalles, séparément par taille, en conservant
   les paires A/B. Les places d'une donne ne sont pas indépendantes.
-- Présélection : 300 à 500 donnes au total par confrontation. Elle ne départage que des écarts
-  d'au moins 4 à 5 points : assez pour les réglages de P1, pas pour les branches de P2, qui
+- Présélection : 400 donnes au total par confrontation, soit ±3 points sur une différence
+  (mesuré le 19 octobre) : assez pour les réglages de P1, pas pour les branches de P2, qui
   passent directement à la taille de confirmation.
-- Confirmation du candidat retenu : nouvelles donnes, en nombre déduit de la variance par donne
-  mesurée en P0 (ordre de grandeur : 2 000 à 4 000 au total, 500 à 1 000 par taille, peut-être
-  davantage). Fixer ce nombre avant le calcul ; ne pas répéter jusqu'à obtenir un résultat
-  favorable. Les campagnes coûtent peu : 1 400 parties entre Expert `rp=2` prennent 8 à 11 min
-  sur c7a.16xlarge, donc 4 000 donnes de 1 h 20 à 2 h, au plus 2 $ de calcul au plafond Spot.
+- Confirmation du candidat retenu : nouvelles donnes, 230 par taille pour ±2 points sur une
+  différence, 900 pour ±1 (variance mesurée). Fixer ce nombre avant le calcul ; ne pas répéter
+  jusqu'à obtenir un résultat favorable. Les campagnes coûtent peu : 400 donnes parmi des Expert
+  `rp=2` prennent 8 à 11 min sur c7a.16xlarge, donc 3 600 donnes de 1 h 15 à 1 h 45, au plus
+  2 $ de calcul au plafond Spot. Une arène témoin sert à plusieurs candidats de même graine.
   Dimensionner pour la précision.
 - Promotion : gain sur le score principal choisi à l'avance, intervalle à 95 % de la différence
   au-dessus de zéro ; examiner chaque taille et le coût. Tolérance de régression : 2 points sur
@@ -282,11 +324,9 @@ entières (64 fichiers, environ 20 000 parties).
    juger que les parties de validation des données neuves (P2).
 3. **Fait.** `lab arena --out`, `--table`, `rp=4` (modèle par type de place, transmis par
    l'arène) et `lab/py/score.py` ; temps moyen et p95 par décision pour chaque rôle.
-4. **À lancer :** `lab/runs/p0-variance.sh` sur AWS (graines 201 à 203, inédites). Il mesure la
-   variance par donne et la corrélation des paires, et sert de présélection P1 : `rp=2` contre
-   lui-même, `rp=1`, `roll=0,n=800`, `w=1` parmi des Expert livrés ; tables mixtes avec `rp=4`.
-   En déduire les nombres de donnes de la suite.
-5. Diagnostic de la valeur, sans bloquer P2. Déjà mesuré pour gen6 (`lab noise`, positions de
+4. **Fait le 19 octobre** (`lab/runs/p0-variance.sh`, graines 201 à 203) : variance par donne,
+   corrélation des paires et présélection P1. Résultats : « Mesures du 19 octobre ».
+5. **Fait pour gen8 le 19 octobre** (« Mesures du 19 octobre »). Déjà mesuré pour gen6 (`lab noise`, positions de
    l'IA Normal jugées deux fois par 32 fins, avance du joueur qui agit, en pièces) :
 
    | Positions | Dispersion des cibles | Bruit d'un jugement | Erreur du réseau |
@@ -296,17 +336,23 @@ entières (64 fichiers, environ 20 000 parties).
    | 6 manches ou plus restantes | 14,2 | 2,4 | 8,6 |
 
    L'erreur se concentre en début de partie, où la cible dépend d'un long avenir. En fin de
-   partie, presque déterministe, il reste 2,3 pièces d'erreur : piste pour l'encodage (P5).
-   À refaire pour gen8 (`lab noise`, dans le même calcul AWS que le point 4).
+   partie, presque déterministe, il reste 2,3 pièces d'erreur (2,4 pour gen8) : piste pour
+   l'encodage (P5).
 
 **Livrable :** tests ciblés passants, partitions vérifiables, résultats individuels reproductibles,
-variance par donne mesurée. Toutes les étapes suivantes utilisent ce code corrigé. Restent les
-points 4 et 5 et l'index des anciennes données, qui demandent AWS.
+variance par donne mesurée. Toutes les étapes suivantes utilisent ce code corrigé. Reste l'index
+des anciennes données (lecture complète, au premier calcul AWS qui les télécharge).
 
 ### P1 — Choisir une référence de recherche face aux joueurs forts
 
 **Hypothèse :** le meilleur réglage gen8 dépend du champ adverse et du budget de réflexion.
 P1 choisit l'Expert livré et les réglages des générations suivantes ; il ne bloque pas P2.
+
+**Présélection faite le 19 octobre** (« Mesures du 19 octobre ») : `rp=4` l'emporte nettement
+sur les tables mixtes et vaut `rp=1` parmi des Expert ; `roll=0,n=800` et `w=1` sont indécis
+et sortent de la liste. Restent : comparer `rp=4` à temps égal (n réduit contre `rp=2`, n=200),
+le confirmer sur graines neuves, puis l'intégrer au jeu, ce qui demande d'envoyer à `expert` le
+type de chaque place (un humain : modèle inconnu, mélange égal).
 
 - Poids figés gen8 ; comparer `roll=1,rp=2,n=200,depth=3`, `roll=1,rp=1,n=200,depth=3`,
   `roll=0,n=800` et le modèle par type de place (P0). Fixer `w=0.5,c=2.5,rt=0`, sans bruit à la
@@ -318,9 +364,10 @@ P1 choisit l'Expert livré et les réglages des générations suivantes ; il ne 
   des humains. Confronter aussi les candidats retenus entre eux, dans les deux sens à plusieurs
   joueurs.
 - Mesurer les temps sur un court échantillon AWS et régler n pour une seconde comparaison
-  à temps moyen comparable, sur la même machine ; contrôler aussi le p95. Si `rp=1` coûte
-  bien 3,5 fois `rp=2`, il prendrait de l'ordre de 0,6 s de médiane sur mini à n=200, contre
-  170 ms aujourd'hui. Étalonner le rapport de vitesse AWS/mini sur quelques décisions.
+  à temps moyen comparable, sur la même machine ; contrôler aussi le p95. `rp=1` coûte 2,4 fois
+  `rp=2`, et `rp=4` 1,5 à 2,2 fois selon la table : à n=200, de l'ordre de 0,3 à 0,4 s de
+  médiane sur mini, contre 170 ms aujourd'hui. Étalonner le rapport de vitesse AWS/mini sur
+  quelques décisions.
 - Ensuite seulement, essayer profondeur 5 pour le meilleur hybride. À 4/5 joueurs, profondeur 3
   ne couvre pas une rotation complète : tester cette rotation est un essai distinct, avec surcoût.
 
@@ -339,8 +386,8 @@ Dépend de P0 seulement, ni de P1 ni de P3.
    de décisions complètes pour ne pas changer simultanément la qualité des recherches.
    Enregistrer visites, résultats finaux, chances de victoire estimées par la recherche pour
    chaque joueur, identifiant, graine et actions de chaque partie (pour réencoder ou rejuger
-   plus tard). Réserver des parties entières à la validation. Durée estimée : environ 1 h sur
-   64 cœurs (20 000 parties `rp=2` : 66 min ; `rp=1` environ 3,5 fois plus cher), à mesurer.
+   plus tard). Réserver des parties entières à la validation. Durée estimée : environ 40 min sur
+   64 cœurs (20 000 parties `rp=2` : 66 min ; `rp=1` 2,4 fois plus cher), à mesurer.
 2. Nouvelles cibles de valeur, deux sources :
    - **positions jugées par le réseau** : `lab label` avec un juge dont les fins sont jouées par
      la politique de gen8 (`rt=0`) au lieu de Normal, sur des positions de jeu fort (pilote ou
@@ -375,7 +422,7 @@ comparables. Mesurer aussi gen8 intact pour détecter l'effet du simple réentra
 des parties fortes indépendantes, par phase et taille. La victoire reste le critère principal.
 
 **Décision :** confirmer la branche gagnante, idéalement avec une seconde graine d'entraînement,
-puis étendre à 20 000 parties (environ 4 h en `rp=1`). Si le pilote est indécis, examiner variance et apprentissage
+puis étendre à 20 000 parties (environ 2 h 40 en `rp=1`). Si le pilote est indécis, examiner variance et apprentissage
 avant d'étendre. Si B gagne et C/D reculent, travailler les cibles de valeur ; si C/D gagnent,
 renouveler la valeur dans la boucle suivante. Si aucune ne progresse, diagnostiquer via P4/P5
 plutôt que répéter mécaniquement des générations.
@@ -474,7 +521,16 @@ Configuration constatée le 19 octobre 2026, à revérifier avant de dépenser :
   les anciennes générations à environ 10 $ utilisaient le tarif à la demande.
 - Maximum 12 h par machine, extinction après 20 min sans calcul, destruction à l'extinction
   avec suppression du disque. Spot ponctuel, interruption avec destruction, aucun remplacement
-  automatique. Sauvegarder les résultats utiles dans S3 au fil des étapes.
+  automatique.
+- Interruptions, relevé du 19 octobre : AWS classe `c7a.16xlarge` à Stockholm dans la tranche
+  « 5 à 10 % » (part des machines reprises sur le mois écoulé ; `c7a.8xlarge` : plus de 20 %).
+  Les prix Spot ont doublé en un mois (0,35 → 0,77 à 0,89 $/h selon la zone) ; eu-north-1c a
+  dépassé le plafond de 1 $/h du 13 au 16 octobre (1,064 $ au plus haut). `cloud.sh up` prend la
+  zone la moins chère sous le plafond. Pour un calcul long, `job --save lab/X,...` garde ces
+  dossiers dans le bucket (`s3://…/X`) : repris au lancement, copiés toutes les 10 min, à
+  l'annonce d'une reprise (2 min avant) et à la fin. Découper le calcul en morceaux déplacés
+  dans le dossier gardé une fois complets, et sauter ceux déjà présents : un calcul relancé
+  reprend alors où il en était.
 - Bucket `s3://smallai-lab-631245464763/data/`, rôle machine `smallai-worker`, politiques dans
   `lab/tools/aws/`. Synchroniser ensuite les résultats sur mini.
 

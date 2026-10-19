@@ -1,13 +1,14 @@
 #!/bin/bash
 # Machines de calcul AWS (EC2, eu-north-1), pilotées depuis mini qui ne calcule pas.
 #
-#   lab/tools/cloud.sh job [--type T] [--disk GO] [--data D1,D2] [--get CHEMIN,...] -- 'commande'
+#   lab/tools/cloud.sh job [--type T] [--disk GO] [--data D1,D2] [--save CHEMIN,...] [--get CHEMIN,...] -- 'commande'
 #       tout d'un coup : up, data, run, get, down (la machine est détruite même en cas d'erreur)
 #
 #   lab/tools/cloud.sh up [--type T] [--disk GO]   lance une machine, installe, compile le labo
 #   lab/tools/cloud.sh push                        renvoie le code et les poids, recompile
 #   lab/tools/cloud.sh data D1 D2...               copie lab/data/Di depuis le bucket (gratuit)
 #   lab/tools/cloud.sh run 'commande'              calcul depuis la racine du dépôt ; attend la fin
+#                                                  (SAVE=CHEMIN,... : comme --save)
 #   lab/tools/cloud.sh wait                        se rattache au calcul en cours
 #   lab/tools/cloud.sh get CHEMIN...               rapatrie des fichiers ou dossiers vers mini
 #   lab/tools/cloud.sh ssh [commande]              shell sur la machine
@@ -21,8 +22,17 @@
 # est détruite, son disque avec. Pas d'adresse IP fixe : l'adresse publique part avec la machine.
 # Hors de la machine (alarmes AWS, `guard`) : destruction si le processeur reste sous 1 % pendant
 # IDLE_MIN minutes, ou si elle ne répond plus aux vérifications d'AWS pendant 10 min.
+#
+# Spot : AWS peut reprendre la machine (plus de place, ou prix au-dessus du plafond ; annonce 2 min
+# avant). Elle est alors détruite, sans remplacement : `up` choisit la zone la moins chère, `wait`
+# s'arrête si la machine disparaît. `--save` garde des dossiers dans le bucket (`lab/X` →
+# `s3://…/X`) : repris du bucket avant le calcul, copiés toutes les SAVE_MIN minutes, dès l'annonce
+# d'une reprise et à la fin ; `get` les prend dans le bucket si la machine a disparu. Pour qu'un
+# calcul relancé reparte de là : écrire chaque morceau ailleurs, le déplacer dans le dossier gardé
+# une fois complet, et sauter les morceaux déjà présents.
+#
 # Réglages (variables d'environnement) : TYPE, DISK, MAX_HOURS, IDLE_MIN, MAX_PRICE ($/h), SPOT=1
-# (Spot uniquement, plafond de 1 $/h et durée maximale de 12 h).
+# (Spot uniquement, plafond de 1 $/h et durée maximale de 12 h), SAVE, SAVE_MIN (10 min).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -36,6 +46,8 @@ IDLE_MIN=${IDLE_MIN:-20}
 MAX_PRICE=${MAX_PRICE:-1}
 SPOT=${SPOT:-1}
 SPOT_MAX=1.00
+SAVE=${SAVE:-}
+SAVE_MIN=${SAVE_MIN:-10}
 KEY=$HOME/.ssh/smallai_ed25519
 KEYNAME=smallai
 SG_NAME=smallai-ssh
@@ -58,19 +70,23 @@ on() {
   ssh $(ssh_opts) "admin@$(IP)" "$@"
 }
 
-price() { # prix horaire à la demande (ou Spot actuel) du type $1, en $
-  if [ "$SPOT" = 1 ]; then
-    aws ec2 describe-spot-price-history --instance-types "$1" --product-descriptions Linux/UNIX \
-      --start-time "$(date -u +%FT%TZ)" --query 'SpotPriceHistory[].SpotPrice' --output text |
-      tr '\t' '\n' | sort -g | tail -n 1
-    return
-  fi
-  aws pricing get-products --region us-east-1 --service-code AmazonEC2 --filters \
-    Type=TERM_MATCH,Field=instanceType,Value="$1" Type=TERM_MATCH,Field=regionCode,Value=$AWS_REGION \
-    Type=TERM_MATCH,Field=operatingSystem,Value=Linux Type=TERM_MATCH,Field=tenancy,Value=Shared \
-    Type=TERM_MATCH,Field=preInstalledSw,Value=NA Type=TERM_MATCH,Field=capacitystatus,Value=Used \
-    --query 'PriceList[0]' --output text |
-    python3 -c "import json,sys;t=json.load(sys.stdin)['terms']['OnDemand'];print(next(p['pricePerUnit']['USD'] for v in t.values() for p in v['priceDimensions'].values()))"
+zones() { # « zone prix sous-réseau » des zones par défaut, Spot actuel du type $1, la moins chère d'abord
+  local prices
+  prices=$(aws ec2 describe-spot-price-history --instance-types "$1" --product-descriptions Linux/UNIX \
+    --start-time "$(date -u +%FT%TZ)" --query 'SpotPriceHistory[].[AvailabilityZone,SpotPrice]' --output text)
+  aws ec2 describe-subnets --filters Name=default-for-az,Values=true \
+    --query 'Subnets[].[AvailabilityZone,SubnetId]' --output text |
+    while read -r zone subnet; do
+      awk -v z="$zone" -v s="$subnet" '$1 == z {print z, $2, s; exit}' <<< "$prices"
+    done | sort -k2,2 -g
+}
+
+saved() { # les dossiers de SAVE, un par ligne ; refuse ceux qui ne sont pas sous lab/
+  local p
+  for p in ${SAVE//,/ }; do
+    [[ "$p" =~ ^lab/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]] || die "--save : $p n'est pas un dossier sous lab/"
+    echo "$p"
+  done
 }
 
 sg_id() {
@@ -156,10 +172,9 @@ cmd_up() {
   [[ "$MAX_HOURS" =~ ^[0-9]+$ ]] && [ "$MAX_HOURS" -ge 1 ] && [ "$MAX_HOURS" -le 12 ] || die "MAX_HOURS doit être compris entre 1 et 12 heures"
   [ -z "$(state id)" ] || die "une machine existe déjà ($(state id)) : lab/tools/cloud.sh down"
   cmd_init
-  local p
-  p=$(price "$TYPE")
-  awk -v p="$p" -v m="$MAX_PRICE" 'BEGIN{exit !(p <= m)}' ||
-    die "$TYPE coûte $p \$/h, plus que MAX_PRICE=$MAX_PRICE"
+  local offers
+  offers=$(zones "$TYPE" | awk -v m="$MAX_PRICE" '$2 <= m')
+  [ -n "$offers" ] || die "$TYPE coûte plus que MAX_PRICE=$MAX_PRICE \$/h dans toutes les zones"
   open_ssh
   local ami rootdev market=() id=""
   ami=$(aws ssm get-parameter --name /aws/service/debian/release/13/latest/amd64 \
@@ -169,10 +184,10 @@ cmd_up() {
     market=(--instance-market-options "MarketType=spot,SpotOptions={MaxPrice=$SPOT_MAX,SpotInstanceType=one-time,InstanceInterruptionBehavior=terminate}")
   fi
   user_data > "$STATE/user-data.sh"
-  say "lancement d'une $TYPE ($p \$/h, disque $DISK Go, au plus $MAX_HOURS h)"
-  # Une zone après l'autre si la première n'a plus de machines de ce type.
-  for subnet in $(aws ec2 describe-subnets --filters Name=default-for-az,Values=true \
-    --query 'Subnets[].SubnetId' --output text); do
+  # La zone la moins chère d'abord, la suivante si elle n'a plus de machines de ce type.
+  local zone p subnet
+  while read -r zone p subnet; do
+    say "lancement d'une $TYPE dans $zone ($p \$/h, disque $DISK Go, au plus $MAX_HOURS h)"
     if id=$(aws ec2 run-instances --image-id "$ami" --instance-type "$TYPE" --count 1 \
       --subnet-id "$subnet" --key-name $KEYNAME --security-group-ids "$(sg_id)" \
       --iam-instance-profile Name=$PROFILE_NAME --instance-initiated-shutdown-behavior terminate \
@@ -181,17 +196,18 @@ cmd_up() {
       --user-data "file://$STATE/user-data.sh" \
       --tag-specifications "ResourceType=instance,Tags=[{Key=Project,Value=smallai},{Key=Name,Value=smallai-$TYPE}]" \
       "ResourceType=volume,Tags=[{Key=Project,Value=smallai}]" \
-      --query 'Instances[0].InstanceId' --output text 2> "$STATE/run-error"); then
+      --query 'Instances[0].InstanceId' --output text 2> "$STATE/run-error" < /dev/null); then
       break
     fi
     grep -q -E 'InsufficientInstanceCapacity|Unsupported' "$STATE/run-error" || die "$(cat "$STATE/run-error")"
-    say "pas de place dans $subnet, zone suivante"
+    say "pas de place dans $zone, zone suivante"
     id=""
-  done
+  done <<< "$offers"
   [ -n "$id" ] || die "aucune zone n'a de $TYPE disponible"
   echo "$id" > "$STATE/id"
   echo "$TYPE" > "$STATE/type"
   echo "$p" > "$STATE/price"
+  echo "$zone" > "$STATE/zone"
   echo "$DISK" > "$STATE/disk"
   date +%s > "$STATE/start"
   rm -f "$STATE/known_hosts"
@@ -259,20 +275,83 @@ cmd_data() {
   done
 }
 
+saver() { # sur la machine : garde les dossiers de SAVE dans le bucket (voir l'en-tête)
+  local paths
+  paths=$(saved | paste -sd ' ')
+  cat <<EOF
+#!/bin/bash
+# Garde $paths dans le bucket. « save.sh once » : une copie ; sinon toutes les $SAVE_MIN min, et
+# tout de suite quand AWS annonce la reprise de la machine.
+cd ~/smallmobile
+IMDS=\${IMDS:-http://169.254.169.254}
+save() {
+  for p in $paths; do
+    [ -d "\$p" ] && aws s3 sync --only-show-errors --region $AWS_REGION "\$p" "s3://$BUCKET/\${p#lab/}"
+  done
+  echo "\$(date +%T) copié dans le bucket" >> ~/save.log
+}
+if [ "\${1:-}" = once ]; then save; exit; fi
+announced() { # AWS a-t-il annoncé la reprise de la machine ? (métadonnées IMDSv2)
+  local t
+  t=\$(curl -s -m 2 -X PUT -H "X-aws-ec2-metadata-token-ttl-seconds: 60" "\$IMDS/latest/api/token") &&
+    curl -sf -m 2 -o /dev/null -H "X-aws-ec2-metadata-token: \$t" "\$IMDS/latest/meta-data/spot/instance-action"
+}
+last=\$(date +%s)
+while true; do
+  if announced; then
+    echo "\$(date +%T) reprise annoncée par AWS" >> ~/save.log
+    save
+    exit
+  fi
+  if [ \$((\$(date +%s) - last)) -ge $((SAVE_MIN * 60)) ]; then
+    save
+    last=\$(date +%s)
+  fi
+  sleep 5
+done
+EOF
+}
+
 cmd_run() {
   [ $# -ge 1 ] || die "commande manquante"
   printf 'cd ~/smallmobile\n%s\n' "$*" | on 'cat > job.sh'
-  on 'rm -f job.exit job.log; setsid nohup bash -c "bash job.sh > job.log 2>&1; echo \$? > job.exit" \
-      > /dev/null 2>&1 < /dev/null &'
+  # la fin (job.exit) n'est écrite qu'après la dernière copie des dossiers gardés
+  on 'if [ -f save.pid ]; then kill "$(cat save.pid)" 2> /dev/null; fi; rm -f save.sh save.pid
+      printf "bash job.sh > job.log 2>&1\nc=\$?\n[ -x save.sh ] && ./save.sh once\necho \$c > job.exit\n" > run.sh'
+  if [ -n "$SAVE" ]; then
+    saved > /dev/null
+    local p
+    for p in $(saved); do
+      say "$p : repris du bucket, puis copié toutes les $SAVE_MIN min et à la fin"
+      on "mkdir -p smallmobile/$p && aws s3 sync --only-show-errors --region $AWS_REGION s3://$BUCKET/${p#lab/} smallmobile/$p"
+    done
+    saver | on 'cat > save.sh && chmod +x save.sh'
+    on 'setsid nohup bash -c "echo \$\$ > save.pid; exec ./save.sh" > /dev/null 2>&1 < /dev/null &'
+  fi
+  on 'rm -f job.exit job.log; setsid nohup bash run.sh > /dev/null 2>&1 < /dev/null &'
   say "calcul lancé : $*"
   cmd_wait
+}
+
+gone() { # la machine a-t-elle disparu (reprise Spot, garde-fou) ? Le dit, avec la raison d'AWS
+  local st why
+  st=$(aws ec2 describe-instances --instance-ids "$(state id)" \
+    --query 'Reservations[0].Instances[0].State.Name' --output text 2> /dev/null) || return 1
+  case $st in shutting-down | terminated | stopping | stopped) ;; *) return 1 ;; esac
+  why=$(aws ec2 describe-spot-instance-requests --filters Name=instance-id,Values="$(state id)" \
+    --query 'SpotInstanceRequests[0].Status.Code' --output text 2> /dev/null || true)
+  say "machine perdue : $st ($why)"
 }
 
 cmd_wait() { # affiche le journal du calcul au fil de l'eau, rend son code de sortie
   local off=0 code
   while true; do
     # Le code de sortie d'abord : s'il est là, le journal lu ensuite est complet.
-    code=$(on 'cat job.exit 2>/dev/null; true') || { sleep 30; continue; }
+    code=$(on 'cat job.exit 2>/dev/null; true') || {
+      if gone; then return 99; fi
+      sleep 30
+      continue
+    }
     on "s=\$(stat -c %s job.log 2>/dev/null || echo 0); echo \$s; tail -c +$((off + 1)) job.log 2>/dev/null | head -c \$((s - $off))" \
       > "$STATE/chunk" || { sleep 30; continue; }
     off=$(head -n 1 "$STATE/chunk")
@@ -285,11 +364,14 @@ cmd_wait() { # affiche le journal du calcul au fil de l'eau, rend son code de so
   done
 }
 
-cmd_get() {
+cmd_get() { # depuis la machine ; depuis le bucket pour un dossier gardé si elle a disparu
   local p
   for p in "$@"; do
     say "rapatriement de $p"
-    rsync -azR -e "ssh $(ssh_opts)" "admin@$(IP):smallmobile/./$p" .
+    rsync -azR -e "ssh $(ssh_opts)" "admin@$(IP):smallmobile/./$p" . && continue
+    saved | grep -qx "$p" || die "rapatriement de $p impossible"
+    say "machine injoignable : $p depuis le bucket"
+    aws s3 sync --only-show-errors "s3://$BUCKET/${p#lab/}" "$p"
   done
 }
 
@@ -317,7 +399,7 @@ cmd_down() {
     aws ec2 terminate-instances --instance-ids "$id" >/dev/null
     aws ec2 wait instance-terminated --instance-ids "$id"
     say "détruite après $(cost_of_run)"
-    rm -f "$STATE"/{id,ip,type,price,disk,start,known_hosts}
+    rm -f "$STATE"/{id,ip,type,price,zone,disk,start,known_hosts}
   fi
   cmd_check
 }
@@ -362,6 +444,7 @@ cmd_job() {
       --type) TYPE=$2 ;;
       --disk) DISK=$2 ;;
       --data) data=$2 ;;
+      --save) SAVE=$2 ;;
       --get) get=$2 ;;
       *) die "option inconnue : $1" ;;
     esac
@@ -369,6 +452,7 @@ cmd_job() {
   done
   [ "${1:-}" = -- ] || die "usage : job [options] -- 'commande'"
   shift
+  saved > /dev/null
   trap 'cmd_down' EXIT
   cmd_up
   [ -z "$data" ] || cmd_data ${data//,/ }
@@ -391,5 +475,5 @@ case "${1:-}" in
     "cmd_$c" "$@"
     ;;
   check) cmd_check ;;
-  *) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

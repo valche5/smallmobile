@@ -43,9 +43,12 @@ mini sert le jeu : **aucun calcul lourd sur mini** (`lab arena`, `label`, `selfp
 Tout part sur des machines AWS via `lab/tools/cloud.sh` (en-tête du script : mode d'emploi ;
 `lab/JOURNAL.md`, « Les machines AWS » : le compte, les prix, les limites).
 
-- `lab/tools/cloud.sh job --type c7a.16xlarge [--data D1,D2] [--get chemins] -- 'commande'` : machine,
-  installation, données du bucket, calcul, rapatriement, destruction. Une seule machine à la fois
-  (quota Spot : voir le journal).
+- `lab/tools/cloud.sh job --type c7a.16xlarge [--data D1,D2] [--save chemins] [--get chemins] -- 'commande'` :
+  machine, installation, données du bucket, calcul, rapatriement, destruction. Une seule machine à
+  la fois (quota Spot : voir le journal).
+- Spot : AWS peut reprendre la machine en cours de calcul. Pour un calcul long, `--save` garde des
+  dossiers dans le bucket (repris au lancement suivant), et le script saute les morceaux déjà
+  faits (en-tête de `cloud.sh`).
 - Après chaque calcul : `lab/tools/cloud.sh status` (rien ne doit rester) et donner la dépense
   (estimée par le script à la destruction ; AWS l'affiche avec quelques heures de retard).
 - Budget : rester dans les crédits AWS. Budget en cours, alertes et solde des crédits, datés :
