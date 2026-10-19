@@ -353,14 +353,14 @@ entières (64 fichiers, environ 20 000 parties).
    joueur. Test `the_search_sees_only_what_the_player_knows` (Expert livré, réseau seul,
    Difficile) : il échouait avant le correctif. Pas de campagne de remesure dédiée : les mesures
    de P1, sur graines inédites, en tiennent lieu.
-2. **Fait, sauf l'index des anciennes données.** `lab selfplay` et `lab label` écrivent à côté de
+2. **Fait.** `lab selfplay` et `lab label` écrivent à côté de
    chaque fichier `x.bin.games` : le nombre de positions de chaque partie. `data.py` le lit, ou le
    reconstruit d'après les cartes et l'écrit (méthode vérifiée sur un fichier gen7, label4 et gen0
    v1 : 322, 5 031 et 99 parties, toutes de cartes distinctes). La validation se choisit par une
    règle fixe sur une clé de la carte (`in_validation`, 5 %) : la même pour toutes les
-   générations, quel que soit l'ordre des fichiers ; `@0.2` garde des parties entières. Reste à
-   construire les `.games` de toutes les données (lecture complète, donc sur AWS) et à les mettre
-   dans le bucket. gen8 a vu 95 % des anciennes parties : pour les réseaux issus de gen8, ne
+   générations, quel que soit l'ordre des fichiers ; `@0.2` garde des parties entières. Les
+   `.games` de `label1` à `label4`, `gen6` et `gen7` sont dans le bucket (`lab/py/index.py`, P2) ;
+   les autres données se liront au premier calcul qui les utilise. gen8 a vu 95 % des anciennes parties : pour les réseaux issus de gen8, ne
    juger que les parties de validation des données neuves (P2).
 3. **Fait.** `lab arena --out`, `--table`, `rp=4` (modèle par type de place, transmis par
    l'arène) et `lab/py/score.py` ; temps moyen et p95 par décision pour chaque rôle.
@@ -380,8 +380,7 @@ entières (64 fichiers, environ 20 000 parties).
    l'encodage (P5).
 
 **Livrable :** tests ciblés passants, partitions vérifiables, résultats individuels reproductibles,
-variance par donne mesurée. Toutes les étapes suivantes utilisent ce code corrigé. Reste l'index
-des anciennes données (lecture complète, au premier calcul AWS qui les télécharge).
+variance par donne mesurée. Toutes les étapes suivantes utilisent ce code corrigé.
 
 ### P1 — Choisir une référence de recherche face aux joueurs forts
 
@@ -428,7 +427,31 @@ Dépend de P0 seulement, ni de P1 ni de P3.
 5 000 parties gen8 `rp=1` (graines 8 000 000 à 8 000 009), 377 000 positions enregistrées en
 43 min (`lab/data/p2`, 2,1 Go) ; 30 % des positions de ces parties rejugées chacune par 32 fins du
 réseau, 221 000 positions en 20 min (`lab/data/p2-judged`, 1,3 Go). Les deux sont dans le bucket.
-Entraînement des quatre branches et arènes (`lab/runs/p2-train.sh`) : en cours.
+Entraînement et arènes faits le 19 octobre (`lab/runs/p2-train.sh`, réseaux et résultats dans
+`lab/runs/p2` sur mini) : quatre branches depuis gen8, 12 000 lots de 512, lr 5e-4,
+`q-weight 0`, anciennes sources au quart (1,73 million de positions) ; les nouvelles font 18 %
+des positions de B et 26 % de C et D. 16 min d'entraînement, puis 18 min par arène. Arènes aux
+réglages livrés (`rp=2`, n=200), graine 501, 920 donnes :
+
+| Joueur testé | Champ | Score | Par taille (2, 3, 4, 5 j.) |
+| --- | --- | --- | --- |
+| A, témoin réentraîné | gen8 | −0,3 ± 1,5 | +0,2, +0,4, −1,0, −0,8 |
+| B, politique du pilote | A | +2,9 ± 1,6 | +6,0, +3,8, +1,8, 0,0 |
+| **C, valeur du pilote** | A | **+6,1 ± 1,6** | +6,6, +5,9, +5,9, +6,0 |
+| D, les deux | A | +4,0 ± 1,6 | +5,4, +2,9, +4,1, +3,7 |
+
+Mêmes donnes : C − B +3,2 ± 2,2 ; D − B +1,1 ± 2,1 et D − C −2,1 ± 2,2, indécis. Le simple
+réentraînement ne change rien (A vaut gen8). **Les nouvelles cibles de valeur donnent le gain le
+plus net, +6 points, égal à toutes les tailles** : premier progrès mesuré au-delà de gen8, et
+appui à l'hypothèse 1 (la valeur apprise des fins de Normal plafonne). La politique du pilote
+aide aussi, surtout à 2 joueurs ; les deux ensemble ne s'additionnent pas ici. Les pertes de
+validation ne se comparent pas entre branches (ensembles de validation différents ; la valeur
+des résultats de parties, presque binaire, est plus bruitée).
+
+Non séparé : la part des résultats de parties (`p2:value`) et celle des fins du réseau
+(`p2-judged`) dans le gain de C. Prochaines étapes, à décider : séparer ces deux sources et
+confirmer C avec une seconde graine d'entraînement (environ 1 h 30, 1,2 $ : données, quatre
+entraînements, quatre arènes), puis étendre à 20 000 parties.
 
 Juge réseau sur les mêmes 3 968 positions de l'IA Normal qu'en P0 (`lab noise --judge`, même
 graine ; `lab/runs/p2/noise-net.txt` contre `lab/runs/p0/noise-gen8.txt`), avance en pièces,
@@ -610,7 +633,9 @@ Budget global avant crédits `Credits-Semaine-19-25-Oct-2026-110USD`, compte de 
 ne s'appliquent plus. Dernier relevé du 19 octobre : 8,31 $ consommés sur la période,
 123,23 $ de crédits restants estimés, soit 101,69 $ de dépenses supplémentaires dans ce budget
 et 21,54 $ de réserve. Depuis ce relevé, estimations de `cloud.sh` : P0 0,87 $, essais Spot
-0,02 $, P1 1,11 $, pilote P2 0,86 $. **Montants datés : consulter coûts et crédits du compte de gestion
+0,02 $, P1 1,11 $, pilote P2 0,86 $, entraînement et arènes P2 1,54 $ (dont 0,10 $ perdus sur un
+script non exécutable, et une reprise par AWS à 20 h 30, sans perte grâce à `--save`), soit
+4,40 $. **Montants datés : consulter coûts et crédits du compte de gestion
 avant chaque campagne. Les crédits ne se renouvellent pas chaque semaine.**
 
 Pour chaque étape autorisée : mesurer un petit échantillon sur AWS, estimer durée et coût total
