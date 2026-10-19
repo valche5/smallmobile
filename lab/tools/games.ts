@@ -1,5 +1,6 @@
-// Les parties archivées par le serveur (data/games/*.json) : qui a gagné, et le temps de décision
-// des IA pendant les vraies parties, par niveau et par nombre de joueurs.
+// Les parties archivées par le serveur (data/games/*.json) : qui a gagné, le temps de décision des IA
+// par niveau et par nombre de joueurs, et les résultats des LLM (parties de l'API llm, fichiers
+// `*_llm-*`, place marquée `llm`) par modèle.
 //
 //   bun lab/tools/games.ts [data/games]
 //   (sur mini : ssh mini.local 'cd ~/repos/smallmobile && ~/.bun/bin/bun lab/tools/games.ts')
@@ -21,7 +22,7 @@ for (const g of games) {
   const coins = g.coins;
   const best = coins ? Math.max(...coins) : null;
   const who = g.players.map((p, i) => {
-    const tag = p.kind === 'human' ? p.name : `${p.name} (${p.ai})`;
+    const tag = p.kind === 'human' ? p.name : p.kind === 'llm' ? `${p.name} (LLM ${g.llm?.model ?? '?'})` : `${p.name} (${p.ai})`;
     return coins ? `${tag} ${coins[i]}${coins[i] === best ? ' 🏆' : ''}` : tag;
   });
   const state = coins ? '' : ` — en cours, ${g.record.moves.length} actions`;
@@ -53,5 +54,27 @@ if (groups.size) {
     const cols = ms.length ? [secs(quantile(ms, 0.5)), secs(quantile(ms, 0.9)), secs(ms[ms.length - 1]!)] : ['-', '-', '-'];
     const c = compute.length ? secs(quantile(compute, 0.5)) : '-';
     console.log(`${key.padEnd(20)} ${String(ms.length).padStart(9)}   ${cols.map((x) => x.padEnd(10)).join(' ')} ${c.padEnd(15)} ${e.fallback}`);
+  }
+}
+
+// les LLM : parties finies par modèle, victoires, place moyenne (d'après les pièces), bilans donnés
+const models = new Map<string, { games: number; wins: number; places: number; debriefs: number }>();
+for (const g of games) {
+  if (!g.llm || !g.coins) continue;
+  const mine = g.coins[g.llm.seat]!;
+  const place = 1 + g.coins.filter((c) => c > mine).length;
+  const e = models.get(g.llm.model) ?? { games: 0, wins: 0, places: 0, debriefs: 0 };
+  e.games++;
+  e.wins += +(place === 1);
+  e.places += place;
+  e.debriefs += +!!g.llm.debrief;
+  models.set(g.llm.model, e);
+}
+if (models.size) {
+  console.log('\nLLM (parties finies) :');
+  console.log('modèle                          parties   victoires   place moy.   bilans');
+  for (const [model, e] of [...models].sort()) {
+    const cols = [String(e.games).padStart(7), String(e.wins).padStart(11), (e.places / e.games).toFixed(2).padStart(12), String(e.debriefs).padStart(8)];
+    console.log(`${model.padEnd(30)} ${cols.join(' ')}`);
   }
 }

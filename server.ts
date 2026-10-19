@@ -38,7 +38,7 @@ const rooms = new RoomManager(store, undefined, { expert, archive });
 // les parties du jeu
 shared.__llmExpert?.close();
 const llmExpert = missing ? null : (shared.__llmExpert = new ExpertProcess(DEFAULT_EXPERT));
-const llm = new LlmGames({ expert: llmExpert, dir: process.env.LLM_DIR ?? './data/llm' });
+const llm = new LlmGames({ expert: llmExpert, archive, dir: process.env.LLM_DIR ?? './data/llm' });
 const llmGuide = llmRules(await Bun.file('./src/server/llm.md').text());
 
 const lan = Object.values(networkInterfaces())

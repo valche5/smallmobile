@@ -6,7 +6,9 @@
  *
  * Le joueur voit ce qu'un humain attentif saurait : la carte, le marché, les pièces de chacun (elles se
  * reconstituent à partir des gains annoncés), jamais l'ordre caché des pioches ni les dés à venir.
- * Les parties sont gardées dans `data/llm/` (une par fichier), à part des vraies parties du jeu.
+ * Il déclare le modèle qui joue ; en fin de partie, il peut expliquer pourquoi il pense avoir gagné ou
+ * perdu (`debrief`). Les parties en cours sont gardées dans `data/llm/` (une par fichier) ; l'archive
+ * des parties jouées (`data/games/`) les reçoit aussi, la place du LLM marquée `llm`.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -18,6 +20,7 @@ import { KernelRefusal } from '../engine/kernel';
 import { randomSeed } from '../engine/rng';
 import { allTargets, currentActor, ranking, regionsOf, tokensOnBoard } from '../engine/rules';
 import type { Action, AiLevel, AiThought, GameState, RaceId } from '../engine/types';
+import { gameId, type ArchivedGame, type GameArchive } from './archive';
 import type { Expert } from './expert';
 
 const LEVELS: AiLevel[] = ['facile', 'normal', 'difficile', 'expert'];
@@ -30,6 +33,8 @@ const PHASES: Record<GameState['phase'], string> = {
 };
 /** Au-delà, une partie qui n'avance plus est déclarée bloquée. */
 const MAX_AI_ACTIONS = 5000;
+/** Longueur maximale du bilan de fin de partie (caractères). */
+const MAX_DEBRIEF = 8000;
 
 export interface LlmGame {
   id: string;
@@ -40,11 +45,17 @@ export interface LlmGame {
   game: GameState;
   /** Dernière entrée du journal avant le dernier coup du joueur : la vue raconte la suite. */
   seen: number;
+  /** Le modèle qui joue, déclaré à la création, et l'outil qui le fait jouer. */
+  model: string;
+  client?: string;
+  /** Fin de partie : pourquoi le joueur pense avoir gagné ou perdu. */
+  debrief?: { text: string; at: number };
 }
 
 /** Ce que reçoit le joueur après chaque requête. */
 export interface LlmView {
   id: string;
+  model: string;
   seat: number;
   round: number;
   maxRounds: number;
@@ -59,6 +70,8 @@ export interface LlmView {
   legal: { action: Action; note: string }[];
   /** Fin de partie : pièces de chacun, du premier au dernier. */
   ranking?: { seat: number; name: string; coins: number }[];
+  /** Fin de partie : le bilan du joueur, `null` tant qu'il ne l'a pas donné. */
+  debrief?: string | null;
 }
 
 /** Une erreur à renvoyer au client, avec son code HTTP. */
@@ -73,6 +86,8 @@ export class LlmError extends Error {
 
 export interface LlmOptions {
   expert: Expert | null;
+  /** L'archive des parties jouées, avec les vraies parties ; `null` : aucune. */
+  archive: GameArchive | null;
   /** Dossier des parties ; `null` : en mémoire seulement (tests). */
   dir: string | null;
 }
@@ -87,12 +102,16 @@ export class LlmGames {
   }
 
   /**
-   * Nouvelle partie. `players` : 2 à 5 ; `opponents` : un niveau pour tous, ou un par adversaire
-   * (facile, normal, difficile, expert) ; `seat` : la place du joueur (au hasard sinon) ; `seed` :
-   * pour rejouer la même carte et le même hasard.
+   * Nouvelle partie. `model` (obligatoire) : le modèle qui joue ; `client` : l'outil qui le fait jouer ;
+   * `players` : 2 à 5 ; `opponents` : un niveau pour tous, ou un par adversaire (facile, normal,
+   * difficile, expert) ; `seat` : la place du joueur (au hasard sinon) ; `seed` : pour rejouer la même
+   * carte et le même hasard.
    */
   async create(body: unknown): Promise<LlmView> {
     const b = (body ?? {}) as Record<string, unknown>;
+    const model = label(b.model);
+    if (!model) throw new LlmError(400, '`model` est obligatoire : le modèle qui joue, par exemple "claude-sonnet-5-5".');
+    const client = label(b.client);
     const players = b.players === undefined ? 2 : Number(b.players);
     if (!Number.isInteger(players) || players < 2 || players > 5) throw new LlmError(400, '`players` : de 2 à 5.');
     const raw = b.opponents ?? 'expert';
@@ -118,6 +137,8 @@ export class LlmGames {
       seat,
       game: createGame({ players: setup, mapSeed: seed, seed: seed + 1 }),
       seen: 0,
+      model,
+      ...(client ? { client } : {}),
     };
     this.games.set(entry.id, entry);
     return this.run(entry, async () => {});
@@ -125,6 +146,19 @@ export class LlmGames {
 
   view(id: string): LlmView {
     return view(this.get(id));
+  }
+
+  /** Fin de partie : le bilan du joueur (pourquoi il pense avoir gagné ou perdu), gardé avec la partie. */
+  debrief(id: string, body: unknown): LlmView {
+    const entry = this.get(id);
+    if (entry.game.phase !== 'gameOver') throw new LlmError(409, 'Le bilan se donne une fois la partie finie.');
+    const raw = (body as { text?: unknown } | null)?.text;
+    const text = typeof raw === 'string' ? raw.trim().slice(0, MAX_DEBRIEF) : '';
+    if (!text) throw new LlmError(400, 'Le corps doit être {"text": "votre bilan"}.');
+    entry.debrief = { text, at: Date.now() };
+    entry.updatedAt = Date.now();
+    this.save(entry);
+    return view(entry);
   }
 
   /** L'état complet de la partie (tests et outils ; jamais envoyé au joueur). */
@@ -211,6 +245,8 @@ export class LlmGames {
     if (this.opts.dir && /^[a-z0-9]{8}$/.test(id)) {
       try {
         const entry = JSON.parse(readFileSync(join(this.opts.dir, `${id}.json`), 'utf8')) as LlmGame;
+        // parties créées avant la déclaration du modèle
+        entry.model ??= 'inconnu';
         this.games.set(id, entry);
         return entry;
       } catch {
@@ -221,6 +257,8 @@ export class LlmGames {
   }
 
   private save(entry: LlmGame) {
+    const record = archived(entry);
+    if (record) this.opts.archive?.save(record);
     if (!this.opts.dir) return;
     try {
       writeFileSync(join(this.opts.dir, `${entry.id}.json`), JSON.stringify(entry));
@@ -245,6 +283,28 @@ export function llmRules(template: string): string {
   });
   const glossary = [`### Les ${RACE_IDS.length} peuples`, '', ...races, '', `### Les ${POWER_IDS.length} pouvoirs`, '', ...powers].join('\n');
   return template.replace('<!-- peuples et pouvoirs -->', glossary);
+}
+
+const label = (x: unknown) => (typeof x === 'string' ? x.trim().replace(/\s+/g, ' ').slice(0, 80) : '');
+
+/** La partie pour l'archive des parties jouées : la place du LLM y est marquée `llm`, avec son modèle. */
+function archived(entry: LlmGame): ArchivedGame | null {
+  const g = entry.game;
+  if (!g.record) return null;
+  return {
+    id: gameId(`llm-${entry.id}`, g.record.startedAt),
+    code: entry.id,
+    updatedAt: entry.updatedAt,
+    players: g.players.map((p, i) => ({ name: p.name, kind: i === entry.seat ? ('llm' as const) : p.kind, ai: p.ai })),
+    coins: g.phase === 'gameOver' ? g.players.map((p) => p.coins) : null,
+    record: g.record,
+    llm: {
+      seat: entry.seat,
+      model: entry.model,
+      ...(entry.client ? { client: entry.client } : {}),
+      ...(entry.debrief ? { debrief: entry.debrief.text } : {}),
+    },
+  };
 }
 
 function newId(): string {
@@ -280,6 +340,9 @@ export function llmRoutes(games: LlmGames, rules: () => string) {
     '/api/llm/games/:id/actions': {
       POST: (req: Request & { params: { id: string } }) => answer(req, async () => games.act(req.params.id, await body(req))),
     },
+    '/api/llm/games/:id/debrief': {
+      POST: (req: Request & { params: { id: string } }) => answer(req, async () => games.debrief(req.params.id, await body(req))),
+    },
   };
 }
 
@@ -300,6 +363,7 @@ function view(entry: LlmGame): LlmView {
       : undefined;
   return {
     id: entry.id,
+    model: entry.model,
     seat: entry.seat,
     round: g.round,
     maxRounds: g.maxRounds,
@@ -309,7 +373,7 @@ function view(entry: LlmGame): LlmView {
     events: fresh,
     text: describe(entry, fresh, legal, final),
     legal,
-    ...(final ? { ranking: final } : {}),
+    ...(final ? { ranking: final, debrief: entry.debrief?.text ?? null } : {}),
   };
 }
 
@@ -322,11 +386,19 @@ function describe(entry: LlmGame, events: string[], legal: LlmView['legal'], fin
   const who = currentActor(g);
   const turn = g.phase === 'gameOver' ? '' : who === me ? ' — **à vous de jouer**' : ` — au tour de J${(who ?? g.current) + 1}`;
   out.push(`# Partie ${entry.id} : manche ${g.round}/${g.maxRounds}, phase ${PHASES[g.phase]}${turn}`);
-  out.push(`Vous êtes **J${me + 1}** (${g.players[me]!.name}).`);
+  out.push(`Vous êtes **J${me + 1}** (${g.players[me]!.name}, modèle ${entry.model}).`);
   if (events.length) out.push('', '## Depuis votre dernier coup (compris)', ...events.map((e) => `- ${e}`));
   if (final) {
     out.push('', '## Classement final');
     final.forEach((r, i) => out.push(`${i + 1}. J${r.seat + 1} ${r.name}${r.seat === me ? ' (vous)' : ''} : ${r.coins} pièces`));
+    out.push('', '## Votre bilan');
+    if (entry.debrief) out.push(entry.debrief.text);
+    else
+      out.push(
+        `La partie est finie : expliquez en quelques phrases pourquoi vous pensez avoir ${final[0]!.seat === me ? 'gagné' : 'perdu'}. ` +
+          'Vos choix décisifs, ce qui a marché ou non, ce que vous feriez autrement, et ce qui vous a gêné dans les règles ' +
+          `ou l'API. Envoyez-le avec \`POST /api/llm/games/${entry.id}/debrief\` et le corps \`{"text": "…"}\`.`,
+      );
     return out.join('\n');
   }
 

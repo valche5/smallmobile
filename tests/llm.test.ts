@@ -7,6 +7,7 @@ import { RACE_IDS, RACES } from '../src/engine/data';
 import { applyAction } from '../src/engine/game';
 import { currentActor } from '../src/engine/rules';
 import type { Action, GameState } from '../src/engine/types';
+import type { ArchivedGame, GameArchive } from '../src/server/archive';
 import type { Expert, ExpertMove } from '../src/server/expert';
 import { LlmError, LlmGames, llmRoutes, llmRules, type LlmView } from '../src/server/llm';
 
@@ -24,6 +25,13 @@ class FakeExpert implements Expert {
       cur = applyAction(cur, a);
     } while (cur.phase === 'redeploy' && g.phase === 'redeploy' && currentActor(cur) === actor);
     return { actions, value: 0.5, iterations: 200, computeMs: 3 };
+  }
+}
+
+class MemoryArchive implements GameArchive {
+  games = new Map<string, ArchivedGame>();
+  save(g: ArchivedGame) {
+    this.games.set(g.id, g);
   }
 }
 
@@ -50,8 +58,11 @@ async function rejected(p: Promise<unknown>): Promise<LlmError> {
 describe('parties pour un LLM', () => {
   test('une partie se joue jusqu’au bout avec les coups proposés, tous permis', async () => {
     const expert = new FakeExpert();
-    const games = new LlmGames({ expert, dir: null });
-    let v = await games.create({ players: 3, opponents: ['expert', 'difficile'], seat: 1, seed: 42, name: 'Testeur' });
+    const archive = new MemoryArchive();
+    const games = new LlmGames({ expert, archive, dir: null });
+    let v = await games.create({ model: 'claude-test', client: 'tests', players: 3, opponents: ['expert', 'difficile'], seat: 1, seed: 42, name: 'Testeur' });
+    expect(v.model).toBe('claude-test');
+    expect(v.text).toContain('modèle claude-test');
     expect(v.seat).toBe(1);
     expect(v.yourTurn).toBe(true);
     expect(v.events.length).toBeGreaterThan(0);
@@ -72,11 +83,33 @@ describe('parties pour un LLM', () => {
     expect(v.text).toContain('Classement final');
     expect(v.legal).toEqual([]);
     expect((await rejected(games.act(v.id, { type: 'endTurn' }))).status).toBe(409);
+
+    // le bilan est demandé, puis gardé avec la partie et dans l'archive
+    expect(v.debrief).toBeNull();
+    expect(v.text).toContain(`/api/llm/games/${v.id}/debrief`);
+    expect((await rejected(Promise.resolve().then(() => games.debrief(v.id, { text: '  ' })))).status).toBe(400);
+    const d = games.debrief(v.id, { text: 'J’ai trop attendu pour passer en déclin.' });
+    expect(d.debrief).toBe('J’ai trop attendu pour passer en déclin.');
+    expect(d.text).toContain('trop attendu');
+    const [kept] = [...archive.games.values()];
+    expect(archive.games.size).toBe(1);
+    expect(kept!.id).toMatch(/_llm-[a-z0-9]{8}$/);
+    expect(kept!.players.map((p) => p.kind)).toEqual(['ai', 'llm', 'ai']);
+    expect(kept!.llm).toEqual({ seat: 1, model: 'claude-test', client: 'tests', debrief: 'J’ai trop attendu pour passer en déclin.' });
+    expect(kept!.coins).toEqual(games.game(v.id).players.map((p) => p.coins));
+  });
+
+  test('le modèle est obligatoire ; le bilan attend la fin de la partie', async () => {
+    const games = new LlmGames({ expert: null, archive: null, dir: null });
+    expect((await rejected(games.create({ players: 2 }))).status).toBe(400);
+    expect((await rejected(games.create({ model: '   ', players: 2 }))).status).toBe(400);
+    const v = await games.create({ model: 'test', players: 2, seat: 0, seed: 1 });
+    expect((await rejected(Promise.resolve().then(() => games.debrief(v.id, { text: 'trop tôt' })))).status).toBe(409);
   });
 
   test('les erreurs disent ce qui ne va pas, sans rien changer', async () => {
-    const games = new LlmGames({ expert: null, dir: null });
-    const v = await games.create({ players: 2, opponents: 'normal', seat: 0, seed: 7 });
+    const games = new LlmGames({ expert: null, archive: null, dir: null });
+    const v = await games.create({ model: 'test', players: 2, opponents: 'normal', seat: 0, seed: 7 });
     expect(v.phase).toBe('pick');
     const before = games.game(v.id);
     const refused = await rejected(games.act(v.id, { type: 'conquer', region: 0 }));
@@ -86,16 +119,16 @@ describe('parties pour un LLM', () => {
     expect((await rejected(games.act(v.id, 'pick'))).status).toBe(400);
     expect(games.game(v.id)).toBe(before);
     expect((await rejected(games.act('inconnue', { type: 'decline' }))).status).toBe(404);
-    expect((await rejected(games.create({ players: 6 }))).status).toBe(400);
-    expect((await rejected(games.create({ players: 3, opponents: ['expert'] }))).status).toBe(400);
-    expect((await rejected(games.create({ opponents: 'champion' }))).status).toBe(400);
+    expect((await rejected(games.create({ model: 'test', players: 6 }))).status).toBe(400);
+    expect((await rejected(games.create({ model: 'test', players: 3, opponents: ['expert'] }))).status).toBe(400);
+    expect((await rejected(games.create({ model: 'test', opponents: 'champion' }))).status).toBe(400);
   });
 
   test('la vue ne montre ni l’ordre des pioches ni le hasard', async () => {
-    const games = new LlmGames({ expert: null, dir: null });
-    const v = await games.create({ players: 4, opponents: 'difficile', seat: 2, seed: 9 });
+    const games = new LlmGames({ expert: null, archive: null, dir: null });
+    const v = await games.create({ model: 'test', players: 4, opponents: 'difficile', seat: 2, seed: 9 });
     const g = games.game(v.id);
-    expect(Object.keys(v).sort()).toEqual(['events', 'gameOver', 'id', 'legal', 'maxRounds', 'phase', 'round', 'seat', 'text', 'yourTurn']);
+    expect(Object.keys(v).sort()).toEqual(['events', 'gameOver', 'id', 'legal', 'maxRounds', 'model', 'phase', 'round', 'seat', 'text', 'yourTurn']);
     // les peuples de la pioche n'apparaissent nulle part, sauf s'ils sont aussi en jeu
     const shown = new Set([...g.market.map((m) => m.race), ...(Object.keys(g.races) as (keyof typeof RACES)[])]);
     for (const r of g.raceDeck.filter((r) => !shown.has(r))) expect(v.text).not.toContain(RACES[r].name);
@@ -104,9 +137,9 @@ describe('parties pour un LLM', () => {
   test('une partie se reprend après un redémarrage du serveur', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'llm-'));
     try {
-      const first = new LlmGames({ expert: null, dir });
-      const v = await first.create({ players: 2, opponents: 'facile', seed: 3 });
-      const again = new LlmGames({ expert: null, dir });
+      const first = new LlmGames({ expert: null, archive: null, dir });
+      const v = await first.create({ model: 'test', players: 2, opponents: 'facile', seed: 3 });
+      const again = new LlmGames({ expert: null, archive: null, dir });
       const w = again.view(v.id);
       expect(w.round).toBe(v.round);
       expect(w.legal).toEqual(v.legal);
@@ -117,11 +150,11 @@ describe('parties pour un LLM', () => {
   });
 
   test('les routes HTTP et le mode d’emploi', async () => {
-    const games = new LlmGames({ expert: null, dir: null });
+    const games = new LlmGames({ expert: null, archive: null, dir: null });
     const routes = llmRoutes(games, () => 'règles');
     const post = (url: string, body: string, id?: string) =>
       Object.assign(new Request(`http://x${url}`, { method: 'POST', body }), { params: { id: id ?? '' } });
-    const created = await routes['/api/llm/games'].POST(post('/api/llm/games', '{"players":2,"seat":0,"seed":5}'));
+    const created = await routes['/api/llm/games'].POST(post('/api/llm/games', '{"model":"test","players":2,"seat":0,"seed":5}'));
     expect(created.status).toBe(200);
     const v = (await created.json()) as LlmView;
     const get = Object.assign(new Request(`http://x/api/llm/games/${v.id}?format=text`), { params: { id: v.id } });

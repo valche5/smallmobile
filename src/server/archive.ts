@@ -14,10 +14,13 @@ export interface ArchivedGame {
   id: string;
   code: string;
   updatedAt: number;
-  players: { name: string; kind: 'human' | 'ai'; ai: AiLevel }[];
+  /** `llm` : un modèle de langage, par l'API de `llm.ts` (voir `llm`). */
+  players: { name: string; kind: 'human' | 'ai' | 'llm'; ai: AiLevel }[];
   /** Fin de partie : pièces de chaque joueur. */
   coins: number[] | null;
   record: GameRecord;
+  /** Partie jouée par un LLM : sa place, le modèle déclaré, l'outil qui le fait jouer, son bilan. */
+  llm?: { seat: number; model: string; client?: string; debrief?: string };
 }
 
 export interface GameArchive {

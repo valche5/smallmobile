@@ -139,7 +139,8 @@ describe('seul contre l’IA, sur le serveur', () => {
     const game = [...archive.games.values()][0]!;
     const r = game.record;
     let g = createGame({
-      players: game.players.map((p, i) => ({ name: p.name, color: final.players[i]!.color, kind: p.kind, ai: p.ai })),
+      // une place de LLM se rejoue comme une place humaine : personne ne la joue à sa place
+      players: game.players.map((p, i) => ({ name: p.name, color: final.players[i]!.color, kind: p.kind === 'llm' ? 'human' : p.kind, ai: p.ai })),
       mapSeed: r.mapSeed,
       seed: r.seed,
     });
