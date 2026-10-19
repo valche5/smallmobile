@@ -41,11 +41,14 @@ Tout part sur des machines AWS via `lab/tools/cloud.sh` (en-tête du script : mo
 
 - `lab/tools/cloud.sh job --type c7a.16xlarge [--data D1,D2] [--get chemins] -- 'commande'` : machine,
   installation, données du bucket, calcul, rapatriement, destruction. Une seule machine à la fois
-  (quota 64 vCPU, à la demande ; le Spot est interdit dans ce projet AWS).
+  (quota Spot 64 vCPU à Stockholm, vérifié le 19 octobre 2026 ; Spot désormais autorisé).
 - Après chaque calcul : `lab/tools/cloud.sh status` (rien ne doit rester) et donner la dépense
   (estimée par le script à la destruction ; AWS l'affiche avec quelques heures de retard).
-- Budget : les crédits AWS (160 $ en octobre 2026 ; `cloud.sh status` donne ce qu'il en reste). Le
-  plafond du compte est bien au-dessus (l'ancien plafond de 50 $/mois ne vaut plus).
+- Budget : rester dans les crédits AWS. Du 19 au 25 octobre 2026, budget global de 110 $ avant
+  crédits, alertes à 55/80/100/110 $, réserve estimée de plus de 20 $. Ce budget ne bloque pas les
+  dépenses. `cloud.sh` impose Spot (maximum 1 $/h), au plus 12 h ; aucun repli à la demande.
+  Le solde des crédits se vérifie dans le compte de gestion ; les crédits ne se renouvellent pas
+  chaque semaine. La session SmallAI locale est `--profile smallai`.
 - Les données produites sur la machine vont dans le bucket (`aws s3 sync` depuis la machine), puis
   sur mini (`AWS_PROFILE=smallai aws s3 sync s3://smallai-lab-631245464763/data/X lab/data/X`).
 - Ne pas modifier `cloud.sh` sur place pendant qu'un calcul l'utilise (bash relit le fichier) :

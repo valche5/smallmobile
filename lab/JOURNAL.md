@@ -384,6 +384,9 @@ données ne tiennent pas en mémoire.
 
 ## 2026-10-18 — Les machines AWS
 
+État historique du 18 octobre, avant activation des fonctionnalités avancées. Pour les prochains
+calculs, appliquer la configuration Spot du 19 octobre en fin de journal et `AGENTS.md`.
+
 Compte AWS « nouvelle expérience » : projet SmallAI (compte 631245464763), plan payant, plafond de
 dépense de 50 $/mois (compté avant les crédits). AWS y interdit le Spot (règle
 `DenySpotMarketType`, plan gratuit comme payant ; seule l'activation des « fonctionnalités
@@ -629,3 +632,34 @@ Pas de calcul AWS sans l'accord de l'utilisateur pour l'instant. Pistes, dans l'
    le réseau (`lab label` avec des fins `rp=1`), parties contre lui-même avec des adversaires à son
    image (`rp=1` ou `rp=3`), progrès mesuré parmi des Expert (l'IA Difficile en garde-fou).
    ~10 à 15 $.
+
+
+## 2026-10-19 — AWS : Spot et budget de la semaine
+
+Les fonctionnalités avancées sont activées. Dans SmallAI (631245464763), à Stockholm
+(`eu-north-1`), le quota Standard Spot est de 64 vCPU. Le test `RunInstances` avec `DryRun=true`
+a confirmé les permissions pour une `c7a.16xlarge` Spot ; il ne réserve aucune capacité et ne
+lance aucune machine. L'ancienne interdiction `DenySpotMarketType` n'est plus applicable ici.
+
+Configuration de `lab/tools/cloud.sh` sur mini :
+- Spot obligatoire (`SPOT=1`) ; aucun repli au tarif à la demande, `SPOT=0` est refusé.
+- Par défaut, `c7a.16xlarge` : 64 vCPU / 64 cœurs AMD, 128 Gio de mémoire, disque gp3 de 100 Gio.
+- Prix Spot plafonné à 1 $/h pour le calcul, hors disque, adresse IPv4, S3 et autres frais.
+- Durée maximale de 12 h ; une valeur supérieure est refusée. Extinction après 20 min sans
+  calcul, destruction à l'extinction et suppression du disque. Requête Spot ponctuelle
+  (`one-time`), interruption avec destruction : aucun remplacement automatique.
+
+Priorité de budget confirmée par l'utilisateur : rester dans les crédits, même si cela donne
+moins de 140 euros pour la semaine. Budget global avant crédits `Credits-Semaine-19-25-Oct-2026-110USD`
+créé dans le compte de gestion (051299608012), du 19 octobre 00:00 UTC au 26 octobre 00:00 UTC :
+110 $, avec alertes à 55, 80, 100 et 110 $ envoyées à valche5@valche5.fr. Il remplace le budget
+mensuel de 140 $. AWS Budgets alerte avec retard et ne constitue pas une coupure automatique.
+À la vérification du 19 octobre : 8,31 $ déjà consommés sur cette période, 123,23 $ de crédits
+restants estimés, soit 101,69 $ de dépenses supplémentaires dans ce budget et 21,54 $ de réserve.
+Ces montants sont datés : vérifier à nouveau les coûts et les crédits avant chaque calcul ; les
+crédits ne se renouvellent pas chaque semaine.
+
+Bucket existant : `s3://smallai-lab-631245464763`, environ 58 Go de données. Les derniers poids
+`gen8.pt` et `gen8.bin` sont sur mini dans `lab/nets/`. Aucune machine payante n'a été lancée
+pendant cette configuration. Avant un entraînement Spot long, prévoir des sauvegardes régulières
+et vérifier leur rapatriement : le plafond de durée peut interrompre un calcul non terminé.

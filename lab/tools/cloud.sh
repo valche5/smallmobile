@@ -22,19 +22,19 @@
 # Hors de la machine (alarmes AWS, `guard`) : destruction si le processeur reste sous 1 % pendant
 # IDLE_MIN minutes, ou si elle ne répond plus aux vérifications d'AWS pendant 10 min.
 # Réglages (variables d'environnement) : TYPE, DISK, MAX_HOURS, IDLE_MIN, MAX_PRICE ($/h), SPOT=1
-# (le projet AWS interdit le Spot pour l'instant).
+# (Spot uniquement, plafond de 1 $/h et durée maximale de 12 h).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 export AWS_PROFILE=${AWS_PROFILE:-smallai}
 export AWS_REGION=eu-north-1
 BUCKET=smallai-lab-631245464763
-TYPE=${TYPE:-c7a.4xlarge}
-DISK=${DISK:-40}
+TYPE=${TYPE:-c7a.16xlarge}
+DISK=${DISK:-100}
 MAX_HOURS=${MAX_HOURS:-12}
 IDLE_MIN=${IDLE_MIN:-20}
-MAX_PRICE=${MAX_PRICE:-4}
-SPOT=${SPOT:-0}
+MAX_PRICE=${MAX_PRICE:-1}
+SPOT=${SPOT:-1}
 SPOT_MAX=1.00
 KEY=$HOME/.ssh/smallai_ed25519
 KEYNAME=smallai
@@ -151,6 +151,9 @@ EOF
 }
 
 cmd_up() {
+  [ "$SPOT" = 1 ] || die "Spot obligatoire : le tarif à la demande est désactivé"
+  awk -v p="$MAX_PRICE" 'BEGIN {exit !(p > 0 && p <= 1)}' || die "MAX_PRICE doit être compris entre 0 et 1 $/h"
+  [[ "$MAX_HOURS" =~ ^[0-9]+$ ]] && [ "$MAX_HOURS" -ge 1 ] && [ "$MAX_HOURS" -le 12 ] || die "MAX_HOURS doit être compris entre 1 et 12 heures"
   [ -z "$(state id)" ] || die "une machine existe déjà ($(state id)) : lab/tools/cloud.sh down"
   cmd_init
   local p
