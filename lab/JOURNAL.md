@@ -87,6 +87,11 @@ deux réglages ; à 2 joueurs, 100 donnes donnent ±6,9 points. Les réglages `w
 été choisis sur 200 donnes contre Normal avec d'anciens réseaux, dans le bruit (`w=0.5`/`1` :
 +55,4/+53,1, ±2,7 chacun) : ils ne sont pas établis.
 
+Face à Difficile, le score est saturé autour de +40 : en P1, n=80 et n=200 y font jeu égal
+(−1,1 ± 1,8) alors que n=80 perd de 6,4 ± 2,1 contre n=200. Difficile ne sert plus qu'à vérifier
+l'absence de régression et à tenir la place des IA du jeu dans les tables mixtes ; la force se
+compare entre joueurs forts.
+
 ### Recherche et premiers apprentissages
 
 | Essai | Résultat utile | Conséquence |
