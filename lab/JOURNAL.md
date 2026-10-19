@@ -1,665 +1,418 @@
-# Journal de l'IA hors jeu
+# IA SmallMobile : résultats utiles et plan d'expériences
 
-Objectif : l'IA de SmallMobile la plus forte possible, sans limite de temps ni de calcul, hors du
-jeu (elle peut réfléchir aussi longtemps qu'elle veut). Couvre toutes les tables : 2 à 5 joueurs,
-cartes générées.
+État au 19 octobre 2026. Ce document remplace le journal chronologique ; les anciens détails
+restent dans Git. Les résultats ci-dessous ont été mesurés. Les étapes P0 à P5 sont un plan
+à exécuter : la réécriture du document ne vaut pas réalisation de ces étapes.
 
-Règle d'honnêteté : l'IA sait tout ce qu'un joueur humain attentif peut savoir, rien de plus.
-- Elle ne lit ni l'ordre caché des pioches ni les dés à venir (`know::determinize` les retire).
-- Elle connaît l'ordre des cartes rendues sous la pioche quand un peuple disparaît (c'est public).
-- Elle connaît les pièces de tous : cachées dans l'interface, elles se recalculent exactement à
-  partir de ce qui est annoncé (5 au départ, prix et pièces de chaque choix de peuple, gain de
-  chaque tour). Un humain qui compte les connaît aussi.
+## Objectif et priorité
 
-Méthode visée (voir le plan) : recherche arborescente (MCTS) sur des mondes possibles, guidée par
-un réseau de neurones sur le graphe des régions, entraîné par auto-apprentissage (style AlphaZero).
-Simulation en Rust (`lab/`), entraînement en Python (PyTorch).
+Construire l'IA la plus forte possible sur les cartes générées, à **2, 3, 4 et 5 joueurs**.
+Le labo peut chercher longtemps ; la version du jeu doit aussi être évaluée au temps de
+réflexion disponible sur mini. Conserver ces deux mesures de force.
 
-Commandes (depuis la racine) :
+**Prochain levier : apprendre politique et valeur sur du jeu fort, après avoir fiabilisé les
+mesures et choisi une référence parmi les Expert.** Une génération identique à gen8 a peu de
+rendement. L'adaptation aux adversaires mérite un essai séparé ; sa réussite ne doit pas
+conditionner le lancement de ce nouvel apprentissage.
 
+Règle d'honnêteté : connaître seulement ce qu'un humain attentif peut savoir. Les scores se
+reconstituent à partir des gains annoncés. Le contenu des pioches et l'ordre des cartes rendues
+sont publics ; leur ordre caché et les dés à venir doivent être échantillonnés, jamais consultés
+pour décider. Voir `brain/src/know.rs` et le correctif P0.
+
+## Système actuel et témoins
+
+- `kernel/` : règles, simulation, cartes, IA Facile/Normale/Difficile.
+- `brain/` : recherche guidée par réseau, commune au labo et à l'Expert. Arbre de suites
+  d'actions en boucle ouverte, mondes possibles, sélection PUCT ; chaque joueur maximise sa
+  propre valeur. Les placements sont regroupés en quelques plans candidats.
+- `lab/` : arène, auto-apprentissage, cibles de valeur ; `lab/py/` : entraînement PyTorch.
+- Réseau : graphe des régions, 4 couches de largeur 64 ; 77 entrées par région, 700 globales,
+  448 clés d'actions. Sorties : politique, victoire par joueur, pièces encore à gagner.
+  Inférence Rust AVX2/FMA ; concordance Python/Rust déjà vérifiée à environ 5·10⁻⁵.
+- Expert livré : `lab/nets/gen8.bin`, via `target/release/expert` et `src/server/expert.ts`.
+  `bun run kernel:build` construit le noyau WebAssembly et cet exécutable.
+- Archives réelles : `data/games/`, graines, actions et temps de décision ; résumé par
+  `bun lab/tools/games.ts`. Les quelques parties humaines disponibles ne suffisent pas encore
+  à entraîner un modèle des humains.
+
+Réglage livré, à garder comme témoin figé :
+
+```text
+az:net=lab/nets/gen8.bin,n=200,w=0.5,c=2.5,roll=1,depth=3,rp=2
 ```
-cargo build --release -p smallmobile-lab
-./target/release/lab bench --agent normal
-./target/release/lab arena --hero hard --field normal --deals 1000
-cargo test -p smallmobile-lab
-```
 
-Lecture de l'arène : format « duplicate ». Chaque donne (carte, pioches, dés) est rejouée en
-mettant le joueur testé à chaque place, face au reste de la table. « Attendu » est le taux de
-victoire à force égale (1/n). L'écart à l'attendu, toutes tables confondues, résume la force.
-
----
-
-## 2026-10-17 — Étape 0 : banc d'essai
-
-Fait :
-- crate `lab/` dans l'espace de travail, sans toucher au noyau ;
-- `table` : les mêmes cartes que le jeu (`mapgen::generate`), résultat d'une partie (pièces, puis
-  jetons sur la carte pour départager, comme `ranking` dans l'interface) ;
-- `know` : suivi des cartes connues au fond des pioches, et `determinize` (monde possible : ordre
-  caché des pioches mélangé, dés réinitialisés) ;
-- `moves` : les coups regroupés pour la recherche. Une décision = un coup : choix du peuple,
-  déclin, chaque conquête / dé / abandon / sort / dragon, fin des conquêtes ; la fin de tour est un
-  seul coup (héros, forteresse, campements posés selon la menace, puis un placement parmi les 6
-  plans du noyau, paix des Diplomates, déclin des Robustes) ; la défense : 2 plans ;
-- `agent` : IA du jeu (Facile, Normal, Difficile) vues à travers un monde possible, et un joueur au
-  hasard ; `arena` : parties en parallèle, format duplicate ;
-- tests : chaque coup proposé est jouable ; le fond connu des pioches est exact.
-
-Mesures (un cœur, carte générée comprise) :
-
-| table | Normal, ms/partie | Difficile, ms/partie | coups/partie |
-| --- | --- | --- | --- |
-| 2 joueurs | 0,85 | 114 | ~110 |
-| 3 joueurs | 1,3 | 317 | ~160 |
-| 4 joueurs | 1,8 | 565 | ~200 |
-| 5 joueurs | 2,3 | 839 | ~225 |
-
-Sur 20 cœurs : de l'ordre de 10 000 parties Normal par seconde. Le moteur n'est pas le goulot.
-
-Étalons (taux de victoire du premier contre une table du second, attendu à force égale entre
-parenthèses) :
-
-| | 2 j. | 3 j. | 4 j. | 5 j. | écart total |
-| --- | --- | --- | --- | --- | --- |
-| Normal contre hasard | 100 % | 100 % | 98 % | 100 % | +71 pts |
-| Normal contre Facile | 87 % (50) | 68 % (33) | 64 % (25) | 60 % (20) | +38 pts |
-| Difficile contre Normal | 85 % (50) | 54 % (33) | 42 % (25) | 32 % (20) | +19 pts |
-| Normal contre Difficile | 15 % (50) | 21 % (33) | 19 % (25) | 16 % (20) | −11 pts |
-| Normal contre Normal | 49 % | 35 % | 25 % | 20 % | +0,4 pt (contrôle) |
-| Difficile qui voit tout contre Difficile | 55 % | 29 % | 25 % | 22 % | +0,4 pt |
-
-(1000 donnes, sauf hasard 400 et Normal contre Difficile / voit tout 400 ; ± 2 à 4 points.)
-
-Constats :
-- le contrôle Normal contre Normal tombe pile sur l'attendu : l'arène est juste ;
-- l'IA Difficile est nettement plus forte que Normal à 2 joueurs, beaucoup moins à 5 ;
-- voir les pioches et les dés n'apporte rien de mesurable à l'IA Difficile : la version honnête
-  sert d'étalon sans perte.
-
-Prochaine étape : recherche (MCTS) sur mondes possibles, sans réseau, avec l'IA Normal pour finir
-les parties simulées. Premier but : battre nettement l'IA Difficile.
-
-## 2026-10-17 — Étape 1 : recherche sans réseau (MCTS)
-
-`mcts` : recherche Monte-Carlo sur mondes possibles « en boucle ouverte ». Chaque itération tire
-un monde (ordre caché des pioches, dés), descend l'arbre des suites de coups, essaie un coup
-nouveau, puis finit la partie avec l'IA Normal pour tout le monde. Plusieurs joueurs : chacun
-maximise sa propre récompense (max^n), et un coup possible dans certains mondes seulement est jugé
-sur ces mondes-là (UCB avec disponibilité). Un coup en plus à la fin de tour : « finir comme l'IA
-Normal » (son placement appris), en plus des 6 plans.
-
-Premier essai, 500 itérations par décision contre l'IA Difficile (100 donnes) :
-
-| | 2 j. | 3 j. | 4 j. | 5 j. | écart total |
-| --- | --- | --- | --- | --- | --- |
-| MCTS n=500 contre Difficile | 60 % (50) | 35 % (33) | 40 % (25) | 36 % (20) | +12 pts |
-
-Réglages, 300 itérations contre l'IA Normal (100 donnes, ± 4 à 5 points) — c : exploration,
-w : poids de la victoire dans la récompense (le reste : avance en pièces, sigmoïde d'échelle 8) :
-
-| c \ w | 0 | 0,5 | 1 |
-| --- | --- | --- | --- |
-| 0,3 | **79 %** (+51 pts) | 72 % (+44) | 65 % (+36) |
-| 0,7 | 74 % (+46) | | |
-
-Constats :
-- la recherche bat déjà l'IA Difficile, surtout à 4-5 joueurs, où l'IA du jeu est la plus faible ;
-- récompenser l'avance en pièces plutôt que la seule victoire rend les simulations bien plus
-  informatives (la victoire seule est trop bruitée sur des fins de partie jouées par l'IA Normal) ;
-- peu d'exploration (c=0,3) vaut mieux.
-
-Coût : une décision à 200 itérations prend ~50 ms à 2 joueurs, plus à 5.
-
-## 2026-10-17 — Étape 2 : réseau de neurones et auto-apprentissage (mise en place)
-
-- `encode` : la position vue du joueur qui agit, 77 entrées par région et 700 pour la partie,
-  toutes de petits entiers (un octet). Test : deux mondes possibles donnent exactement le même
-  encodage, le réseau ne peut donc rien savoir de caché ;
-- réseau sur le graphe des régions (`lab/py/model.py`, recalculé à l'identique en Rust par
-  `net.rs`, vérifié par `lab/py/check.py` : écart 5·10⁻⁵) : chaque région échange avec ses
-  voisines et avec un résumé de la partie, 4 couches de 64 ; sorties : a priori de chaque coup
-  (448 clés), probabilité de victoire de chaque joueur, pièces qu'il gagnera encore ;
-- calcul en Rust sur le processeur (AVX2/FMA) : ~85 µs par position pour 64 × 4 couches, soit
-  moins qu'une fin de partie jouée par l'IA Normal (~250 µs) ;
-- `az` : recherche guidée par le réseau (PUCT, comme AlphaZero), même arbre en boucle ouverte ;
-- `selfplay` : parties d'entraînement, 5,7 Ko par position ; tirage des coups selon les visites
-  pendant les 2 premières manches ; « playout cap randomization » de KataGo disponible ;
-- `lab analyze` : le meilleur coup d'une vraie partie (exportée du serveur par
-  `lab/tools/export-room.ts`), avec la chance de victoire estimée de chaque coup ;
-- PyTorch 2.14 pour ROCm 7.14 sur la RX 9070 XT (16 TFLOPS fp32) : `lab/py/setup.sh`.
-
-Génération 0 : 6 000 parties de MCTS (n=200, c=0,3, w=0) contre lui-même, toutes tables,
-~250 000 positions par heure.
-
-## 2026-10-17 — Premiers réseaux : ce qui ne marchait pas, et pourquoi
-
-Réseau d'essai sur les 66 000 premières positions de la génération 0 (~500 parties) :
-- la valeur apprend (Brier 0,65 → 0,36), la politique presque pas : les cibles de MCTS sont
-  presque uniformes (9,5 coups en moyenne, le plus visité n'a que 33 % des visites) ;
-- MCTS lui-même ne choisit le même coup que dans 43 % des cas sur deux recherches indépendantes,
-  même à 1 000 itérations : beaucoup de coups se valent vraiment (l'ordre des conquêtes, par
-  exemple). La politique de ce jeu est floue par nature ; seule la force de jeu fait foi ;
-- la recherche guidée par ce réseau perd lourdement contre l'IA Normal (4 % de victoires, −24
-  points) : elle passe en déclin un tour sur deux. En cours de tour, les pièces du tour ne sont pas
-  encore comptées ; le déclin finit le tour et les encaisse : un réseau mal entraîné le préfère.
-
-Corrections, mesurées contre l'IA Normal (40 donnes, même graine, ± 8 points) :
-
-| recherche guidée (200 itérations) | écart à l'attendu |
+| Paramètre | Sens |
 | --- | --- |
-| réseau d'essai, victoire seule | −24 |
-| réseau d'essai, avance en pièces prévue (w=0) | −16 |
-| réseau pré-entraîné sur l'IA Normal, w=1 | +11 |
-| idem + fins simulées (roll=1) | +26 |
-| idem + valeurs normalisées dans chaque nœud (MuZero) | +40 |
-| idem, c=2,5 | **+42** |
-| réseau pré-entraîné seul, valeurs normalisées | +12 |
-| MCTS (n=200, c=0,3, w=0), pour comparer | +36 |
+| `n` | Itérations de recherche par décision |
+| `w` | Poids de la victoire ; le reste est une sigmoïde de l'avance sur le meilleur rival |
+| `c` | Exploration PUCT ; normalisation des valeurs par nœud activée par défaut |
+| `roll` | Part des fins simulées dans l'évaluation ; 0 = réseau seul |
+| `depth` | Nombre de **tours de joueur**, puis évaluation par le réseau ; 0 = fin complète |
+| `rp=0` | Normal pour tous dans les fins simulées |
+| `rp=1` | Politique du réseau pour tous, sans recherche imbriquée |
+| `rp=2` | Réseau pour soi, Normal pour les adversaires |
+| `rp=3` | Réseau pour soi, modèle adverse tiré selon les croyances |
+| `rt` | Température des coups du réseau dans les fins ; défaut 0, coup préféré |
+| `rolls` | Fins simulées par position nouvelle ; défaut 1 |
 
-- pré-entraînement : 100 000 parties de l'IA Normal (2 ms chacune), 10 % des positions gardées,
-  soit 1,3 million de positions en 2 minutes. Le réseau y apprend à juger une position et imite
-  l'IA Normal (78 % de coups identiques) ;
-- normalisation : les écarts de valeur entre coups (quelques centièmes) étaient écrasés par le
-  terme d'exploration ; la recherche jouait presque toujours le coup de l'a priori, donc celui de
-  l'IA Normal. Ramenées entre 0 et 1 dans chaque nœud, les valeurs reprennent la main ;
-- fins simulées (le premier AlphaGo) : la valeur d'une position nouvelle mêle le réseau et une fin
-  de partie jouée par l'IA Normal. Avec un réseau encore jeune, ça aide beaucoup.
+Sur mini (i5-8500T, un cœur), l'Expert livré prend environ 80 à 250 ms par décision,
+médiane 170 ms. Ce sont des repères mesurés, pas une garantie de latence.
 
-La recherche hybride égale déjà MCTS, avec un réseau qui ne fera que progresser.
+## Résultats à retenir
 
-## 2026-10-18 — Le jugement du réseau est le maillon faible
+### Comment lire les mesures historiques
 
-Génération 1 : l'hybride (a priori du réseau + fins simulées) joue contre lui-même. Premier
-réseau gen1 : gen0 (2 000 parties MCTS) appris en partant du réseau pré-entraîné.
+L'arène rejoue chaque donne à toutes les places du joueur testé, face au reste de la table.
+À force égale, sa probabilité de victoire est 1/n. « Écart » désigne les points de victoire
+au-dessus de cet attendu, **pondérés par le nombre de parties**. À nombre de donnes égal par
+taille, les tables de 5 joueurs pèsent donc plus que celles de 2. Le nombre de donnes indiqué
+est le total sur les tailles, sauf mention contraire.
 
-Mesures contre l'IA Normal (60 donnes, graine 21, ± 7 points) ; « profondeur » : la fin simulée
-s'arrête après ce nombre de tours de joueur et le réseau juge la suite :
+Les anciens intervalles ne regroupent pas les parties par donne. Les graines 61/62 ont beaucoup
+servi à sélectionner les réglages. P0/P1 doivent confirmer les résultats avec une mesure
+adaptée et des graines inédites.
 
-| réseau | fin simulée complète | profondeur 5 | profondeur 2 | réseau seul |
-| --- | --- | --- | --- | --- |
-| pré-entraîné (IA Normal) | | +33 | +26 | +17 (100 donnes) |
-| gen1 (MCTS seul) | **+51** | +20 | −3 | −11 (100 donnes) |
-| gen1b (MCTS + 30 % Normal, 2 passes) | +45 (100 donnes) | | +24 | +13 |
+### Recherche et premiers apprentissages
 
-- gen1 a appris par cœur ses 2 000 parties : ~130 positions par partie partagent le même
-  résultat, le réseau retient les parties au lieu de juger. La validation tirait des positions au
-  hasard, donc dans les mêmes parties : elle ne le voyait pas. Elle se fait maintenant par blocs de
-  parties entières ;
-- mêler des parties de l'IA Normal (100 000 parties différentes) évite l'apprentissage par cœur
-  (gen1b), mais le jugement reste « de niveau Normal » ;
-- pour guider l'hybride, les a priori appris sur des recherches (gen1, plus ouverts) valent mieux
-  que l'imitation de l'IA Normal (gen1b) : plus d'exploration, et les fins simulées font le reste.
-
-Correctif de fond : des cibles moins bruitées. La recherche suit maintenant aussi les pièces
-finales attendues de chaque joueur (moyenne sur ses ~200 simulations), enregistrées avec chaque
-position (format `*.v2.bin`). Le réseau apprend sur un mélange du résultat réel et de cette
-attente (`--q-weight 0.5`), bien plus stable qu'une partie unique (exemple : attendu 116 et 98,
-réel 119 et 93).
-
-Génération 2 : 5 000 parties de l'hybride (gen1, fins complètes) au nouveau format, 166 000
-positions ; gen2 apprend gen0 + gen1 + 10 % de l'IA Normal, en partant de gen1 (350 parties contre
-l'IA Normal) :
-
-| réseau | fin simulée complète | profondeur 5 | réseau seul |
-| --- | --- | --- | --- |
-| gen1 | **+52** | +20 | −11 |
-| gen2 | +45 | +31 | −1 |
-
-Pas de progrès : le réseau se trompe d'environ 9 pièces par position, et toujours dans le même
-sens, alors que les coups ne se départagent souvent que de 1 à 3 pièces. Une fin simulée est plus
-bruitée, mais sans biais : sur 200 simulations, ses erreurs se compensent.
-
-## 2026-10-18 — Des positions jugées par 32 fins simulées
-
-`lab label` : l'IA Normal joue des parties (10 % de coups au hasard, pour couvrir les positions
-étranges que visite la recherche) ; une position sur dix est jugée par la moyenne de 32 fins de
-partie, chacune dans un monde possible honnête. Cible de valeur presque exacte, sans cible de
-politique : `train.py` masque l'une ou l'autre selon la source (`dossier:policy` : politique
-seule).
-
-`label1` : 125 000 parties, 1,96 million de positions jugées en 63 minutes (518 par seconde).
-
-gen3 : la valeur apprise sur `label1` seul, la politique sur les recherches de gen0 et gen1
-(`:policy`), en partant de gen1 ; 2,4 millions de positions, 6 passes, 9 minutes. Mesures contre
-l'IA Normal (100 donnes, graine 31, 350 parties, ± 7 points), recherche guidée c=2,5 :
-
-| recherche | gen1 | gen2 | gen3 | durée (gen3) |
-| --- | --- | --- | --- | --- |
-| n=200, fin simulée complète | +52 | +45 | +52 | 194 s |
-| n=200, profondeur 5 | +20 | +31 | **+54** | 88 s |
-| n=200, profondeur 2 | −3 (60 donnes) | | +44 | 59 s |
-| n=400, profondeur 2 | | | +44 | 121 s |
-| n=200, réseau seul | −11 | −1 | +28 | 21 s |
-| n=800, réseau seul | | | +32 | 93 s |
-
-- le jugement appris sur des fins simulées moyennées vaut enfin quelque chose : la fin simulée
-  s'arrête après 5 tours de joueur sans rien perdre, deux fois plus vite ;
-- le réseau seul passe de −1 à +28, mais profite peu de plus d'itérations (+32 à n=800) : son
-  jugement reste en deçà de quelques tours joués pour de vrai ;
-- correctif : la validation faisait la moyenne par lot, faussée quand un lot n'a presque pas de
-  cible de politique ; elle pondère maintenant par le nombre de positions de chaque cible.
-
-Meilleure recherche à ce stade : gen3, n=200, profondeur 5 (+54 en 88 s).
-
-## 2026-10-18 — Réseau plus gros, entraînement plus long, réglages : plateau
-
-Mêmes données que gen3, 20 passes au lieu de 6 :
-
-- gen3l (64×4, depuis gen1, 33 min) : valeur en validation 0,674 (elle baisse jusqu'au bout),
-  politique figée dès la 5e passe (ses 450 000 positions sont trop peu) ;
-- gen3b (128×6, depuis zéro, 51 min) : 0,678, et sa politique se dégrade (apprentissage par
-  cœur) ; la recherche est 3,3 fois plus lente.
-
-Contre l'IA Normal (200 donnes, graine 41, 700 parties, ± 3 % de victoires) :
-
-| réseau | profondeur 5 | réseau seul |
+| Essai | Résultat utile | Conséquence |
 | --- | --- | --- |
-| gen3 | +50 | +28 |
-| gen3l | +50 | +31 |
-| gen3b | +49 | +28 |
+| Difficile contre Normal, 1 000 donnes | 85 % à 2 joueurs, 32 % à 5 ; écart global +19 | Normal est trop faible pour départager les modèles récents |
+| MCTS sans réseau, n=500 contre Difficile, 100 donnes | Écart +12 | La recherche apporte déjà un gain |
+| Premiers réseaux sur quelques milliers de parties MCTS | Valeur fragile, politique diffuse, déclin trop fréquent | Beaucoup de positions corrélées ne remplacent pas des parties diverses |
+| Pré-entraînement sur 100 000 parties Normal, puis recherche hybride | La normalisation des petites différences de valeur améliore fortement la recherche | Garder une référence hybride et surveiller les échelles |
+| Valeur apprise sur 32 fins Normal moyennées (`label1`) | gen3 : +54 contre Normal à profondeur 5, contre +52 en fins complètes, environ deux fois plus vite | Les cibles moyennées rendent les recherches tronquées efficaces |
+| Réseau 128×6 ou 20 passes sur les mêmes données | Pas de gain convaincant en jeu ; grand réseau 3,3 fois plus lent | Faible priorité à agrandir le réseau avec ces mêmes cibles |
+| Plus de données `label`, poids des pièces multiplié par quatre | Erreur d'avance autour de 7 pièces, presque inchangée | Répéter cette recette a peu de rendement |
 
-Ce ne sont ni la taille du réseau ni la durée d'entraînement qui limitent, mais les données.
+La validation des premiers essais mélangeait les positions des mêmes parties. Le découpage
+par blocs l'a améliorée, mais la séparation stricte par partie reste à faire (P0).
 
-Réglages de la recherche (gen3l, n=200, mêmes donnes ; référence profondeur 5, c=2,5, w=0 : +50) :
+### Fins simulées et modèle des adversaires
 
-| variante | écart |
+Gen6 contre Difficile, 1 000 donnes, `n=200,depth=5,w=0.5` :
+
+| Réglage | Écart |
 | --- | --- |
-| profondeur 3 | +49 |
-| profondeur 8 | +55 |
-| roll=0,5 (moitié réseau, moitié fin simulée) | +50 |
-| c=1,5 / c=4 | +52 / +52 |
-| w=0,5 / w=1 (probabilité de victoire dans la valeur) | +55 / +53 |
-| w=0,5, s=4 / s=16 | +53 / +54 |
-| w=0,5, profondeur 8 | +56 |
+| Normal pour tous (`rp=0`) | +32,8 |
+| Réseau pour soi (`rp=2,rt=0`) | +39,2 |
+| Réseau pour soi, coups échantillonnés (`rt=0.5`) | +37,1 |
 
-Tout se tient entre +49 et +56 : contre l'IA Normal (84 % de victoires), la mesure sature et ne
-départage plus les réglages fins. Il faut un adversaire plus fort.
+Le gain de `rp=2` est confirmé ; celui de `rt=0.5` sur un petit échantillon ne l'était pas.
+Avec `rp=2`, les profondeurs 3/5/8 donnent +38,0/+39,2/+38,8 : approfondir était peu rentable
+dans ce contexte. À profondeur 5, n=400/800 donne +40,0/+42,0, avec davantage de calcul.
 
-## 2026-10-18 — gen4 : la politique des recherches de gen3
+**Résultat déterminant : gen8 parmi les Expert**, 400 donnes, graine 71. Adversaires : gen8
+avec le réglage livré (`rp=2`, 200 itérations, profondeur 3).
 
-Parties de gen3l contre lui-même (n=200, profondeur 5, bruit 0,25, la moitié des coups cherchés à
-fond et enregistrés, les autres en 50 itérations) : 12 000 parties, 810 000 positions, 2 h 15.
-gen4 : la valeur sur `label1`, la politique sur ces recherches et celles de gen1, depuis gen3l,
-10 passes (précision de la politique en validation : 42 %).
+| Joueur testé | 2 j. | 3 j. | 4 j. | 5 j. | Écart |
+| --- | --- | --- | --- | --- | --- |
+| `rp=2`, témoin | 49,0 % | 33,3 % | 27,6 % | 16,9 % | −0,5 |
+| `rp=1`, réseau pour tous | 65,0 % | 51,0 % | 37,4 % | 32,2 % | +13,8 |
+| `rp=1,rt=0.5` | 64,0 % | 51,5 % | 41,9 % | 27,7 % | +13,5 |
 
-Contre l'IA Difficile (200 donnes, graine 51 ; n=200, profondeur 5, w=0,5) :
+Dans l'autre sens, `rp=2` parmi des `rp=1` fait −7,0. Mais contre Difficile, `rp=1` fait +34,6,
+contre +42,4 pour `rp=2` sur la graine 61. Le classement dépend fortement des adversaires.
+Battre davantage Difficile ne suffit plus à démontrer un progrès général.
 
-| réseau | écart |
+### Progression des réseaux et rendement du calcul
+
+Contre Difficile, `n=200,depth=3,rp=2,w=0.5,c=2.5` :
+
+| Réseau | 1 000 donnes, graine 61 | 4 000 donnes, graines 61 et 62 |
+| --- | --- | --- |
+| gen6 | +38,0 | — |
+| gen7 | +40,9 | +39,9 |
+| gen8 | +42,4 | +40,9 |
+
+Sur 1 200 donnes dans chaque sens, gen8 parmi des gen7 fait +1,6 ; gen7 parmi des gen8 fait
+−1,4. Le gain de gen8 est modeste, autour d'un point contre Difficile sur le grand ensemble.
+La recette rapporte moins ; cela ne prouve pas un plafond de l'architecture.
+
+Gen8 contre Difficile, 1 000 donnes, graine 61 :
+
+| Réglage | Écart | Observation |
+| --- | --- | --- |
+| `rp=2`, n=200 / 100 / 50 / 25, profondeur 3 | +42,4 / +41,6 / +37,6 / +35,1 | n=100 intéressant pour la latence, à confirmer face aux Expert |
+| `rp=0`, n=200, profondeur 3 | +37,1 | Environ le coût de `rp=2,n=100`, moins fort contre Difficile |
+| `roll=0`, n=200 / 800 / 3 200 | +33,2 / +35,5 / +36,6 | Comparaison parmi les Expert et à temps égal encore manquante |
+
+Sur gen6, quatre fins de 5 tours par feuille donnaient +33,5 contre Difficile, contre +30,8
+pour une seule, au prix d'environ trois fois plus de temps. Quatre fins complètes donnaient
++30,7. L'erreur de valeur était d'environ 6,9 pièces, contre 1,7 de bruit pour ses cibles.
+**Cela limite l'intérêt de moyenner davantage ces fins ; cela n'établit pas que la valeur
+serait suffisante face aux Expert.** Moyenner ne corrige pas un modèle adverse inadéquat.
+
+### Données et modèles à réutiliser
+
+Les dossiers désignent le générateur : `data/gen7` contient les parties de gen7 qui ont servi
+à entraîner gen8. Données volumineuses et checkpoints `.pt` : à retrouver sur mini et dans
+le bucket. Réseaux exportés `.bin` : `lab/nets/`.
+
+| Source | Usage et provenance |
 | --- | --- |
-| gen3l | +27,5 |
-| gen4 | +33,1 |
+| `normal`, `gen0`, `gen1` | Amorçage : Normal, MCTS, premières recherches hybrides |
+| `label1` | Environ 1,96 million de positions issues de Normal avec exploration |
+| `label2`, `label3`, `label4` | Positions issues de gen3l, gen4, gen5 ; 60 000, 60 000, 80 000 parties sources |
+| Tous les `label1` à `label4` | Valeur calculée par **32 fins jouées par Normal**, même si la position vient d'un Expert |
+| `gen6` | 20 000 parties, 1,42 million de positions ; `rp=2`, n=200, profondeur 3 |
+| `gen7` | 20 000 parties, 1,48 million de positions, environ 8 Go ; même recette |
+| gen8 | Depuis gen7 ; valeur sur `label1` à `label4`, politique sur `gen7:policy` et `gen6@0.5:policy`, 8 passes |
 
-Face à face, réseau seul (n=200, w=0,5 ; 200 donnes) : gen4 contre des gen3l +2,1, gen3l contre
-des gen4 −1,4. Léger mieux.
+Les générations récentes gardent 50 % des décisions cherchées à fond, les autres à 50 itérations,
+avec bruit 0,25 pour les recherches complètes. Générer 20 000 parties prenait environ une heure
+sur 64 cœurs ; entraîner gen8 environ 78 minutes. Ce sont des repères pour l'ancienne recette,
+pas une estimation des fins entièrement jouées par le réseau.
 
-`lab label --agent` : les positions jugées peuvent venir de parties d'un autre joueur. `label2` :
-60 000 parties jouées par gen3l (n=50, réseau seul, 10 % de coups au hasard).
+Dans `train.py`, `:policy` exclut la valeur d'une source ; `@0.5` sous-échantillonne les blocs,
+ce n'est pas un poids de perte. `--q-weight` mélange résultat et pièces attendues par la
+recherche, sans modifier la cible de victoire. `--lazy` lit les données à la demande.
 
-## 2026-10-18 — Le jugement du réseau n'est plus le facteur limitant
+## Hypothèses à départager
 
-`label3` (60 000 parties de gen4) et `label4` (80 000 parties de gen5) : ~0,8 et ~1,1 million de
-positions jugées. `train.py --lazy` lit les données à la demande (`np.memmap`), plus grosses que la
-mémoire. gen5 : valeur sur label1 + label2, politique sur gen3, depuis gen4 ; gen6 : + label3,
-depuis gen5.
+1. **Ancrage sur Normal.** La valeur apprend ses fins de partie ; la politique apprend des
+   recherches dont les adversaires des fins simulées jouent Normal. C'est une explication
+   plausible du plateau, pas une causalité isolée. `label --agent` ne change que les positions
+   sources : le joueur qui les juge reste Normal.
+2. **Adaptation adverse.** `brain/src/opponents.rs` contient deux modèles, Normal et le coup
+   préféré du réseau, avec mise à jour bayésienne. `search_against` reçoit les croyances,
+   mais leur observation n'est pas branchée dans l'arène ou le jeu. `rp=3` via `search` est
+   donc un mélange 50/50 sans adaptation. Aucun gain adaptatif n'est mesuré.
+3. **Cibles de politique.** Une recherche à 200 itérations peut bien jouer sans suffisamment
+   améliorer la politique qu'elle doit enseigner. Comparer les recettes à coût total comparable.
+4. **Coups absents.** `brain/src/moves.rs` fixe certains placements de pouvoirs et limite les
+   plans de redéploiement/défense. La recherche ne peut choisir un plan absent. L'importance
+   de cette restriction n'a pas été mesurée.
 
-| réseau | contre l'IA Difficile (n=200, profondeur 5, w=0,5) | face-à-face, réseau seul |
+## Protocole commun
+
+- Figer code, poids, paramètres et adversaires. Enregistrer commit, empreinte des poids,
+  graines, machine, commandes, données et durée.
+- Séparer graines d'entraînement, sélection et confirmation. Ne pas utiliser les graines
+  historiques 61/62 comme preuve finale de progrès.
+- Garder le format duplicate à 2/3/4/5 joueurs. Pour A/B face à un adversaire fixé, utiliser
+  les mêmes donnes et places. Exporter les résultats individuels.
+- Présenter victoires par taille, avance/rang en diagnostics, temps moyen et p95 par décision.
+  Nouveau score global : moyenne **à poids égaux des quatre tailles** de l'écart à 1/n.
+  L'ancien score peut être publié séparément ; ne pas mélanger les deux.
+- Rééchantillonner les donnes entières pour les intervalles, séparément par taille, en conservant
+  les paires A/B. Les places d'une donne ne sont pas indépendantes.
+- Présélection : 300 à 500 donnes au total par confrontation. Confirmation du candidat retenu :
+  2 000 à 4 000 nouvelles donnes au total, soit 500 à 1 000 par taille. Fixer ce nombre avant
+  le calcul ; ne pas répéter jusqu'à obtenir un résultat favorable.
+- Promotion : gain sur le score principal choisi à l'avance, intervalle à 95 % de la différence
+  au-dessus de zéro ; examiner chaque taille et le coût. Tolérance proposée de régression :
+  2 points par taille/étalon. Si l'incertitude ne permet pas d'exclure une régression supérieure,
+  le résultat est **indécis**, pas une preuve d'équivalence.
+- Tests ciblés pour chaque modification, puis vérifications Rust du projet avec timeout.
+  Entraînement et campagnes de parties se font sur AWS.
+
+## Plan priorisé
+
+### P0 — Fiabiliser la recherche et les mesures
+
+**Préalable aux nouveaux résultats.**
+
+1. Échantillonner un monde avant l'expansion initiale dans `brain/src/search.rs`. Actuellement,
+   elle précède `determinize` et sa première fin simulée peut utiliser les vrais dés/pioche
+   dans le labo. `Expert::decide` protège déjà son entrée. Ajouter un test d'indépendance aux
+   dés cachés et vérifier arène/auto-apprentissage. Incidence historique inconnue : remesurer
+   les témoins après correction.
+2. Ajouter un identifiant stable de partie aux données ou à un index associé. Remplacer les
+   blocs arbitraires de 256 positions de `lab/py/data.py`. Réserver une validation stable entre
+   générations ; le checkpoint initial ne doit pas l'avoir déjà apprise. Pour les anciens
+   fichiers, régénérer une validation indépendante plutôt que prétendre retrouver exactement
+   des frontières non enregistrées.
+3. Exporter les résultats par donne/place et calculer les différences selon le protocole.
+   Préparer des tables mixtes : l'arène actuelle ne propose qu'un héros contre un champ homogène.
+
+**Livrable :** tests ciblés passants, partitions vérifiables, résultats individuels reproductibles,
+témoins remesurés. Toutes les étapes suivantes utilisent ce code corrigé.
+
+### P1 — Choisir une référence de recherche face aux joueurs forts
+
+**Hypothèse :** le meilleur réglage gen8 dépend du champ adverse et du budget de réflexion.
+
+- Poids figés gen8 ; comparer `roll=1,rp=2,n=200,depth=3`,
+  `roll=1,rp=1,n=200,depth=3` et `roll=0,n=800`.
+  Fixer `w=0.5,c=2.5,rt=0`, sans bruit à la racine. Ces n sont des points de départ,
+  pas une affirmation d'égalité de coût.
+- Adversaires figés : Difficile, gen8 `rp=2`, gen8 `rp=1`. Après présélection, ajouter des
+  tables mixtes avec composition et rotation des places consignées. Confronter aussi les
+  candidats retenus entre eux, dans les deux sens à plusieurs joueurs.
+- Mesurer les temps sur un court échantillon AWS et régler n pour une seconde comparaison
+  à temps moyen comparable, sur la même machine ; contrôler aussi le p95.
+- Ensuite seulement, essayer profondeur 5 pour le meilleur hybride. À 4/5 joueurs, profondeur 3
+  ne couvre pas une rotation complète : tester cette rotation est un essai distinct, avec surcoût.
+
+**Décision :** figer une référence forte pour l'apprentissage et une référence au temps du jeu.
+Si aucun réglage ne domine, garder plusieurs témoins et publier le compromis. Un gain face à
+Difficile seul ne suffit pas pour changer l'Expert livré.
+
+### P2 — Faire apprendre politique et valeur sur du jeu fort
+
+**Priorité d'entraînement. Hypothèse :** renouveler les deux cibles permet de dépasser le plateau.
+Dépend de P0/P1, pas de P3.
+
+1. Pilote de **5 000 parties**, équilibrées entre tailles, enseignant gen8 figé, `rp=1` ou
+   réglage fort retenu par P1. Garder d'abord 200/50 itérations et 50 % de décisions complètes
+   pour ne pas changer simultanément la qualité des recherches. Enregistrer visites, résultats
+   finaux et identifiants de partie.
+2. Nouvelles cibles de valeur : résultats finaux de ces parties, victoire et pièces.
+   Fixer `q-weight=0` dans toutes les branches pour ce premier essai ; les anciennes cibles
+   `label` restent leurs moyennes Normal. Si ces résultats sont trop bruités, essayer ensuite
+   des fins jugées par un réseau figé ou un mélange avec les estimations de recherche.
+   Garder une composante de résultats observés pour ne pas entretenir les erreurs du réseau.
+3. Depuis le même checkpoint gen8, entraîner les quatre branches suivantes.
+
+| Branche | Cible de politique | Cible de valeur |
 | --- | --- | --- |
-| gen5 | +31,0 (n=100 : +29,9 ; n=400 : +34,1) | +1,2 / −3,0 contre gen4 |
-| gen6 | +30,8 | +0,1 / −2,1 contre gen5 |
+| A, témoin réentraîné | Ancienne | Ancienne |
+| B | Nouvelle | Ancienne |
+| C | Ancienne | Nouvelle |
+| D | Nouvelle | Nouvelle |
 
-`lab noise` : chaque position (parties de l'IA Normal) est jugée deux fois par 32 fins simulées ;
-l'écart donne le bruit des cibles, le réseau (gen6) est comparé à leur moyenne. Avance du joueur qui
-agit sur son meilleur rival, en pièces :
+« Ancienne politique » : sources de gen8 ; « ancienne valeur » : `label1` à `label4`.
+Ajouter si nécessaire `:value` : seul `:policy` existe actuellement. Changer une source ne
+signifie pas geler une tête : le tronc reste partagé. Fixer proportions des pertes, nombre de
+mises à jour, exemples par cible et sélection des checkpoints pour rendre les branches
+comparables. Mesurer aussi gen8 intact pour détecter l'effet du simple réentraînement.
 
-| positions | dispersion des cibles | bruit d'un jugement | erreur du réseau |
+**Mesures :** arène P1 ; calibration de victoire et erreur en pièces sur des parties fortes
+indépendantes, par phase et taille. La victoire reste le critère principal.
+
+**Décision :** confirmer la branche gagnante, idéalement avec une seconde graine d'entraînement,
+puis étendre à 20 000 parties. Si le pilote est indécis, examiner variance et apprentissage
+avant d'étendre. Si B gagne et C/D reculent, travailler les cibles de valeur ; si C/D gagnent,
+renouveler la valeur dans la boucle suivante. Si aucune ne progresse, diagnostiquer via P4/P5
+plutôt que répéter mécaniquement des générations.
+
+Après un gain confirmé, comparer l'auto-jeu courant à un mélange comprenant quelques anciennes
+générations figées, avec proportions fixées pour l'essai. Cette petite population vise à
+préserver plusieurs styles, inspirée de la ligue
+[AlphaStar](https://deepmind.google/blog/alphastar-mastering-the-real-time-strategy-game-starcraft-ii/).
+Son efficacité dans SmallMobile reste à mesurer.
+
+### P3 — Mesurer l'intérêt de l'adaptation aux adversaires
+
+**Hypothèse :** reconnaître un style pendant la partie améliore les simulations sur les tables mixtes.
+
+- Brancher des croyances propres à chaque observateur et chaque partie dans l'arène, alimentées
+  par les actions publiques. Réinitialiser entre parties ; utiliser un hasard distinct pour
+  l'observation afin de ne pas perturber celui des décisions.
+- Comparer `rp=1/2`, mélange fixe 50/50, croyances actuelles, et croyances utilisant une
+  distribution de coups du réseau avec confiance limitée.
+- Le modèle actuel récompense seulement le coup préféré. Plusieurs ordres de conquête peuvent
+  se valoir et les coups sont corrélés : quelques accords peuvent produire trop de confiance.
+  Calibrer température/plancher de probabilité sur des parties réservées.
+- Pour les bots connus, ajouter un témoin utilisant leur type pour choisir le modèle de
+  simulation. Ne pas supposer qu'un humain joue comme le réseau.
+- Mesurer victoires, coût d'observation, évolution des croyances et prédiction par adversaire.
+  Une meilleure prédiction sans gain en jeu ne suffit pas.
+
+**Décision :** retenir l'adaptation si elle améliore les tables mixtes sans régression au-delà
+de la tolérance convenue sur les champs homogènes. Sinon garder mélange ou réglages spécialisés.
+Intégration serveur après validation : croyances par partie, transmission des coups observés
+à `expert`, diagnostics dans les archives.
+
+### P4 — Améliorer les cibles enseignées par la recherche
+
+**Hypothèse :** moins de cibles, issues d'une recherche plus forte, valent mieux à coût égal.
+Même enseignant et même modèle adverse dans les deux recettes :
+
+| Recette | Décisions complètes enregistrées | Autres décisions | Itérations moyennes théoriques |
 | --- | --- | --- | --- |
-| toutes | 17,6 | 1,7 | 6,9 |
-| 2 joueurs | 22,0 | 1,8 | 8,6 |
-| 5 joueurs | 15,1 | 1,5 | 5,8 |
-| dernière manche | 20,9 | 0,1 | 2,3 |
-| 6 manches ou plus restantes | 14,2 | 2,4 | 8,6 |
-
-Le réseau se trompe quatre fois plus que le bruit de ses cibles, et ni plus de données (gen3l →
-gen6 : 6,96 → 6,89) ni un poids quatre fois plus fort sur les pièces à l'entraînement n'y changent
-rien.
-
-Mais est-ce ce qui limite la force ? `rolls=K` : K fins simulées par position nouvelle (la première
-dans le monde de l'itération, les autres dans d'autres mondes possibles). gen6 contre l'IA
-Difficile (200 donnes) :
-
-| jugement d'une position nouvelle | écart | durée |
-| --- | --- | --- |
-| 1 fin de 5 tours, puis le réseau | +30,8 | 6 min |
-| 4 fins de 5 tours, puis le réseau | +33,5 | 18 min |
-| 4 fins complètes | +30,7 | 26 min |
-
-Un jugement bien moins bruité n'apporte presque rien : la précision de la valeur ne limite plus.
-Détail contre l'IA Difficile : 2 joueurs 75,5 % (attendu 50 %), 3 joueurs 64 %, 4 joueurs 58,5 %,
-5 joueurs 50,8 % (attendu 20 %).
-
-## 2026-10-18 — Des fins simulées jouées par le réseau
-
-Contre l'IA Difficile (gen6, 200 donnes), plus de calcul aide un peu : n=800 +37,5, profondeur 8
-+34,5, les deux +35,6 (n=200, profondeur 5 : +30,8).
-
-Le réseau seul, sans recherche (n=1, son coup préféré), fait +27,6 contre l'IA Normal et +16,6
-contre l'IA Difficile : il joue bien mieux que l'IA Normal qui joue les fins simulées.
-`rp=1` : le réseau joue les fins simulées pour tout le monde ; `rp=2` : pour le joueur qui
-cherche seulement, l'IA Normal pour les autres ; `rt` : température du tirage des coups.
-Une évaluation du réseau : 72 µs (une décision de l'IA Normal : ~8 µs).
-
-| fins simulées (n=200, profondeur 5) | 2 j. | 3 j. | 4 j. | 5 j. | écart | durée |
-| --- | --- | --- | --- | --- | --- | --- |
-| IA Normal pour tous | 75,5 % | 64,0 % | 58,5 % | 50,8 % | +30,8 | 6 min |
-| réseau pour tous | 93,0 % | 55,7 % | 48,2 % | 44,8 % | +26,4 | 14 min |
-| réseau pour tous, rt=0,5 | 91,0 % | 66,7 % | 62,7 % | 49,6 % | +34,4 | 13 min |
-| réseau pour tous, profondeur 3 | 90,0 % | 60,7 % | 45,2 % | 54,4 % | +29,6 | 9 min |
-| réseau pour moi, Normal pour les autres | 89,0 % | 71,3 % | 63,2 % | 56,2 % | +37,6 | 6 min |
-| idem, rt=0,5 | 86,0 % | 70,7 % | 72,5 % | 58,2 % | **+40,4** | 6 min |
-
-À deux, jouer soi-même fort dans les fins simulées change tout. À plusieurs, ce qui compte est de
-prévoir les adversaires : l'IA Normal ressemble à l'IA Difficile (mêmes heuristiques), un réseau
-qui simule des adversaires à son image se trompe sur eux. `rp=2` prend le meilleur des deux, pour
-le même temps de calcul.
-
-## 2026-10-18 — Point d'étape (le calcul passe sur AWS)
-
-Meilleure IA à ce jour : `az:net=lab/nets/gen6.bin,n=200,w=0.5,c=2.5,roll=1,depth=5,rp=2,rt=0.5`,
-+40 contre l'IA Difficile (200 donnes, graine 51), pour le même calcul que la référence (+31).
-
-Pistes ouvertes, par ordre d'intérêt :
-1. `rp=2` : confirmer sur plus de donnes, puis essayer rt (0,25 ; 1), la profondeur (3, 8) et n
-   (400, 800) ; à n=800 la référence passait de +31 à +37.
-2. Parties d'auto-apprentissage avec cette recherche (politique plus forte), puis gen7 : valeur sur
-   label1 à label4 (label4 pas encore appris), politique sur ces parties.
-3. Le réseau juge mal (erreur ~7 pièces sur l'avance, `lab noise`) mais ce n'est pas ce qui limite
-   la force (`rolls=4` n'apporte que +3) : inutile d'y investir pour l'instant.
-
-Organisation : le calcul part sur des machines AWS (EC2 Spot, processeur seul) ; mini (i5-8500T,
-6 cœurs, sert aussi le jeu) ne fait qu'orchestrer : il garde les données (`lab/data`, 39 Go) et
-les poids, lance les machines, y envoie le travail, rapatrie les résultats et les éteint. Pas de
-calcul sur mini. `lab/py/setup.sh cpu` : entraînement sur processeur ; `train.py --lazy` si les
-données ne tiennent pas en mémoire.
-
-## 2026-10-18 — Les machines AWS
-
-État historique du 18 octobre, avant activation des fonctionnalités avancées. Pour les prochains
-calculs, appliquer la configuration Spot du 19 octobre en fin de journal et `AGENTS.md`.
-
-Compte AWS « nouvelle expérience » : projet SmallAI (compte 631245464763), plan payant, plafond de
-dépense de 50 $/mois (compté avant les crédits). AWS y interdit le Spot (règle
-`DenySpotMarketType`, plan gratuit comme payant ; seule l'activation des « fonctionnalités
-avancées », irréversible, la lève, mais supprime le plafond) : machines à la demande, région
-eu-north-1 (c7a.4xlarge 0,88 $/h, c7a.16xlarge 3,52 $/h). Quota à la demande : 64 vCPU (une
-c7a.16xlarge à la fois).
-
-- `lab/tools/cloud.sh` (profil `smallai`, utilisateur `smallai-orchestrator`) : `job [--type T]
-  [--data D1,D2] [--get chemins] -- 'commande'` lance une machine (Debian 13, Rust, labo compilé,
-  `setup.sh cpu`), copie les données du bucket, calcule, rapatrie, détruit, vérifie qu'il ne reste
-  ni machine, ni disque, ni adresse ; `status` : machines et dépense du mois. Sur la machine,
-  extinction (donc destruction) après 20 min sans calcul et au bout de 12 h quoi qu'il arrive.
-- `lab/data` est copié dans `s3://smallai-lab-631245464763/data` (mini → bucket : ~33 Mo/s), lu
-  gratuitement par les machines (rôle `smallai-worker`, ce seul bucket).
-- Politiques : `lab/tools/aws/`.
-
-Vitesse (`lab label`, 5 min) : c7a.4xlarge (16 cœurs AMD EPYC 9R14) 570 positions/s, i7-12700KF
-518. Installation et compilation : 1 min 20 ; test complet : 6 min, 0,10 $.
-
-## 2026-10-18 — `rp=2` confirmé sur 1 000 donnes
-
-gen6 contre l'IA Difficile, 1 000 donnes (graine 61), n=200, profondeur 5, w=0,5 ; c7a.4xlarge :
-
-| fins simulées | 2 j. | 3 j. | 4 j. | 5 j. | écart | durée |
-| --- | --- | --- | --- | --- | --- | --- |
-| IA Normal pour tous | 80,2 % | 68,1 % | 59,0 % | 51,8 % | +32,8 ± 1,6 | 14 min |
-| réseau pour moi (`rp=2`) | 86,3 % | 76,6 % | 64,5 % | 57,6 % | **+39,2** ± 1,5 | 26 min |
-| idem, rt=0,5 | 87,3 % | 74,8 % | 62,8 % | 53,9 % | +37,1 ± 1,6 | 25 min |
-
-`rp=2` vaut +6 à +7 à tous les nombres de joueurs ; rt=0,5 ne fait pas mieux que rt=0 (l'avance
-sur 200 donnes était du bruit). Sur cette machine, `rp=2` prend deux fois le temps de la référence
-(sur l'i7, autant) : les fins de l'IA Normal y vont deux fois plus vite, le réseau à peine plus.
-Coût : 67 min, 1,01 $.
-
-Autres réglages avec `rp=2` (mêmes 1 000 donnes, c7a.16xlarge, 64 cœurs) :
-
-| réglage | écart | durée |
-| --- | --- | --- |
-| n=200, profondeur 3 | +38,0 | 6 min |
-| n=200, profondeur 5 | +39,2 | (26 min sur 16 cœurs) |
-| n=200, profondeur 5, rt=1 | +35,4 | 8,5 min |
-| n=200, profondeur 8 | +38,8 | 12 min |
-| n=400, profondeur 5 | +40,0 | 17,5 min |
-| n=800, profondeur 5 | **+42,0** | 35 min |
-
-La profondeur ne compte pas (3 vaut 5 et 8, pour moitié moins de calcul) ; tirer les coups du
-réseau au hasard (rt=1) coûte 4 points ; doubler n rapporte ~1,5 point. Coût : 81 min, 4,77 $.
-
-## 2026-10-18 — gen7 : la politique des recherches `rp=2`
-
-Parties de gen6 contre lui-même (n=200, profondeur 3, `rp=2`, bruit 0,25, la moitié des coups
-cherchés à fond et enregistrés, les autres en 50 itérations) : 20 000 parties, 1,42 million de
-positions (`gen6`), 61 min sur 64 cœurs. Compilée pour le processeur (`target-cpu=native`), la
-recherche ne va pas plus vite.
-
-Entraînement sur processeur (64 cœurs) : 63 s par passe sur 811 000 positions, aussi vite que la
-carte graphique. gen7 : la valeur sur label1 à label4, la politique sur `gen6`, depuis gen6,
-8 passes de 8 min (6,1 millions de positions) ; précision de la politique en validation 51 %
-(gen6 : 44 %, sur d'autres parties), brier 0,108.
-
-Contre l'IA Difficile (1 000 donnes, graine 61 ; n=200, profondeur 3, `rp=2`) :
-
-| réseau | 2 j. | 3 j. | 4 j. | 5 j. | écart |
-| --- | --- | --- | --- | --- | --- |
-| gen6 | 85,9 % | 75,1 % | 63,1 % | 56,6 % | +38,0 |
-| gen7 | 89,0 % | 79,4 % | 67,0 % | 57,7 % | **+40,9** |
-
-Presque gen6 à n=800, profondeur 5 (+42,0), pour six fois moins de calcul. Face à face (même
-recherche, 400 donnes) : gen7 contre des gen6 +2,0, gen6 contre des gen7 −3,0. Coût de gen7
-(parties, entraînement, évaluation) : ~11 $.
-
-## 2026-10-18 — Point d'étape (gen7)
-
-Meilleure IA à ce jour : `az:net=lab/nets/gen7.bin,n=200,w=0.5,c=2.5,roll=1,depth=3,rp=2`, +40,9
-contre l'IA Difficile (1 000 donnes, graine 61). Dépense de la journée sur AWS : ~16 $ (crédits
-restants : 160 $) ; `lab/data/gen6` est sur mini et dans le bucket.
-
-Pistes ouvertes, par ordre d'intérêt :
-1. Un tour de plus : parties de gen7 contre lui-même (mêmes réglages que pour `gen6`, 20 000
-   parties, ~1 h), gen8 (valeur sur label1 à label4, politique sur `gen7` et peut-être `gen6`,
-   depuis gen7, 8 passes, ~1 h), puis les mêmes mesures (IA Difficile 1 000 donnes graine 61,
-   face-à-face 400 donnes). ~10 $. Le gain tient-il (+2,9 de gen6 à gen7) ?
-2. La valeur n'apprend plus de label1 à label4 (brier ~0,11 depuis gen5) : de nouvelles positions
-   jugées (`lab label --agent` avec gen7) si elle redevient le facteur limitant.
-3. Mettre cette IA dans le jeu : mesurer le temps d'une décision (n=200, `rp=2`, profondeur 3) sur
-   un téléphone, chercher une version allégée.
-
-## 2026-10-19 — gen8 : un tour de plus
-
-Parties de gen7 contre lui-même, mêmes réglages que pour `gen6` (`lab/runs/gen8-a.sh`) :
-20 000 parties, 1,48 million de positions (`gen7`, 8,0 Go), 66 min sur 64 cœurs.
-
-gen8 (`gen8-b.sh`) : la valeur sur label1 à label4, la politique sur `gen7` et la moitié de `gen6`
-(`gen6@0.5:policy` : les parties de la génération précédente gardées, moins pesantes), depuis gen7,
-8 passes de 9 min (6,9 millions de positions) ; précision de la politique en validation 53,4 %
-(gen7 : 51,0 %, sur d'autres parties), brier 0,106 (0,108).
-
-Contre l'IA Difficile (1 000 donnes, graine 61 ; n=200, profondeur 3, `rp=2`) :
-
-| réseau | 2 j. | 3 j. | 4 j. | 5 j. | écart |
-| --- | --- | --- | --- | --- | --- |
-| gen6 | 85,9 % | 75,1 % | 63,1 % | 56,6 % | +38,0 |
-| gen7 | 89,0 % | 79,4 % | 67,0 % | 57,7 % | +40,9 |
-| gen8 | 90,2 % | 78,2 % | 68,8 % | 60,8 % | **+42,4** ± 1,5 |
-
-Autant que gen6 à n=800, profondeur 5 (+42,0), pour quatre fois moins de recherche. Face à face
-(même recherche, 400 donnes, graine 61) : gen8 contre des gen7 +2,9, gen7 contre des gen8 −1,2
-(gen7 contre gen6 : +2,0 / −3,0). Le gain tient, un peu plus petit (+1,5 contre l'IA Difficile,
-au bord du bruit ; le face-à-face va dans le même sens). Coût : 68 + 78 + 25 min de c7a.16xlarge,
-10,1 $ (parties 4,0, entraînement 4,6, mesures 1,5).
-
-## 2026-10-19 — Point d'étape (gen8)
-
-Meilleure IA à ce jour : `az:net=lab/nets/gen8.bin,n=200,w=0.5,c=2.5,roll=1,depth=3,rp=2`, +42,4
-contre l'IA Difficile (1 000 donnes, graine 61). Dépense du mois sur AWS : ~27 $ (plafond 50 $) ;
-`lab/data/gen7` est sur mini et dans le bucket.
-
-Pistes ouvertes, par ordre d'intérêt :
-1. Encore un tour (gen9 : parties de gen8, politique sur `gen8` + `gen7@0.5`), ~10 $. Les gains
-   diminuent (+2,9 puis +1,5) : 1 000 donnes ne suffiront bientôt plus à les voir (± 1,5) ;
-   mesurer sur 2 000 donnes, ou d'abord gen8 à n=800 pour voir si recherche et réseau s'ajoutent.
-2. La valeur n'apprend presque plus de label1 à label4 (brier 0,106) : de nouvelles positions
-   jugées (`lab label --agent` avec gen8) si elle redevient le facteur limitant.
-3. Mettre cette IA dans le jeu : mesurer le temps d'une décision (n=200, `rp=2`, profondeur 3) sur
-   un téléphone, chercher une version allégée.
-
-## 2026-10-19 — gen8 sur 4 000 donnes : ~1 point de mieux que gen7
-
-3 000 donnes de plus (graine 62), les mêmes pour gen7 et gen8 (`lab/runs/gen8-d.sh`), ajoutées aux
-1 000 de la graine 61 :
-
-| réseau | graine 61 | graine 62 | 4 000 donnes |
-| --- | --- | --- | --- |
-| gen7 | +40,9 | +39,6 | +39,9 |
-| gen8 | +42,4 | +40,4 | **+40,9** ± 0,8 |
-
-Face à face sur 1 200 donnes dans chaque sens : gen8 contre des gen7 +1,6, gen7 contre des gen8
-−1,4. gen8 est meilleur d'environ 1 point : les tours d'auto-apprentissage ne rapportent presque
-plus (+2,9 puis ~+1). Coût : 71 min, 4,2 $.
-
-## 2026-10-19 — L'IA Expert dans le jeu
-
-`brain/` : la recherche guidée par le réseau, partagée par le labo et le jeu (`know`, `moves`,
-`encode`, `net`, `search` viennent du labo, qui les réexporte et joue à l'identique). Le noyau suit
-le fond public des pioches dans l'état (`race_tail`, `power_tail`, ce que suivait `Knowledge`).
-Dans le jeu, l'Expert (gen8, n=200, profondeur 3, `rp=2`) est un programme natif à côté du serveur
-(`brain/src/bin/expert.rs`) ; toutes les parties se jouent sur le serveur, qui les archive
-(`data/games/`, graines, actions, temps de chaque décision ; `bun lab/tools/games.ts`).
-
-Sur mini (i5-8500T, un cœur, natif) : 80 à 250 ms par décision, médiane ~170 ms. Premières
-parties humaines : un duel perdu 55 à 126, une partie à 4 contre trois Expert perdue de 7 pièces.
-
-Moins de recherche (gen8 contre l'IA Difficile, 1 000 donnes, graine 61 ; `gen8-n.sh`) :
-
-| recherche | écart | calcul |
-| --- | --- | --- |
-| n=200, `rp=2` (le jeu) | +42,4 | 1 |
-| n=100, `rp=2` | +41,6 | ½ |
-| n=50, `rp=2` | +37,6 | ¼ |
-| n=25, `rp=2` | +35,1 | ⅛ |
-| n=200, IA Normale pour tous | +37,1 | ½ |
-
-n=100 vaut presque n=200 ; à calcul égal, `rp=2` reste devant. Coût : 12 min, 0,75 $.
-
-## 2026-10-19 — Le modèle des adversaires : l'IA Difficile ne suffit plus comme étalon
-
-Qui joue les adversaires dans les fins simulées ? Mesuré cette fois **parmi des Expert du jeu**
-(gen8, n=200, profondeur 3, `rp=2`), 400 donnes, graine 71 (`gen8-rp.sh`, `gen8-rp2.sh`) :
-
-| recherche du joueur testé | 2 j. | 3 j. | 4 j. | 5 j. | écart |
-| --- | --- | --- | --- | --- | --- |
-| `rp=2` (témoin) | 49,0 % | 33,3 % | 27,6 % | 16,9 % | −0,5 |
-| `rp=1` (le réseau pour tous) | 65,0 % | 51,0 % | 37,4 % | 32,2 % | **+13,8** ± 2,6 |
-| `rp=1, rt=0,5` | 64,0 % | 51,5 % | 41,9 % | 27,7 % | +13,5 |
-
-Dans l'autre sens, `rp=2` parmi des `rp=1` : −7,0. Mais contre l'IA Difficile (graine 61), `rp=1`
-ne fait que +34,6 (`rp=2` : +42,4). Le meilleur modèle d'un adversaire est de le simuler comme ce
-qu'il est : l'IA Normale prévoit très bien l'IA Difficile (mêmes heuristiques), mal un joueur fort.
-Le +42 contre l'IA Difficile surestimait donc `rp=2` en général. Coût : 32 + 35 min, 4,0 $.
-
-AlphaZero pur, sans fin simulée (`roll=0`, le réseau seul juge les positions nouvelles), contre
-l'IA Difficile (graine 61 ; `gen8-roll0.sh`) : n=200 +33,2, n=800 +35,5, n=3 200 +36,6. Le
-jugement du réseau limite encore ; mais comme `rp=1`, `roll=0` simule les adversaires « à son
-image » et n'a pas été mesuré parmi des Expert. Coût : 29 min, 1,8 $.
-
-## 2026-10-19 — Point d'étape (l'Expert dans le jeu)
-
-L'Expert du jeu : gen8, n=200, profondeur 3, `rp=2` ; +40,9 contre l'IA Difficile (4 000 donnes).
-Dépense du mois sur AWS : ~38 $ (plafond 50 $).
-
-Pistes ouvertes, par ordre d'intérêt :
-1. Simuler chaque adversaire selon sa nature : l'IA Normale pour les places d'IA du jeu, le réseau
-   pour les Expert et les humains (aujourd'hui `rp` vaut pour toute la table). Puis mesurer parmi
-   des Expert et contre l'IA Difficile, et passer l'Expert du jeu à ce réglage.
-2. Mesurer désormais les réglages aussi parmi des Expert, pas seulement contre l'IA Difficile (dont
-   `roll=0` à n=800, `rp=1` à profondeur 5).
-3. Les parties humaines archivées (`data/games/`) : le temps réel de l'Expert, puis un modèle des
-   humains pour les fins simulées.
-4. Encore un tour d'auto-apprentissage : ~1 point, ~10 $ ; seulement avec un autre levier.
-
-## 2026-10-19 — Pourquoi les tours d'auto-apprentissage ne rapportent plus : l'ancrage sur l'IA Normale
-
-Les deux cibles du réseau dépendent de l'IA Normale :
-- la valeur s'apprend sur `label1` à `label4`, positions jugées par des fins de partie jouées par
-  l'IA Normale (`lab/src/label.rs`) : le réseau apprend « comment finit la partie si tout le monde
-  joue comme l'IA Normale » ;
-- la politique s'apprend sur des recherches `rp=2`, où les adversaires des fins simulées sont l'IA
-  Normale : le réseau apprend la meilleure réponse à des adversaires moyens.
-
-Dans AlphaZero, la boucle est récursive : chaque génération apprend contre une version d'elle-même,
-plus forte. Ici, la référence reste l'IA Normale : un plafond, d'où des gains qui fondent (+2,9,
-puis ~+1). Et l'IA Difficile, de la même famille, ne suffit plus à mesurer.
-
-Budget : les crédits AWS (123 $ restants ce soir) ; l'ancien plafond de 50 $/mois ne vaut plus
-(AGENTS.md).
-
-En cours (pas encore mesuré) : `brain/src/opponents.rs` devine comment joue chaque adversaire
-pendant la partie. À chacun de ses choix de peuple et de conquête, deux modèles disent ce qu'ils
-auraient fait (l'IA Normale, le coup préféré du réseau) ; Bayes, avec 20 % de coups imprévisibles,
-en tire un crédit par modèle (`Beliefs`). `rp=3` : dans chaque fin simulée, chaque adversaire joue
-selon un modèle tiré d'après ce crédit (`Az::search_against`). Une partie ne donne que 30 à 60
-choix par adversaire : trop peu pour réentraîner un réseau, assez pour reconnaître un style. Sans
-croyances (`search`), `rp=3` tire 50/50.
-
-## 2026-10-19 — Point d'étape (la suite)
-
-Pas de calcul AWS sans l'accord de l'utilisateur pour l'instant. Pistes, dans l'ordre :
-1. Adaptation, en local : brancher `Beliefs` dans l'arène (chaque joueur `az` observe les coups des
-   autres et cherche avec `search_against`), tests, diagnostic (part des choix bien prévus par
-   modèle et par adversaire).
-2. La mesurer (un calcul, ~1 h, 3 à 4 $) : `rp=3` contre `rp=2` et `rp=1`, contre l'IA Difficile,
-   parmi des Expert `rp=2`, parmi des Expert `rp=1`. Réussite : au niveau du meilleur réglage dans
-   chaque cas.
-3. Si elle gagne, dans le jeu : le serveur garde les croyances de chaque partie et transmet au
-   programme `expert` les coups observés depuis sa dernière décision ; les journaux disent à quoi
-   ressemble chaque joueur.
-4. Des simulations plus rapides (doubler n rapporte ~1,5 point) : d'abord mesurer où part le temps
-   d'une décision (quelques secondes sur mini) ; puis, du moins cher au plus cher : réutiliser
-   l'arbre d'une décision à la suivante (une suite de conquêtes repart de zéro à chaque fois), un
-   cache des évaluations du réseau, un réseau plus rapide (entiers 8 bits, ou petit réseau appris à
-   imiter gen8), plusieurs cœurs pour une décision dans le jeu.
-5. Le plus gros levier : désancrer l'auto-apprentissage. Positions jugées par des fins jouées par
-   le réseau (`lab label` avec des fins `rp=1`), parties contre lui-même avec des adversaires à son
-   image (`rp=1` ou `rp=3`), progrès mesuré parmi des Expert (l'IA Difficile en garde-fou).
-   ~10 à 15 $.
-
-
-## 2026-10-19 — AWS : Spot et budget de la semaine
-
-Les fonctionnalités avancées sont activées. Dans SmallAI (631245464763), à Stockholm
-(`eu-north-1`), le quota Standard Spot est de 64 vCPU. Le test `RunInstances` avec `DryRun=true`
-a confirmé les permissions pour une `c7a.16xlarge` Spot ; il ne réserve aucune capacité et ne
-lance aucune machine. L'ancienne interdiction `DenySpotMarketType` n'est plus applicable ici.
-
-Configuration de `lab/tools/cloud.sh` sur mini :
-- Spot obligatoire (`SPOT=1`) ; aucun repli au tarif à la demande, `SPOT=0` est refusé.
-- Par défaut, `c7a.16xlarge` : 64 vCPU / 64 cœurs AMD, 128 Gio de mémoire, disque gp3 de 100 Gio.
-- Prix Spot plafonné à 1 $/h pour le calcul, hors disque, adresse IPv4, S3 et autres frais.
-- Durée maximale de 12 h ; une valeur supérieure est refusée. Extinction après 20 min sans
-  calcul, destruction à l'extinction et suppression du disque. Requête Spot ponctuelle
-  (`one-time`), interruption avec destruction : aucun remplacement automatique.
-
-Priorité de budget confirmée par l'utilisateur : rester dans les crédits, même si cela donne
-moins de 140 euros pour la semaine. Budget global avant crédits `Credits-Semaine-19-25-Oct-2026-110USD`
-créé dans le compte de gestion (051299608012), du 19 octobre 00:00 UTC au 26 octobre 00:00 UTC :
-110 $, avec alertes à 55, 80, 100 et 110 $ envoyées à valche5@valche5.fr. Il remplace le budget
-mensuel de 140 $. AWS Budgets alerte avec retard et ne constitue pas une coupure automatique.
-À la vérification du 19 octobre : 8,31 $ déjà consommés sur cette période, 123,23 $ de crédits
-restants estimés, soit 101,69 $ de dépenses supplémentaires dans ce budget et 21,54 $ de réserve.
-Ces montants sont datés : vérifier à nouveau les coûts et les crédits avant chaque calcul ; les
-crédits ne se renouvellent pas chaque semaine.
-
-Bucket existant : `s3://smallai-lab-631245464763`, environ 58 Go de données. Les derniers poids
-`gen8.pt` et `gen8.bin` sont sur mini dans `lab/nets/`. Aucune machine payante n'a été lancée
-pendant cette configuration. Avant un entraînement Spot long, prévoir des sauvegardes régulières
-et vérifier leur rapatriement : le plafond de durée peut interrompre un calcul non terminé.
+| Référence | 50 % à n=200 | n=50 | 125 |
+| Candidate | 10 % à n=800 | n=50 | 125 |
+
+Mesurer le temps réel, le nombre de décisions et le coût d'entraînement : l'égalité de calcul
+n'est qu'approximative, et la candidate garde moins de positions. Comparer les réseaux à budget
+total comparable ; garder la source de valeur identique pour isoler les cibles de politique.
+
+La distinction entre diversité des parties et qualité des cibles vient de
+[KataGo, section 3.1](https://arxiv.org/html/1902.10565v5#S3.SS1). Si l'essai réussit, étudier
+séparément l'exploration forcée et la correction des cibles de visites de sa section 3.2,
+pour limiter l'apprentissage des coups essayés seulement par exploration.
+
+**Décision :** retenir le meilleur progrès en jeu par heure de calcul. Un meilleur accord avec
+l'enseignant sans gain de victoire ne suffit pas.
+
+### P5 — Plafonds structurels et efficacité du calcul
+
+**Espace des coups :** constituer un ensemble de positions où placement, défense ou pouvoirs
+comptent. Ajouter quelques variantes locales des plans de `brain/src/moves.rs` : déplacement
+d'un jeton, autre région pour un héros/forteresse, autre répartition des campements. Comparer
+leurs suites, puis la force en arène. Vérifier légalité, clés d'actions et compatibilité des
+formats ; de nouvelles clés nécessitent un apprentissage.
+
+**Recherche :** si davantage d'itérations aide toujours peu après P2/P4, examiner le regroupement
+en boucle ouverte. Une même suite d'actions peut mener à des marchés ou dés différents ; tester
+sur un petit cas la séparation des observations publiques avant une refonte de l'arbre.
+
+**Vitesse :** profiler avant de choisir entre cache des évaluations, réutilisation de l'arbre
+entre conquêtes, inférence quantifiée/distillée et plusieurs cœurs. La réutilisation doit tenir
+compte des observations et croyances mises à jour. Pour un cache exact, vérifier des décisions
+inchangées à graine fixée ; pour une approximation, remesurer la force à temps égal.
+
+**Faible priorité aujourd'hui :** réseau plus gros sur les mêmes cibles, nouvelles positions
+jugées uniquement par Normal, nombreuses générations identiques, modèle humain appris sur les
+quelques parties disponibles. Réexaminer si les nouvelles mesures le justifient.
+
+## Les machines AWS
+
+**Aucun calcul lourd sur mini**, qui sert la production. Arène, génération, étiquetage et
+entraînement passent par `lab/tools/cloud.sh`. Une commande par étape, avec timeout estimé
+avant lancement et marge raisonnable ; informer l'utilisateur à chaque étape. Aucun calcul
+AWS sans son accord pour l'instant ; ce plan n'autorise pas une dépense.
+
+Configuration constatée le 19 octobre 2026, à revérifier avant de dépenser :
+
+- SmallAI `631245464763`, profil `smallai`, région `eu-north-1` (Stockholm). Fonctionnalités
+  avancées activées, Spot autorisé, quota Standard Spot 64 vCPU ; une seule `c7a.16xlarge`
+  à la fois. Le DryRun a vérifié les permissions, pas la disponibilité réelle.
+- `cloud.sh` impose Spot sans repli à la demande (`SPOT=0` refusé). Par défaut :
+  `c7a.16xlarge`, 128 Gio de mémoire, disque gp3 de 100 Gio. Plafond de **1 $/h pour le calcul**,
+  hors disque, IPv4, S3 et autres frais. Lire le prix Spot effectif avant de chiffrer une étape ;
+  les anciennes générations à environ 10 $ utilisaient le tarif à la demande.
+- Maximum 12 h par machine, extinction après 20 min sans calcul, destruction à l'extinction
+  avec suppression du disque. Spot ponctuel, interruption avec destruction, aucun remplacement
+  automatique. Sauvegarder les résultats utiles dans S3 au fil des étapes.
+- Bucket `s3://smallai-lab-631245464763/data/`, rôle machine `smallai-worker`, politiques dans
+  `lab/tools/aws/`. Synchroniser ensuite les résultats sur mini.
+- Ne pas modifier `cloud.sh` sur place pendant qu'il tourne : écrire une copie puis la renommer.
+  Après chaque calcul : `cloud.sh status`, vérifier l'absence de ressources restantes, donner
+  la dépense estimée par le script. La facturation AWS arrive avec retard.
+
+Budget global avant crédits `Credits-Semaine-19-25-Oct-2026-110USD`, compte de gestion
+`051299608012` : **110 $ du 19 octobre 00:00 UTC au 26 octobre 00:00 UTC**, alertes à
+55/80/100/110 $. Ce sont des alertes, pas une coupure automatique. Les anciens plafonds mensuels
+ne s'appliquent plus. Dernier relevé du 19 octobre : 8,31 $ consommés sur la période,
+123,23 $ de crédits restants estimés, soit 101,69 $ de dépenses supplémentaires dans ce budget
+et 21,54 $ de réserve. **Montants datés : consulter coûts et crédits du compte de gestion
+avant chaque campagne. Les crédits ne se renouvellent pas chaque semaine.**
+
+Pour chaque étape autorisée : mesurer un petit échantillon sur AWS, estimer durée et coût total
+(installation, données, calcul, évaluation), fixer le timeout, puis lancer l'étape complète.
+Ne pas lancer toute la feuille de route d'un seul bloc. L'en-tête de `tools/cloud.sh` documente
+`job --type ... --data ... --get ... -- 'commande'` et le rapatriement des résultats.
+
+## Références et tenue du document
+
+- **David J. Wu — Accelerating Self-Play Learning in Go (KataGo, 2019/2020).**
+  [Article](https://arxiv.org/abs/1902.10565),
+  [texte intégral](https://arxiv.org/html/1902.10565v5).
+  Sections 3.1/3.2 : allocation variable de recherche, exploration et cibles de politique.
+  Application : P4. La randomisation du budget existe déjà dans le labo ; ses réglages et la
+  qualité des cibles restent à comparer dans ce jeu.
+- **Équipe AlphaStar — Mastering the real-time strategy game StarCraft II (2019).**
+  [Présentation des auteurs](https://deepmind.google/blog/alphastar-mastering-the-real-time-strategy-game-starcraft-ii/).
+  « How AlphaStar is trained » : population de concurrents, versions figées, diversité des
+  stratégies. Application : mélange d'adversaires après P2. Cela inspire un essai, sans garantie
+  de progrès pour un jeu à 2–5 joueurs.
+
+Après chaque expérience, mettre à jour la synthèse et le statut de l'étape concernée. Garder
+dans `lab/runs/` scripts, résultats détaillés et manifeste : hypothèse, code/poids, sources,
+graines, paramètres, budget, résultats par taille, incertitude et décision. Sauvegarder les
+artefacts hors Git sur mini et/ou S3, avec leur emplacement consigné. Ne pas recréer une
+chronologie exhaustive ici : conserver ce qui change une décision, les échecs qui évitent
+de refaire un essai et les prochaines actions concrètes.
