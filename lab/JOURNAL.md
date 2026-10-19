@@ -33,6 +33,10 @@ pour décider. Voir `brain/src/know.rs` et le correctif P0.
   Inférence Rust AVX2/FMA ; concordance Python/Rust déjà vérifiée à environ 5·10⁻⁵.
 - Expert livré : `lab/nets/gen8.bin`, via `target/release/expert` et `src/server/expert.ts`.
   `bun run kernel:build` construit le noyau WebAssembly et cet exécutable.
+- Mesure : `lab arena --hero A --field B`, ou `--table 'A|B|C'` pour une table fixe ; chaque
+  joueur passe à chaque place. `--out r.tsv` écrit chaque place de chaque partie ;
+  `python3 lab/py/score.py` en tire le score du protocole, ses intervalles par donne et les
+  différences appariées (deux arènes de même graine, ou `--versus` pour deux rôles d'une table).
 - Archives réelles : `data/games/`, graines, actions et temps de décision ; résumé par
   `bun lab/tools/games.ts`. Les quelques parties humaines disponibles ne suffisent pas encore
   à entraîner un modèle des humains. Les 4 parties archivées au 19 octobre réunissent 1 ou
@@ -56,6 +60,7 @@ az:net=lab/nets/gen8.bin,n=200,w=0.5,c=2.5,roll=1,depth=3,rp=2
 | `rp=1` | Politique du réseau pour tous, sans recherche imbriquée |
 | `rp=2` | Réseau pour soi, Normal pour les adversaires |
 | `rp=3` | Réseau pour soi, modèle adverse tiré selon les croyances |
+| `rp=4` | Réseau pour soi, chaque adversaire selon le type de sa place (réseau pour un Expert, Normal pour une IA du jeu) ; place inconnue : mélange égal |
 | `rt` | Température des coups du réseau dans les fins ; défaut 0, coup préféré |
 | `rolls` | Fins simulées par position nouvelle ; défaut 1 |
 
@@ -257,34 +262,46 @@ entières (64 fichiers, environ 20 000 parties).
 
 **Préalable aux nouveaux résultats.**
 
-1. Échantillonner un monde avant l'expansion initiale dans `brain/src/search.rs`. Actuellement,
-   elle précède `determinize` et sa première fin simulée utilise les vrais dés/pioche dans le
-   labo : `Az::act` (`lab/src/az.rs`) et l'auto-apprentissage passent la vraie partie.
-   `Expert::decide` protège déjà son entrée : le jeu n'est pas touché. Ampleur : une valeur sur
-   n+1 à la racine (0,5 % à n=200, 2 % à n=50), qui agit sur la valeur des coups jamais essayés,
-   la normalisation et `qgain`. Ajouter un test d'indépendance aux dés cachés et vérifier
-   arène/auto-apprentissage. Pas de campagne de remesure dédiée : les mesures de P1, sur graines
-   inédites, en tiennent lieu.
-2. Ajouter un identifiant stable de partie aux nouvelles données, ou un index associé. Pour les
-   fichiers existants, reconstruire cet index à partir des cartes (voir « Données et modèles à
-   réutiliser ») ; vérifier la méthode sur les fichiers `label` et les anciens fichiers v1.
-   Remplacer les blocs de 256 positions de `lab/py/data.py`. La validation des réseaux issus de
-   gen8 doit venir de parties que gen8 n'a pas vues : réserver des parties de P2 dès leur
-   génération. Indispensable si P2 choisit ses checkpoints sur la validation.
-3. Exporter les résultats par donne/place et calculer les différences selon le protocole.
-   Préparer des tables mixtes : l'arène actuelle ne propose qu'un héros contre un champ homogène.
-   Ajouter une option de recherche qui reçoit le modèle de chaque place selon son type (réseau
-   pour un Expert, Normal pour une IA du jeu), mesurée en P1.
-4. Mesurer la variance par donne et la corrélation des paires A/B sur une première arène
-   d'environ 400 donnes inédites, qui peut servir de présélection P1. En déduire les nombres de
-   donnes de la suite.
-5. Diagnostic de la valeur, sans bloquer P2 : erreur de gen8 par manche et par taille sur des
-   positions jugées qu'il n'a pas vues (petit `label` neuf). Si elle reste forte en fin de
-   partie, chercher l'information manquante dans l'encodage (P5) avant d'investir dans de
-   nouvelles cibles de valeur.
+1. **Fait le 19 octobre.** La racine était développée avant `determinize` : dans le labo
+   (`Az::act`, auto-apprentissage), sa première fin simulée utilisait les vrais dés/pioche. Une
+   valeur sur n+1 (0,5 % à n=200, 2 % à n=50), qui agissait sur la valeur des coups jamais
+   essayés, la normalisation et `qgain`. `Expert::decide` protégeait déjà le jeu. La racine est
+   maintenant jugée dans un monde possible, et `determinize` remet la partie cachée des pioches
+   dans un ordre fixe avant de la mélanger : le monde ne dépend plus que de ce que sait le
+   joueur. Test `the_search_sees_only_what_the_player_knows` (Expert livré, réseau seul,
+   Difficile) : il échouait avant le correctif. Pas de campagne de remesure dédiée : les mesures
+   de P1, sur graines inédites, en tiennent lieu.
+2. **Fait, sauf l'index des anciennes données.** `lab selfplay` et `lab label` écrivent à côté de
+   chaque fichier `x.bin.games` : le nombre de positions de chaque partie. `data.py` le lit, ou le
+   reconstruit d'après les cartes et l'écrit (méthode vérifiée sur un fichier gen7, label4 et gen0
+   v1 : 322, 5 031 et 99 parties, toutes de cartes distinctes). La validation se choisit par une
+   règle fixe sur une clé de la carte (`in_validation`, 5 %) : la même pour toutes les
+   générations, quel que soit l'ordre des fichiers ; `@0.2` garde des parties entières. Reste à
+   construire les `.games` de toutes les données (lecture complète, donc sur AWS) et à les mettre
+   dans le bucket. gen8 a vu 95 % des anciennes parties : pour les réseaux issus de gen8, ne
+   juger que les parties de validation des données neuves (P2).
+3. **Fait.** `lab arena --out`, `--table`, `rp=4` (modèle par type de place, transmis par
+   l'arène) et `lab/py/score.py` ; temps moyen et p95 par décision pour chaque rôle.
+4. **À lancer :** `lab/runs/p0-variance.sh` sur AWS (graines 201 à 203, inédites). Il mesure la
+   variance par donne et la corrélation des paires, et sert de présélection P1 : `rp=2` contre
+   lui-même, `rp=1`, `roll=0,n=800`, `w=1` parmi des Expert livrés ; tables mixtes avec `rp=4`.
+   En déduire les nombres de donnes de la suite.
+5. Diagnostic de la valeur, sans bloquer P2. Déjà mesuré pour gen6 (`lab noise`, positions de
+   l'IA Normal jugées deux fois par 32 fins, avance du joueur qui agit, en pièces) :
+
+   | Positions | Dispersion des cibles | Bruit d'un jugement | Erreur du réseau |
+   | --- | --- | --- | --- |
+   | Toutes | 17,6 | 1,7 | 6,9 |
+   | Dernière manche | 20,9 | 0,1 | 2,3 |
+   | 6 manches ou plus restantes | 14,2 | 2,4 | 8,6 |
+
+   L'erreur se concentre en début de partie, où la cible dépend d'un long avenir. En fin de
+   partie, presque déterministe, il reste 2,3 pièces d'erreur : piste pour l'encodage (P5).
+   À refaire pour gen8 (`lab noise`, dans le même calcul AWS que le point 4).
 
 **Livrable :** tests ciblés passants, partitions vérifiables, résultats individuels reproductibles,
-variance par donne mesurée. Toutes les étapes suivantes utilisent ce code corrigé.
+variance par donne mesurée. Toutes les étapes suivantes utilisent ce code corrigé. Restent les
+points 4 et 5 et l'index des anciennes données, qui demandent AWS.
 
 ### P1 — Choisir une référence de recherche face aux joueurs forts
 

@@ -260,7 +260,15 @@ pub struct Config {
     pub opts: Options,
 }
 
-/// Des parties d'entraînement en parallèle, un fichier par fil dans `dir`.
+/// Le fichier qui accompagne un fichier de positions : le nombre de positions de chaque partie,
+/// dans l'ordre (u32 petit-boutiste ; `GAMES` dans `lab/py/data.py`).
+pub fn games_file(path: &Path) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".games");
+    name.into()
+}
+
+/// Des parties d'entraînement en parallèle, un fichier par fil dans `dir` (et son `games_file`).
 pub fn run(cfg: &Config, searcher: &dyn Searcher, dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let next = AtomicUsize::new(0);
@@ -272,7 +280,8 @@ pub fn run(cfg: &Config, searcher: &dyn Searcher, dir: &Path) -> std::io::Result
             let (next, positions) = (&next, &positions);
             handles.push(scope.spawn(move || -> std::io::Result<()> {
                 let path = dir.join(format!("s{:x}-{t:02}.v2.bin", cfg.seed));
-                let mut out = BufWriter::new(File::create(path)?);
+                let mut out = BufWriter::new(File::create(&path)?);
+                let mut games = BufWriter::new(File::create(games_file(&path))?);
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     if i >= cfg.games {
@@ -283,6 +292,7 @@ pub fn run(cfg: &Config, searcher: &dyn Searcher, dir: &Path) -> std::io::Result
                     let table = Table::new(n, deal % 1_000_000_007);
                     let mut rng = Rng::new(mix(deal, 99));
                     let (_, count) = play(&table, mix(deal, 1) as u32, searcher, cfg.opts, &mut rng, &mut out)?;
+                    games.write_all(&(count as u32).to_le_bytes())?;
                     let total = positions.fetch_add(count, Ordering::Relaxed) + count;
                     let secs = start.elapsed().as_secs_f64();
                     eprintln!(
@@ -292,7 +302,8 @@ pub fn run(cfg: &Config, searcher: &dyn Searcher, dir: &Path) -> std::io::Result
                         total as f64 / secs
                     );
                 }
-                out.flush()
+                out.flush()?;
+                games.flush()
             }));
         }
         for h in handles {

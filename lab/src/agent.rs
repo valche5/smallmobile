@@ -1,6 +1,7 @@
 //! Les joueurs. Chacun reçoit la vraie partie et ce que son joueur sait (`Knowledge`) : un joueur
 //! honnête ne lit la partie qu'à travers `know::determinize`.
 
+use smallmobile_brain::opponents::Model;
 use smallmobile_kernel::{Ai, Game, Level, Restrictions, Tuning};
 
 use crate::know::{Knowledge, determinize};
@@ -12,6 +13,18 @@ pub trait Agent: Sync {
 
     /// Le prochain coup du joueur qui doit agir. `rng` est propre à cette décision.
     fn act(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Move;
+
+    /// Le modèle qui simule le mieux ce joueur, pour qui connaît son type (dans le jeu, on voit
+    /// quelles places sont des IA, et de quel niveau).
+    fn model(&self) -> Model {
+        Model::Normal
+    }
+
+    /// Comme `act`, en connaissant le modèle de chaque place (`seats`, joueurs réels).
+    fn act_at(&self, g: &Game, k: &Knowledge, seats: &[Model], rng: &mut Rng) -> Move {
+        let _ = seats;
+        self.act(g, k, rng)
+    }
 }
 
 /// L'IA du jeu, à un niveau donné. Elle voit un monde possible, pas la vraie partie : ainsi elle ne

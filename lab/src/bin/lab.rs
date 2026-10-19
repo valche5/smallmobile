@@ -1,7 +1,8 @@
 //! Le laboratoire en ligne de commande.
 //!
 //! ```text
-//! lab arena --hero hard --field normal [--players 2,3,4,5] [--deals 100] [--threads N] [--seed 1]
+//! lab arena --hero hard --field normal [--players 2,3,4,5] [--deals 100] [--threads N] [--seed 1] [--out r.tsv]
+//! lab arena --table 'az:net=poids.bin,rp=4|hard|normal' [--deals 100] [--out r.tsv]   (table fixe)
 //! lab bench --agent random [--players 2] [--games 20]
 //! lab selfplay --agent mcts:n=200 --games 1000 --out lab/data/gen0 [--players 2,3,4,5] [--sample-rounds 2]
 //! lab check-net --net poids.bin --data parties.bin [--count 5]   (comparaison avec lab/py/check.py)
@@ -14,7 +15,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use smallmobile_lab::agent::{self, Agent};
-use smallmobile_lab::arena::{self, Config, play_game};
+use smallmobile_lab::arena::{self, Config, Lineup, play_game};
 use smallmobile_lab::selfplay;
 use smallmobile_lab::table::Table;
 
@@ -37,7 +38,10 @@ fn main() {
 }
 
 fn usage() -> ! {
-    eprintln!("usage : lab arena --hero A --field B [--players 2,3,4,5] [--deals N] [--threads N] [--seed S]");
+    eprintln!(
+        "usage : lab arena --hero A --field B [--players 2,3,4,5] [--deals N] [--threads N] [--seed S] [--out F]"
+    );
+    eprintln!("        lab arena --table 'A|B|B' [--deals N] [--threads N] [--seed S] [--out F]");
     eprintln!("        lab bench --agent A [--players N] [--games N]");
     eprintln!("        lab selfplay --agent A --games N --out DIR [--players 2,3,4,5] [--sample-rounds R] [--seed S]");
     eprintln!("            [--full-share 0.25 --fast 50]   (part des recherches complètes, itérations des autres)");
@@ -61,7 +65,10 @@ fn get<T: std::str::FromStr>(opts: &HashMap<String, String>, key: &str, default:
 }
 
 fn agent(opts: &HashMap<String, String>, key: &str) -> Box<dyn Agent> {
-    let name = opts.get(key).unwrap_or_else(|| usage());
+    agent_named(opts.get(key).unwrap_or_else(|| usage()))
+}
+
+fn agent_named(name: &str) -> Box<dyn Agent> {
     agent::by_name(name).unwrap_or_else(|| {
         eprintln!("joueur inconnu : {name}");
         std::process::exit(2)
@@ -77,18 +84,54 @@ fn threads() -> usize {
     std::thread::available_parallelism().map_or(4, |n| n.get())
 }
 
+/// `--hero A --field B` : A face à des B, à chaque nombre de joueurs de `--players` ; `--table 'A|B|B'` :
+/// une table fixe, chaque joueur passant à chaque place (les places d'un même joueur sont comptées
+/// ensemble). `--out` : le résultat de chaque place de chaque partie, pour `lab/py/score.py`.
 fn arena_cmd(opts: &HashMap<String, String>) {
-    let hero = agent(opts, "hero");
-    let field = agent(opts, "field");
-    let cfg = Config {
-        players: players(opts, "2,3,4,5"),
-        deals: get(opts, "deals", 100),
-        threads: get(opts, "threads", threads()),
-        seed: get(opts, "seed", 1),
+    let cfg =
+        Config { deals: get(opts, "deals", 100), threads: get(opts, "threads", threads()), seed: get(opts, "seed", 1) };
+    let (agents, specs): (Vec<Box<dyn Agent>>, Option<Vec<usize>>) = match opts.get("table") {
+        Some(table) => {
+            let mut distinct: Vec<&str> = Vec::new();
+            let mut roles = Vec::new();
+            for spec in table.split('|') {
+                let role = distinct.iter().position(|&d| d == spec).unwrap_or_else(|| {
+                    distinct.push(spec);
+                    distinct.len() - 1
+                });
+                roles.push(role);
+            }
+            (distinct.into_iter().map(agent_named).collect(), Some(roles))
+        }
+        None => (vec![agent(opts, "hero"), agent(opts, "field")], None),
     };
+    let lineups: Vec<Lineup> = match &specs {
+        Some(roles) => {
+            vec![Lineup { seats: roles.iter().map(|&r| agents[r].as_ref()).collect(), roles: roles.clone() }]
+        }
+        None => players(opts, "2,3,4,5")
+            .into_iter()
+            .map(|n| Lineup::hero(n, agents[0].as_ref(), agents[1].as_ref()))
+            .collect(),
+    };
+    let names: Vec<String> = agents.iter().map(|a| a.name()).collect();
     let start = Instant::now();
-    let report = arena::run(&cfg, hero.as_ref(), field.as_ref());
-    print!("{}", arena::describe(&report, &hero.name(), &field.name()));
+    let run = arena::run(&cfg, &lineups);
+    // face à un champ homogène, seul le joueur testé compte (le champ en est le miroir)
+    let shown = if specs.is_some() { names.len() } else { 1 };
+    for (role, name) in names.iter().enumerate().take(shown) {
+        let others: Vec<&str> = names.iter().enumerate().filter(|&(r, _)| r != role).map(|(_, n)| n.as_str()).collect();
+        print!("{}", arena::describe(&arena::report(&run, role), name, &others.join(" + ")));
+        println!("temps par décision : {}", arena::describe_times(&run.times[role]));
+    }
+    if let Some(path) = opts.get("out") {
+        let written =
+            std::fs::File::create(path).and_then(|f| arena::write(&mut std::io::BufWriter::new(f), &cfg, &names, &run));
+        if let Err(e) = written {
+            eprintln!("échec de l'écriture de {path} : {e}");
+            std::process::exit(1)
+        }
+    }
     println!("durée : {:.1} s", start.elapsed().as_secs_f64());
 }
 
@@ -101,7 +144,7 @@ fn bench_cmd(opts: &HashMap<String, String>) {
         for i in 0..games {
             let table = Table::new(n, 1000 + i as u64);
             let seats: Vec<&dyn Agent> = vec![a.as_ref(); n];
-            moves += play_game(&table, i as u32 + 1, &seats, i as u64).1;
+            moves += play_game(&table, i as u32 + 1, &seats, i as u64).moves;
         }
         let secs = start.elapsed().as_secs_f64();
         println!(
@@ -353,7 +396,11 @@ fn noise_cmd(opts: &HashMap<String, String>) {
                                 coins: (0..n).map(|q| [fa[q] as f64, fb[q] as f64, pred[q] as f64]).collect(),
                             });
                         }
-                        let mv = if rng.unit() < 0.1 { legal[rng.below(legal.len())].mv } else { normal.act(&g, &k, &mut rng) };
+                        let mv = if rng.unit() < 0.1 {
+                            legal[rng.below(legal.len())].mv
+                        } else {
+                            normal.act(&g, &k, &mut rng)
+                        };
                         let mut ret = Returns::default();
                         moves::play(&mut g, &mv, &mut ret).expect("coup possible");
                         k.observe(ret.0, &g.state);
@@ -371,11 +418,15 @@ fn noise_cmd(opts: &HashMap<String, String>) {
         let m = v.len().max(1) as f64;
         let mean = v.iter().map(|c| (c[0] + c[1]) / 2.0).sum::<f64>() / m;
         let d2 = v.iter().map(|c| (c[0] - c[1]).powi(2)).sum::<f64>() / m;
-        let spread = (v.iter().map(|c| ((c[0] + c[1]) / 2.0 - mean).powi(2)).sum::<f64>() / m - d2 / 4.0).max(0.0).sqrt();
+        let spread =
+            (v.iter().map(|c| ((c[0] + c[1]) / 2.0 - mean).powi(2)).sum::<f64>() / m - d2 / 4.0).max(0.0).sqrt();
         let e2 = v.iter().map(|c| (c[2] - (c[0] + c[1]) / 2.0).powi(2)).sum::<f64>() / m;
         (v.len(), spread, (d2 / 2.0).sqrt(), (e2 - d2 / 4.0).max(0.0).sqrt())
     }
-    println!("{} positions, {rollouts} fins par jugement ; avance du joueur qui agit sur son meilleur rival :", samples.len());
+    println!(
+        "{} positions, {rollouts} fins par jugement ; avance du joueur qui agit sur son meilleur rival :",
+        samples.len()
+    );
     println!("{:<22} {:>6} {:>10} {:>8} {:>8}", "", "pos.", "dispersion", "bruit", "réseau");
     let row = |name: &str, f: &dyn Fn(&Sample) -> bool| {
         let (c, sp, no, er) = stats(samples.iter().filter(|s| f(s)).map(|s| &s.lead));

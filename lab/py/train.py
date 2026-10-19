@@ -2,7 +2,7 @@
 
     python train.py --data ../data/gen1 ../data/normal@0.2 --out ../nets/gen2.bin [--init ../nets/gen1.pt]
 
-`dossier@0.2` : n'en prendre que 20 % (par blocs de parties) ; `dossier:policy` : seulement pour la
+`dossier@0.2` : n'en prendre que 20 % (par parties entières) ; `dossier:policy` : seulement pour la
 politique (sa valeur n'est pas apprise).
 
 Cibles : la politique (visites de la recherche à la racine), la victoire (part de chaque joueur à la
@@ -18,7 +18,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from data import ILLEGAL, load
+from data import ILLEGAL, in_validation, load
 from model import GAIN_SCALE, Net, export, unpack_adj
 
 
@@ -88,13 +88,16 @@ def main():
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    recs, blocks, value_mask = load(args.data, with_value=True, lazy=args.lazy)
+    recs, keys, value_mask = load(args.data, with_value=True, lazy=args.lazy)
     rng = np.random.default_rng(0)
-    # validation sur des blocs entiers : pas de position d'une partie vue à l'entraînement
-    val_blocks = rng.random(int(blocks.max()) + 1) < args.val_share
-    is_val = val_blocks[blocks]
+    # validation sur des parties entières, choisies par une règle fixe (`in_validation`) : aucune
+    # position d'une partie vue à l'entraînement, ni par cette génération ni par les suivantes
+    is_val = in_validation(keys, args.val_share)
     val_idx, train_idx = np.flatnonzero(is_val), np.flatnonzero(~is_val)
-    print(f"{len(recs)} positions ({len(val_idx)} pour la validation)")
+    print(
+        f"{len(recs)} positions de {len(np.unique(keys))} parties "
+        f"({len(val_idx)} positions de {len(np.unique(keys[is_val]))} parties pour la validation)"
+    )
 
     net = Net(args.hidden, args.layers)
     if args.init:

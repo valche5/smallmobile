@@ -32,6 +32,10 @@ Le service lance `bun server.ts` directement : il ne recompile pas le noyau, d'o
 Le dépôt de travail sur mini est aussi celui que sert la production (`smallmobile.service`, port
 3120, même utilisateur) : ne jamais arrêter un serveur de test par motif (`pkill -f "bun server.ts"`
 arrête aussi la production) ; tester sur un autre port et arrêter le processus par son numéro.
+Dans ce dépôt, `bun run test` et `bun run kernel:build` reconstruisent `target/release/expert`,
+que le serveur relance à la demande, et `public/game-kernel.wasm` : c'est déjà déployer le code en
+cours. Pendant le développement, s'en tenir à `cargo test` et `cargo clippy` (dossier
+`target/debug`), ou construire ailleurs (`CARGO_TARGET_DIR`).
 
 ## Calcul du labo sur AWS
 

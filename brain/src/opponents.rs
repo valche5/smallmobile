@@ -45,6 +45,18 @@ pub struct Beliefs {
 }
 
 impl Beliefs {
+    /// Des croyances certaines : le joueur `q` joue comme `models[q]` (son type est connu, par
+    /// exemple une IA du jeu ou un Expert).
+    pub fn known(models: &[Model]) -> Beliefs {
+        let mut b = Beliefs::default();
+        for (q, model) in models.iter().enumerate() {
+            for (m, candidate) in MODELS.iter().enumerate() {
+                b.log[q][m] = if candidate == model { 0.0 } else { f32::NEG_INFINITY };
+            }
+        }
+        b
+    }
+
     /// Prend note de l'action `a` du joueur qui agit dans `g` (la partie juste avant l'action).
     /// Les modèles ne voient que ce que voit ce joueur (`determinize`) ; `net` : le réseau du modèle
     /// `Net`.

@@ -52,14 +52,19 @@ impl Knowledge {
 }
 
 /// Un monde possible : même partie vue par les joueurs, l'ordre caché des pioches et les dés à
-/// venir tirés au hasard.
+/// venir tirés au hasard. Le monde ne dépend que de ce que sait le joueur et de `rng` : la partie
+/// cachée des pioches est remise dans un ordre fixe avant d'être mélangée.
 pub fn determinize<'m>(g: &Game<'m>, k: &Knowledge, rng: &mut Rng) -> Game<'m> {
     let mut w = *g;
     let s = &mut w.state;
     let hidden = s.race_deck.len() - k.race_tail.min(s.race_deck.len());
-    rng.shuffle(&mut s.race_deck.as_mut_slice()[..hidden]);
+    let races = &mut s.race_deck.as_mut_slice()[..hidden];
+    races.sort_unstable();
+    rng.shuffle(races);
     let hidden = s.power_deck.len() - k.power_tail.min(s.power_deck.len());
-    rng.shuffle(&mut s.power_deck.as_mut_slice()[..hidden]);
+    let powers = &mut s.power_deck.as_mut_slice()[..hidden];
+    powers.sort_unstable();
+    rng.shuffle(powers);
     reseed_dice(&mut w, rng);
     w
 }

@@ -22,7 +22,7 @@ use crate::encode::encode;
 use crate::know::{Knowledge, Returns, determinize};
 use crate::moves::{self, KEYS};
 use crate::rand::{Rng, mix};
-use crate::selfplay::{ILLEGAL, Record};
+use crate::selfplay::{ILLEGAL, Record, games_file};
 use crate::table::{Outcome, Table};
 
 pub struct Config {
@@ -114,7 +114,9 @@ pub fn run(cfg: &Config, agent: Option<&dyn Agent>, dir: &Path) -> std::io::Resu
         for t in 0..cfg.threads {
             let (next, positions) = (&next, &positions);
             handles.push(scope.spawn(move || -> std::io::Result<()> {
-                let mut out = BufWriter::new(File::create(dir.join(format!("l{:x}-{t:02}.v2.bin", cfg.seed)))?);
+                let path = dir.join(format!("l{:x}-{t:02}.v2.bin", cfg.seed));
+                let mut out = BufWriter::new(File::create(&path)?);
+                let mut games = BufWriter::new(File::create(games_file(&path))?);
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     if i >= cfg.games {
@@ -125,6 +127,7 @@ pub fn run(cfg: &Config, agent: Option<&dyn Agent>, dir: &Path) -> std::io::Resu
                     let table = Table::new(n, deal % 1_000_000_007);
                     let mut rng = Rng::new(mix(deal, 77));
                     let count = label_game(&table, mix(deal, 1) as u32, cfg, agent, &mut rng, &mut out)?;
+                    games.write_all(&(count as u32).to_le_bytes())?;
                     let total = positions.fetch_add(count, Ordering::Relaxed) + count;
                     if (i + 1) % 100 == 0 {
                         let secs = start.elapsed().as_secs_f64();
@@ -136,7 +139,8 @@ pub fn run(cfg: &Config, agent: Option<&dyn Agent>, dir: &Path) -> std::io::Resu
                         );
                     }
                 }
-                out.flush()
+                out.flush()?;
+                games.flush()
             }));
         }
         for h in handles {

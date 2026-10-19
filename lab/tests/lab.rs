@@ -106,6 +106,120 @@ fn the_network_sees_only_what_the_player_knows() {
 }
 
 #[test]
+fn the_search_sees_only_what_the_player_knows() {
+    use smallmobile_kernel::Level;
+    use smallmobile_lab::agent::{Agent, KernelAi};
+    use smallmobile_lab::az::{Az, Config};
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nets/gen8.bin");
+    let net = std::sync::Arc::new(smallmobile_lab::net::Net::load(&path).unwrap());
+    let shipped = Az::new(smallmobile_brain::expert::config(30), net.clone(), "gen8".into());
+    let alone = Az::new(Config { rollout: 0.0, ..shipped.cfg }, net, "gen8".into());
+    let hard = KernelAi::new(Level::Hard);
+    let mut rng = Rng::new(23);
+    let mut checked = 0;
+    for game in 0..4u64 {
+        let table = Table::new(2 + game as usize % 4, 2300 + game);
+        let mut g = table.game(game as u32);
+        let mut k = Knowledge::default();
+        while g.state.phase != Phase::GameOver {
+            let legal = moves::legal(&g);
+            if legal.len() > 1 && rng.below(12) == 0 {
+                // la même partie vue par le joueur, mais d'autres pioches et d'autres dés cachés :
+                // à graine égale, chaque joueur doit y faire exactement la même chose
+                let other = determinize(&g, &k, &mut rng);
+                for az in [&shipped, &alone] {
+                    let a = az.search(&g, &k, &mut Rng::new(checked));
+                    let b = az.search(&other, &k, &mut Rng::new(checked));
+                    assert_eq!(a.visits, b.visits, "{} voit ce qui est caché", az.describe());
+                    assert_eq!(a.value.to_bits(), b.value.to_bits(), "{}", az.describe());
+                }
+                let a = hard.act(&g, &k, &mut Rng::new(checked));
+                assert_eq!(a, hard.act(&other, &k, &mut Rng::new(checked)), "l'IA Difficile voit ce qui est caché");
+                checked += 1;
+            }
+            let m = legal[rng.below(legal.len())].mv;
+            let mut ret = Returns::default();
+            moves::play(&mut g, &m, &mut ret).unwrap();
+            k.observe(ret.0, &g.state);
+        }
+    }
+    assert!(checked > 10, "trop peu de positions vérifiées : {checked}");
+}
+
+#[test]
+fn the_arena_puts_every_player_at_every_seat() {
+    use smallmobile_kernel::Level;
+    use smallmobile_lab::agent::KernelAi;
+    use smallmobile_lab::arena::{self, Config, Lineup};
+    let (easy, normal) = (KernelAi::new(Level::Easy), KernelAi::new(Level::Normal));
+    let cfg = Config { deals: 6, threads: 3, seed: 4 };
+    let lineups: Vec<Lineup> = [2, 3, 4].into_iter().map(|n| Lineup::hero(n, &easy, &normal)).collect();
+    let run = arena::run(&cfg, &lineups);
+    // donnes à 2, 3, 4, 2, 3, 4 joueurs ; une partie par rotation, une ligne par place
+    assert_eq!(run.results.len(), 2 * (4 + 9 + 16));
+    for r in &run.results {
+        assert_eq!(r.role == 0, r.seat == r.shift, "{r:?}");
+    }
+    for d in 0..cfg.deals {
+        for shift in 0..[2, 3, 4][d % 3] {
+            let game = run.results.iter().filter(|r| r.deal == d && r.shift == shift);
+            assert!((game.map(|r| r.win).sum::<f64>() - 1.0).abs() < 1e-9, "une victoire par partie");
+        }
+    }
+    // même graine, mêmes parties
+    let key = |run: &arena::Run| -> Vec<_> {
+        run.results.iter().map(|r| (r.deal, r.shift, r.seat, r.role, r.coins, r.rank)).collect()
+    };
+    assert_eq!(key(&arena::run(&cfg, &lineups)), key(&run));
+}
+
+#[test]
+fn position_files_say_how_many_positions_each_game_has() {
+    use smallmobile_kernel::Level;
+    use smallmobile_lab::agent::KernelAi;
+    use smallmobile_lab::{label, selfplay};
+    let dir = std::env::temp_dir().join(format!("smallmobile-games-{}", std::process::id()));
+    let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1 };
+    let cfg = selfplay::Config { players: vec![2, 3], games: 5, threads: 2, seed: 3, opts };
+    selfplay::run(&cfg, &KernelAi::new(Level::Normal), &dir.join("play")).unwrap();
+    let cfg =
+        label::Config { players: vec![2, 5], games: 4, threads: 2, seed: 3, share: 0.1, rollouts: 2, random: 0.1 };
+    label::run(&cfg, None, &dir.join("label")).unwrap();
+    for (sub, games) in [("play", 5), ("label", 4)] {
+        let (mut total, mut positions) = (0, 0);
+        for entry in std::fs::read_dir(dir.join(sub)).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "bin") {
+                let counts: Vec<u32> = std::fs::read(selfplay::games_file(&path))
+                    .unwrap()
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| u32::from_le_bytes(*c))
+                    .collect();
+                let size = std::fs::metadata(&path).unwrap().len() as usize;
+                assert_eq!(counts.iter().sum::<u32>() as usize * selfplay::RECORD, size, "{}", path.display());
+                total += counts.len();
+                positions += size / selfplay::RECORD;
+            }
+        }
+        assert_eq!(total, games, "{sub} : une ligne par partie");
+        assert!(positions > 0);
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn known_seats_give_certain_beliefs() {
+    use smallmobile_brain::opponents::{Beliefs, Model};
+    let b = Beliefs::known(&[Model::Net, Model::Normal, Model::Net]);
+    let mut rng = Rng::new(1);
+    for (q, model) in [Model::Net, Model::Normal, Model::Net].into_iter().enumerate() {
+        assert!((0..50).all(|_| b.sample(q, &mut rng) == model));
+    }
+}
+
+#[test]
 fn a_move_cut_into_actions_plays_the_same() {
     let mut rng = Rng::new(17);
     for game in 0..30u64 {

@@ -42,7 +42,8 @@ pub struct Config {
     /// Qui joue les fins simulées : 0, l'IA Normal du jeu ; 1, le réseau (d'après sa politique) ;
     /// 2, le réseau pour le joueur qui cherche, l'IA Normal pour les autres ; 3, le réseau pour le
     /// joueur qui cherche, et pour chaque adversaire le modèle qui prévoit le mieux ses coups
-    /// (`opponents`, tiré à chaque fin simulée).
+    /// (`opponents`, tiré à chaque fin simulée) ; 4, de même, mais les croyances viennent du type
+    /// connu de chaque place (`Beliefs::known`, fourni par l'appelant de `search_against`).
     pub net_rollouts: u8,
     /// Fins jouées par le réseau : température du tirage des coups (0 : toujours le préféré).
     pub rollout_temp: f32,
@@ -413,7 +414,9 @@ impl Az {
             };
         }
         let mut nodes: Vec<Node> = vec![Node::default()];
-        let root_value = self.expand(&mut nodes[0], root, k, &legal, me, beliefs, rng);
+        // la racine aussi est jugée dans un monde possible : sa fin simulée ne voit pas les vrais dés
+        let world = determinize(root, k, rng);
+        let root_value = self.expand(&mut nodes[0], &world, k, &legal, me, beliefs, rng);
         nodes[0].visits = 1;
         nodes[0].total = root_value;
         if noise > 0.0 {
