@@ -424,6 +424,32 @@ gain face à Difficile seul ne suffit pas pour changer l'Expert livré.
 **Priorité d'entraînement. Hypothèse :** renouveler les deux cibles permet de dépasser le plateau.
 Dépend de P0 seulement, ni de P1 ni de P3.
 
+**Pilote produit le 19 octobre** (`lab/runs/p2-pilot.sh`, 65 min de c7a.16xlarge, 0,86 $) :
+5 000 parties gen8 `rp=1` (graines 8 000 000 à 8 000 009), 377 000 positions enregistrées en
+43 min (`lab/data/p2`, 2,1 Go) ; 30 % des positions de ces parties rejugées chacune par 32 fins du
+réseau, 221 000 positions en 20 min (`lab/data/p2-judged`, 1,3 Go). Les deux sont dans le bucket.
+Entraînement des quatre branches et arènes (`lab/runs/p2-train.sh`) : en cours.
+
+Juge réseau sur les mêmes 3 968 positions de l'IA Normal qu'en P0 (`lab noise --judge`, même
+graine ; `lab/runs/p2/noise-net.txt` contre `lab/runs/p0/noise-gen8.txt`), avance en pièces,
+juge Normal → juge réseau :
+
+| Positions | Dispersion des cibles | Bruit d'un jugement | Erreur de gen8 |
+| --- | --- | --- | --- |
+| Toutes | 15,2 → 12,4 | 1,76 → 0,90 | 6,2 → 9,3 |
+| Dernière manche | 19,0 → 19,0 | 0,13 → 0,14 | 2,4 → 2,5 |
+| 1 à 2 manches restantes | 17,2 → 15,2 | 0,47 → 0,37 | 3,6 → 5,5 |
+| 3 à 5 manches restantes | 15,9 → 10,4 | 1,31 → 0,70 | 6,6 → 10,3 |
+| 6 manches ou plus | 12,2 → 9,6 | 2,50 → 1,24 | 7,3 → 10,6 |
+
+Les fins du réseau sont deux fois moins bruitées (seuls les dés et les pioches sont tirés au
+sort) et resserrent les écarts. gen8, entraîné sur les fins de Normal, s'écarte de 9,3 pièces de
+celles du réseau, 10 à 11 dès qu'il reste 3 manches : les deux juges ne donnent pas la même
+valeur, et gen8 a appris la première. Sur les pièces finales de chaque joueur, son erreur (11,1)
+égale la dispersion (11,2) : en partie un écart de niveau, les fins du réseau ne finissant pas
+avec le même nombre de pièces. Lequel des deux juges enseigne la meilleure valeur pour jouer : les
+arènes des branches C et D le diront.
+
 1. Pilote de **5 000 parties**, équilibrées entre tailles, enseignant gen8 figé `rp=1` : en
    auto-apprentissage, les adversaires sont le réseau, que `rp=2` simulerait en Normal. P1 peut
    changer ce réglage pour les générations suivantes. Garder d'abord 200/50 itérations et 50 %
@@ -584,7 +610,7 @@ Budget global avant crédits `Credits-Semaine-19-25-Oct-2026-110USD`, compte de 
 ne s'appliquent plus. Dernier relevé du 19 octobre : 8,31 $ consommés sur la période,
 123,23 $ de crédits restants estimés, soit 101,69 $ de dépenses supplémentaires dans ce budget
 et 21,54 $ de réserve. Depuis ce relevé, estimations de `cloud.sh` : P0 0,87 $, essais Spot
-0,02 $, P1 1,11 $. **Montants datés : consulter coûts et crédits du compte de gestion
+0,02 $, P1 1,11 $, pilote P2 0,86 $. **Montants datés : consulter coûts et crédits du compte de gestion
 avant chaque campagne. Les crédits ne se renouvellent pas chaque semaine.**
 
 Pour chaque étape autorisée : mesurer un petit échantillon sur AWS, estimer durée et coût total
