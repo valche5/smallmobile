@@ -5,7 +5,7 @@
  *
  *   bun lab/tools/games.ts data/games    (temps de décision des IA)
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AiLevel, GameRecord } from '../engine/types';
 
@@ -46,8 +46,9 @@ export class FileGameArchive implements GameArchive {
     const entry = this.pending.get(id);
     if (!entry) return;
     this.pending.delete(id);
+    const file = join(this.dir, `${id}.json`);
     try {
-      writeFileSync(join(this.dir, `${id}.json`), JSON.stringify(entry.game));
+      writeFileSync(file, JSON.stringify(keepLlm(entry.game, file)));
     } catch (e) {
       console.error(`Enregistrement impossible de la partie ${id}`, e);
     }
@@ -59,6 +60,22 @@ export class FileGameArchive implements GameArchive {
       clearTimeout(entry.timer);
       this.flushOne(id);
     }
+  }
+}
+
+/**
+ * Une partie finie, marquée après coup comme jouée par un LLM (champ `llm` ajouté au fichier, pour une
+ * partie jouée par l'interface du jeu), le reste quand le serveur la réécrit : à chaque reconnexion
+ * d'un téléphone à la salle.
+ */
+function keepLlm(game: ArchivedGame, file: string): ArchivedGame {
+  if (game.llm || !game.coins || !existsSync(file)) return game;
+  try {
+    const { llm } = JSON.parse(readFileSync(file, 'utf8')) as ArchivedGame;
+    if (!llm) return game;
+    return { ...game, llm, players: game.players.map((p, i) => (i === llm.seat ? { ...p, kind: 'llm' as const } : p)) };
+  } catch {
+    return game;
   }
 }
 

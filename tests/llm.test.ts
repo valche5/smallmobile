@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aiAction } from '../src/engine/ai';
@@ -7,7 +7,7 @@ import { RACE_IDS, RACES } from '../src/engine/data';
 import { applyAction } from '../src/engine/game';
 import { currentActor } from '../src/engine/rules';
 import type { Action, GameState } from '../src/engine/types';
-import type { ArchivedGame, GameArchive } from '../src/server/archive';
+import { FileGameArchive, type ArchivedGame, type GameArchive } from '../src/server/archive';
 import type { Expert, ExpertMove } from '../src/server/expert';
 import { LlmError, LlmGames, llmRoutes, llmRules, type LlmView } from '../src/server/llm';
 
@@ -144,6 +144,39 @@ describe('parties pour un LLM', () => {
       expect(w.round).toBe(v.round);
       expect(w.legal).toEqual(v.legal);
       await again.act(v.id, choose(w));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('une partie marquée après coup comme jouée par un LLM le reste quand le serveur la réécrit', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'archive-'));
+    try {
+      const games = new LlmGames({ expert: null, archive: null, dir: null });
+      const v = await games.create({ model: 'test', players: 2, seat: 0, seed: 11 });
+      const g = games.game(v.id);
+      const room: ArchivedGame = {
+        id: 'salle',
+        code: 'ABCD',
+        updatedAt: 1,
+        players: g.players.map((p) => ({ name: p.name, kind: p.kind, ai: p.ai })),
+        coins: [40, 90],
+        record: g.record!,
+      };
+      const file = join(dir, 'salle.json');
+      const llm = { seat: 0, model: 'deepseek', client: 'interface du jeu' };
+      writeFileSync(file, JSON.stringify({ ...room, players: room.players.map((p, i) => (i ? p : { ...p, kind: 'llm' })), llm }));
+      const archive = new FileGameArchive(dir);
+      archive.save({ ...room, updatedAt: 2 });
+      archive.flush();
+      const kept = JSON.parse(readFileSync(file, 'utf8')) as ArchivedGame;
+      expect(kept.updatedAt).toBe(2);
+      expect(kept.llm).toEqual(llm);
+      expect(kept.players.map((p) => p.kind)).toEqual(['llm', 'ai']);
+      // une partie en cours n'est jamais relue
+      archive.save({ ...room, coins: null, updatedAt: 3 });
+      archive.flush();
+      expect((JSON.parse(readFileSync(file, 'utf8')) as ArchivedGame).llm).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
