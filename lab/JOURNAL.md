@@ -175,6 +175,46 @@ Valeur de gen8 (`lab noise`, 3 968 positions de l'IA Normal, avance en pièces) 
 6 ou plus : 7,3 (gen6 : 8,6). gen8 a progressé en début de partie ; le plancher de fin de partie
 n'a pas bougé.
 
+### `rp=4` à temps égal (P1, 19 octobre)
+
+Graines 301 à 304, inédites ; résultats `lab/runs/p1/*.tsv` sur mini, script
+`lab/runs/p1-rp4.sh`. 85 min de c7a.16xlarge, 1,11 $. À n=80, `rp=4` coûte autant que l'Expert
+livré (`rp=2`, n=200) parmi des Expert, et moins dès qu'il y a des IA du jeu : il les simule par
+la politique Normal, bien moins chère que le réseau.
+
+Parmi des Expert, 920 donnes, 230 par taille (graine 301 ; 302 pour la dernière ligne,
+400 donnes). À force égale, le score attendu est 0 (témoin de P0 : −0,5 ± 2,1) :
+
+| Joueur testé | Champ | Score | Temps moyen / p95 |
+| --- | --- | --- | --- |
+| `rp=4`, n=80 | livrés | **+5,8 ± 1,5** | 127 / 223 ms (champ : 133) |
+| `rp=4`, n=200 | livrés | +12,2 ± 1,6 | 315 / 553 ms |
+| livré | `rp=4`, n=200 | −8,9 ± 2,2 | 131 / 219 ms |
+
+Par taille, `rp=4` n=80 : +6,6, +8,8, +3,9, +3,8. Sur les mêmes donnes, n=80 − n=200 :
+−6,4 ± 2,1 : parmi des Expert, les itérations comptent encore. `rp=4` n=200 retrouve le score de
+`rp=1` en P0 (+11,7), comme attendu : parmi des Expert, les deux simulent pareil.
+
+Face à Difficile seul (graine 301, 920 donnes) : `rp=4` n=80 +39,2 ± 1,5 en 52 ms (p95 91),
+livré +40,4 ± 1,5 en 130 ms (p95 221) ; différence −1,1 ± 1,8, indécise. Ici les deux simulent
+Difficile par Normal ; au-delà de 80 itérations, le gain est faible.
+
+Tables mixtes, chaque joueur à chaque place, 400 donnes (temps moyen par décision) :
+
+| Table | `rp=4` n=80 | livré | `rp=4` n=200 | Difficile |
+| --- | --- | --- | --- | --- |
+| 3 joueurs, graine 303 | +23,9 ± 2,7 (81 ms) | −3,5 ± 2,5 (131 ms) | — | −20,4 ± 1,9 |
+| 4 joueurs, graine 304 | +9,4 ± 2,4 (118 ms) | −0,1 ± 2,1 (127 ms) | +5,2 ± 2,2 (258 ms) | −14,5 ± 1,4 |
+
+Différences à la même table : n=80 − livré +27,3 ± 4,8 (3 j.) et +9,5 ± 3,9 (4 j.) ;
+n=200 − livré +5,4 ± 3,5 ; n=80 − n=200 +4,1 ± 4,0, indécis.
+
+**Conclusion :** à temps égal ou moindre, `rp=4` n=80 bat l'Expert livré parmi des Expert et sur
+les tables mixtes, et l'égale face à Difficile seul en 40 % du temps. C'est le candidat pour le
+jeu ; `rp=4` n=200 est la référence forte. Limites : temps mesurés sur une machine pleine (rapport
+avec mini à étalonner) ; aucune table n'avait d'humain, pour qui `rp=4` prendrait le mélange
+égal, non mesuré (P3).
+
 ### Progression des réseaux et rendement du calcul
 
 Contre Difficile, `n=200,depth=3,rp=2,w=0.5,c=2.5` :
@@ -350,9 +390,13 @@ P1 choisit l'Expert livré et les réglages des générations suivantes ; il ne 
 
 **Présélection faite le 19 octobre** (« Mesures du 19 octobre ») : `rp=4` l'emporte nettement
 sur les tables mixtes et vaut `rp=1` parmi des Expert ; `roll=0,n=800` et `w=1` sont indécis
-et sortent de la liste. Restent : comparer `rp=4` à temps égal (n réduit contre `rp=2`, n=200),
-le confirmer sur graines neuves, puis l'intégrer au jeu, ce qui demande d'envoyer à `expert` le
-type de chaque place (un humain : modèle inconnu, mélange égal).
+et sortent de la liste.
+
+**Confirmation faite le 19 octobre** (« `rp=4` à temps égal ») : `rp=4` n=80 bat `rp=2` n=200 à
+temps égal (+5,8 ± 1,5 parmi des Expert, +9,5 et +27,3 aux tables mixtes) et l'égale face à
+Difficile. Restent, non décidés : l'intégrer au jeu, ce qui demande d'envoyer à `expert` le type
+de chaque place (un humain : modèle inconnu, mélange égal), après avoir étalonné son temps sur
+mini ; puis la profondeur 5.
 
 - Poids figés gen8 ; comparer `roll=1,rp=2,n=200,depth=3`, `roll=1,rp=1,n=200,depth=3`,
   `roll=0,n=800` et le modèle par type de place (P0). Fixer `w=0.5,c=2.5,rt=0`, sans bruit à la
@@ -539,7 +583,8 @@ Budget global avant crédits `Credits-Semaine-19-25-Oct-2026-110USD`, compte de 
 55/80/100/110 $. Ce sont des alertes, pas une coupure automatique. Les anciens plafonds mensuels
 ne s'appliquent plus. Dernier relevé du 19 octobre : 8,31 $ consommés sur la période,
 123,23 $ de crédits restants estimés, soit 101,69 $ de dépenses supplémentaires dans ce budget
-et 21,54 $ de réserve. **Montants datés : consulter coûts et crédits du compte de gestion
+et 21,54 $ de réserve. Depuis ce relevé, estimations de `cloud.sh` : P0 0,87 $, essais Spot
+0,02 $, P1 1,11 $. **Montants datés : consulter coûts et crédits du compte de gestion
 avant chaque campagne. Les crédits ne se renouvellent pas chaque semaine.**
 
 Pour chaque étape autorisée : mesurer un petit échantillon sur AWS, estimer durée et coût total
