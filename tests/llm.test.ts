@@ -80,6 +80,7 @@ describe('parties pour un LLM', () => {
     }
     expect(expert.calls).toBeGreaterThan(0);
     expect(v.ranking!.map((r) => r.seat).sort()).toEqual([0, 1, 2]);
+    expect(v.seed).toBe(42);
     expect(v.text).toContain('Classement final');
     expect(v.legal).toEqual([]);
     expect((await rejected(games.act(v.id, { type: 'endTurn' }))).status).toBe(409);
@@ -106,6 +107,16 @@ describe('parties pour un LLM', () => {
     expect((await rejected(games.create({ model: '   ', players: 2 }))).status).toBe(400);
     const v = await games.create({ model: 'test', players: 2, seat: 0, seed: 1 });
     expect((await rejected(Promise.resolve().then(() => games.debrief(v.id, { text: 'trop tôt' })))).status).toBe(409);
+  });
+
+  test('repasser la graine redonne la même carte et le même marché', async () => {
+    const games = new LlmGames({ expert: null, archive: null, dir: null });
+    const a = await games.create({ model: 'test', players: 2, opponents: 'normal', seat: 0 });
+    expect(a.seed).toBeUndefined();
+    const seed = games.game(a.id).record!.mapSeed;
+    const b = await games.create({ model: 'test', players: 2, opponents: 'normal', seat: 0, seed });
+    expect(games.game(b.id).map.name).toBe(games.game(a.id).map.name);
+    expect(games.game(b.id).market).toEqual(games.game(a.id).market);
   });
 
   test('les erreurs disent ce qui ne va pas, sans rien changer', async () => {

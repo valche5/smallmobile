@@ -70,6 +70,9 @@ export interface LlmView {
   legal: { action: Action; note: string }[];
   /** Fin de partie : pièces de chacun, du premier au dernier. */
   ranking?: { seat: number; name: string; coins: number }[];
+  /** Fin de partie : la graine de la partie, à repasser dans `seed` pour rejouer la même carte et le
+   * même hasard. Cachée avant, puisqu'elle détermine l'ordre des pioches et les dés. */
+  seed?: number;
   /** Fin de partie : le bilan du joueur, `null` tant qu'il ne l'a pas donné. */
   debrief?: string | null;
 }
@@ -135,6 +138,8 @@ export class LlmGames {
       createdAt: now,
       updatedAt: now,
       seat,
+      // La graine publique est celle de la carte ; le hasard de partie en dérive. Dans l'archive,
+      // c'est donc `record.mapSeed` qui rejoue la partie, pas `record.seed`.
       game: createGame({ players: setup, mapSeed: seed, seed: seed + 1 }),
       seen: 0,
       model,
@@ -375,7 +380,7 @@ function view(entry: LlmGame): LlmView {
     events: fresh,
     text: describe(entry, fresh, legal, final),
     legal,
-    ...(final ? { ranking: final, debrief: entry.debrief?.text ?? null } : {}),
+    ...(final ? { ranking: final, seed: g.record?.mapSeed, debrief: entry.debrief?.text ?? null } : {}),
   };
 }
 
