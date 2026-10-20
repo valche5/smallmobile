@@ -13,7 +13,7 @@ use std::sync::Arc;
 use smallmobile_kernel::ids::MAX_PLAYERS;
 use smallmobile_kernel::{Ai, Game, Level, Map, Phase, Restrictions, Tuning};
 
-use crate::encode::{Encoded, GLOBAL, NODE, encode};
+use crate::encode::{Encoded, NODE, encode};
 use crate::know::{Knowledge, Returns, determinize};
 use crate::moves::{self, Key, Move};
 use crate::net::{Eval, Net};
@@ -146,10 +146,12 @@ impl Evals {
             self.known.clear();
             self.map = at;
         }
-        let mut key = Vec::with_capacity(2 + e.regions * NODE + GLOBAL);
-        key.extend_from_slice(&[e.regions as u8, e.players as u8]);
+        // ce que lit le réseau, et la place du joueur qui agit (les clés des réseaux de la version 1
+        // en dépendent)
+        let mut key = Vec::with_capacity(3 + e.regions * NODE + net.inputs());
+        key.extend_from_slice(&[e.regions as u8, e.players as u8, e.seat as u8]);
         e.node[..e.regions].iter().for_each(|row| key.extend_from_slice(row));
-        key.extend_from_slice(&e.global);
+        key.extend_from_slice(&e.global[..net.inputs()]);
         // une empreinte rapide pour trouver la place ; l'entrée entière pour reconnaître la position
         let hash = key.chunks(8).fold(0u64, |h, c| {
             let mut w = [0u8; 8];

@@ -106,6 +106,119 @@ fn the_network_sees_only_what_the_player_knows() {
 }
 
 #[test]
+fn old_positions_can_be_reencoded() {
+    use smallmobile_kernel::Level;
+    use smallmobile_lab::agent::KernelAi;
+    use smallmobile_lab::encode::{GLOBAL, GLOBAL_V1, NODE, REGIONS};
+    use smallmobile_lab::moves::{FINISH, KEYS};
+    use smallmobile_lab::selfplay::{self, GameLog, ILLEGAL, RECORD};
+    let dir = std::env::temp_dir().join(format!("smallmobile-reencode-{}", std::process::id()));
+    // des positions d'aujourd'hui (Diplomates compris)…
+    let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1 };
+    let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 12, threads: 2, seed: 9, opts };
+    selfplay::run(&cfg, &KernelAi::new(Level::Normal), &dir.join("new")).unwrap();
+    // … remises au format de la version 3 : entrées de la version 1, clés de paix par place absolue
+    let (keys_at, node_at) = (44, 44 + KEYS * 2 + REGIONS * 8);
+    let global_at = node_at + REGIONS * NODE;
+    let mut logs = Vec::new();
+    let mut originals = Vec::new();
+    let mut peaces = 0;
+    std::fs::create_dir_all(dir.join("old")).unwrap();
+    for entry in std::fs::read_dir(dir.join("new")).unwrap() {
+        let path = entry.unwrap().path();
+        if !path.to_string_lossy().ends_with(selfplay::SUFFIX) {
+            continue;
+        }
+        let games: Vec<GameLog> = std::fs::read_to_string(selfplay::moves_file(&path))
+            .unwrap()
+            .lines()
+            .map(|l| GameLog::parse(l).unwrap())
+            .collect();
+        let bytes = std::fs::read(&path).unwrap();
+        let mut records = bytes.chunks(RECORD);
+        let mut old = Vec::new();
+        for log in &games {
+            let table = log.table();
+            log.replay(&table, |g, _| {
+                if moves::legal(g).len() < 2 {
+                    return;
+                }
+                let rec = records.next().unwrap();
+                let (seat, n) = (g.state.actor().unwrap(), g.state.player_count());
+                let mut v3 = rec[..node_at].to_vec();
+                for plan in 0..6 {
+                    let base = keys_at + 2 * (FINISH as usize + plan * 12);
+                    let relative = rec[base..base + 24].to_vec();
+                    peaces += relative[4..].chunks(2).filter(|v| v != &ILLEGAL.to_le_bytes()).count();
+                    for slot in 1..6 {
+                        for stout in 0..2 {
+                            let target = (slot + n - 1 - seat) % n;
+                            let from = if slot <= n && target != 0 { 2 * (target * 2 + stout) } else { usize::MAX };
+                            let at = base + 2 * (slot * 2 + stout);
+                            let v = if from == usize::MAX {
+                                ILLEGAL.to_le_bytes()
+                            } else {
+                                [relative[from], relative[from + 1]]
+                            };
+                            v3[at..at + 2].copy_from_slice(&v);
+                        }
+                    }
+                }
+                v3.extend_from_slice(&rec[node_at..global_at + GLOBAL_V1]);
+                v3.extend_from_slice(&rec[global_at + GLOBAL..]);
+                old.extend(v3);
+            })
+            .unwrap();
+        }
+        assert!(records.next().is_none(), "une position par décision");
+        let name = path.file_name().unwrap().to_string_lossy().replace(selfplay::SUFFIX, ".v3.bin");
+        let target = dir.join("old").join(name);
+        std::fs::write(&target, old).unwrap();
+        std::fs::copy(selfplay::games_file(&path), selfplay::games_file(&target)).unwrap();
+        std::fs::copy(selfplay::moves_file(&path), selfplay::moves_file(&target)).unwrap();
+        logs.extend(games);
+        originals.push((path.file_name().unwrap().to_owned(), bytes));
+    }
+    // le réencodage redonne les positions d'aujourd'hui, octet pour octet
+    let (files, positions) = smallmobile_lab::reencode::run(&logs, &dir.join("old"), &dir.join("again"), 2).unwrap();
+    assert_eq!(files, originals.len());
+    assert!(positions > 100 && peaces > 0, "{positions} positions, {peaces} clés de paix possibles");
+    for (name, bytes) in originals {
+        assert!(std::fs::read(dir.join("again").join(&name)).unwrap() == bytes, "{name:?}");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn peace_keys_name_the_target_relative_to_the_player() {
+    let mut rng = Rng::new(41);
+    let mut peaces = 0;
+    for game in 0..80u64 {
+        let table = Table::new(2 + game as usize % 4, 4100 + game);
+        let mut g = table.game(game as u32);
+        let mut k = Knowledge::default();
+        while g.state.phase != Phase::GameOver {
+            let legal = moves::legal(&g);
+            let keys: std::collections::HashSet<u16> = legal.iter().map(|c| c.key).collect();
+            assert_eq!(keys.len(), legal.len(), "une clé par coup");
+            let (me, n) = (g.state.current, g.state.player_count());
+            for c in &legal {
+                if let moves::Move::Finish(f) = c.mv {
+                    let target = f.peace.map_or(0, |q| (q + n - me) % n);
+                    assert_eq!((c.key - moves::FINISH) % 12, target as u16 * 2 + u16::from(f.stout));
+                    peaces += f.peace.is_some() as usize;
+                }
+            }
+            let m = legal[rng.below(legal.len())].mv;
+            let mut ret = Returns::default();
+            moves::play(&mut g, &m, &mut ret).unwrap();
+            k.observe(ret.0, &g.state);
+        }
+    }
+    assert!(peaces > 0);
+}
+
+#[test]
 fn the_fast_network_computes_like_the_simple_one() {
     use smallmobile_lab::encode::encode;
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nets/gen8.bin");

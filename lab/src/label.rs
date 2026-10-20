@@ -148,7 +148,7 @@ fn write_games(
         for t in 0..threads {
             let (next, positions) = (&next, &positions);
             handles.push(scope.spawn(move || -> std::io::Result<()> {
-                let path = dir.join(format!("{prefix}{seed:x}-{t:02}.v3.bin"));
+                let path = dir.join(format!("{prefix}{seed:x}-{t:02}{}", crate::selfplay::SUFFIX));
                 let mut out = BufWriter::new(File::create(&path)?);
                 let mut counts = BufWriter::new(File::create(games_file(&path))?);
                 let mut buffer = Vec::new();

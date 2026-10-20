@@ -803,7 +803,20 @@ adversaires ; et le contenu des pioches (peuples et pouvoirs encore à venir), p
 seulement déductible par élimination sur tout le plateau. Côté politique, la clé de fin de tour
 des Diplomates (`moves::finishes`) désigne la cible par sa place absolue, alors que le réseau voit
 les joueurs relativement à lui : « la paix au joueur suivant » change de clé selon sa place, même
-à 2 joueurs. À rendre relative (et à convertir dans les visites des données réencodées). Pouvoirs connus et file des défenses : trop rares pour compter. Leur effet ne se
+à 2 joueurs. À rendre relative (et à convertir dans les visites des données réencodées).
+
+**Encodage v2 écrit le 20 octobre** (`brain/src/encode.rs`, test `version_2_inputs_follow_the_game`) :
+106 entrées de la partie ajoutées après les 700 premières (`GLOBAL_V1`), soit 806 : âge du peuple
+actif de chaque joueur (5), peuples de la pioche (14), les 3 prochains peuples connus de la pioche
+(3 × 14), pouvoirs de la pioche (20), toutes les paix (diplomate × cible relatifs, 25). Clé de paix
+des Diplomates relative au joueur qui agit (`moves::FINISH`). Un réseau de la version 1 (jusqu'à
+gen10) lit les 700 premières entrées et voit ses sorties de paix traduites (`moves::relative_peace`) :
+gen9 et gen10w cherchent exactement comme avant (mêmes empreintes `lab speed`). Données : format
+`*.v4.bin` (5 866 octets par position) ; `lab reencode` y passe les `*.v3.bin` d'après leurs parties
+(500 parties et leurs positions rejugées en 3 s ; test aller-retour octet pour octet). Python :
+`model.widen` met un réseau de la version 1 aux 806 entrées (poids nuls : mêmes sorties, sauf les
+clés de paix qui changent de sens) ; `train.py --old-inputs` met les nouvelles entrées à zéro, pour
+un témoin entraîné sur les mêmes données. Rust et PyTorch concordent toujours (5·10⁻⁵). Pouvoirs connus et file des défenses : trop rares pour compter. Leur effet ne se
 mesure qu'en entraînant avec et sans, sur les mêmes parties réencodées.
 
 **Recherche :** si davantage d'itérations aide toujours peu après P2/P4, examiner le regroupement

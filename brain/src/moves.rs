@@ -42,8 +42,9 @@ const DECLINE: Key = 7;
 const END_CONQUEST: Key = 8;
 const BERSERK: Key = 9;
 const AUTO: Key = 10;
-/// + plan × 12 + paix × 2 + Robustes.
-const FINISH: Key = 16;
+/// Plus plan × 12 + paix × 2 + Robustes ; paix : 0 (aucune), ou la cible relativement au joueur
+/// qui finit son tour (1 : le suivant), comme le réseau voit les joueurs.
+pub const FINISH: Key = 16;
 const DEFEND: Key = 96;
 /// + sorte × 64 + région.
 const REGION: Key = 128;
@@ -52,6 +53,22 @@ const REINFORCE: Key = 1;
 const DRAGON: Key = 2;
 const SORCERY: Key = 3;
 const ABANDON: Key = 4;
+
+/// Passe des clés de fin de tour de la version 1, où la paix désignait la place absolue de sa cible
+/// (`place + 1`), aux clés d'aujourd'hui (cible relative au joueur `seat` qui agit). `values` : une
+/// valeur par clé (sorties du réseau, visites) ; `absent` pour les cibles impossibles.
+pub fn relative_peace<T: Copy>(values: &mut [T], seat: usize, players: usize, absent: T) {
+    for plan in 0..6 {
+        let base = FINISH as usize + plan * 12;
+        let absolute: [T; 12] = values[base..base + 12].try_into().expect("12 clés par plan");
+        for target in 1..6 {
+            for stout in 0..2 {
+                values[base + target * 2 + stout] =
+                    if target < players { absolute[((seat + target) % players + 1) * 2 + stout] } else { absent };
+            }
+        }
+    }
+}
 
 fn region_key(kind: Key, region: usize) -> Key {
     REGION + kind * 64 + region as Key
@@ -245,7 +262,8 @@ fn finishes(g: &Game, out: &mut Moves) {
     for &(plan, placement) in placements.iter() {
         for &peace in peaces.iter() {
             for &stout in stouts {
-                let key = FINISH + plan * 12 + peace.map_or(0, |q| q as Key + 1) * 2 + Key::from(stout);
+                let target = peace.map_or(0, |q| (q + s.player_count() - pid) % s.player_count());
+                let key = FINISH + plan * 12 + target as Key * 2 + Key::from(stout);
                 push(out, key, Move::Finish(Finish { specials, placement, peace, stout }));
             }
         }

@@ -7,7 +7,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from data import GLOBAL, KEYS, NODE, REGIONS
+from data import GLOBAL, GLOBAL_V1, KEYS, NODE, REGIONS
 
 GLOBAL_KEYS = 128
 # la tête de valeur prédit les pièces gagnées d'ici la fin divisées par ce nombre
@@ -46,6 +46,7 @@ def scales():
         b = 67 + 5 * P + m * M
         glob[b + 35] = 0.2
         glob[b + 36] = 0.1
+    glob[GLOBAL_V1 : GLOBAL_V1 + 5] = 0.1  # âge des peuples actifs
     return node, glob
 
 
@@ -105,6 +106,17 @@ class Net(nn.Module):
         mean = h.sum(1) / count
         value = self.val2(F.relu(self.val1(torch.cat([g, mean], -1))))
         return logits, value
+
+
+def widen(weights):
+    """Les poids d'un réseau de la version 1 (GLOBAL_V1 entrées de la partie) pour l'encodage
+    d'aujourd'hui : les nouvelles entrées ont des poids nuls, les valeurs ne changent pas. Seules les
+    sorties des clés de paix des Diplomates changent de sens (place absolue → relative), à réapprendre."""
+    w = weights["glob_in.weight"]
+    if w.shape[1] == GLOBAL:
+        return weights
+    assert w.shape[1] == GLOBAL_V1, f"réseau à {w.shape[1]} entrées de la partie"
+    return {**weights, "glob_in.weight": torch.cat([w, w.new_zeros(w.shape[0], GLOBAL - GLOBAL_V1)], 1)}
 
 
 def unpack_adj(bits, R=REGIONS):

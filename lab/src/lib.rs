@@ -13,13 +13,15 @@
 //! - `encode`, `net`, `az` : ce que voit le réseau, le réseau, la recherche guidée par le réseau ;
 //! - `arena` : des milliers de parties pour comparer deux joueurs ;
 //! - `selfplay` : parties d'entraînement du réseau ;
-//! - `label` : positions jugées par des fins de partie simulées (cibles de valeur presque sans bruit).
+//! - `label` : positions jugées par des fins de partie simulées (cibles de valeur presque sans bruit) ;
+//! - `reencode` : positions enregistrées passées à l'encodage d'aujourd'hui.
 
 pub mod agent;
 pub mod arena;
 pub mod az;
 pub mod label;
 pub mod mcts;
+pub mod reencode;
 pub mod selfplay;
 pub mod table;
 

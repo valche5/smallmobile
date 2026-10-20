@@ -12,6 +12,8 @@
 //!     [--judge az:net=poids.bin]   (fins de partie jouées par le réseau plutôt que par l'IA Normal)
 //! lab judge --games lab/data/p2 --out lab/data/p2-judged [--share 0.1] [--rollouts 32] [--judge az:net=poids.bin]
 //!     (positions de parties déjà jouées, fichiers .moves de lab selfplay)
+//! lab reencode --games lab/data/gen10 --data lab/data/gen10-judged --out lab/data/gen10-judged.v4
+//!     (positions *.v3.bin passées à l'encodage d'aujourd'hui, *.v4.bin, d'après les parties .moves)
 //! lab audit --games lab/data/gen10/c00   (ce que l'entrée du réseau laisse de côté, dans des parties jouées)
 //! lab noise --net poids.bin [--positions 2000] [--rollouts 32] [--judge az:…]   (bruit des cibles, erreur du réseau)
 //! lab analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par lab/tools/export-room.ts)
@@ -42,6 +44,7 @@ fn main() {
         "judge" => judge_cmd(&opts),
         "noise" => noise_cmd(&opts),
         "audit" => audit_cmd(&opts),
+        "reencode" => reencode_cmd(&opts),
         _ => usage(),
     }
 }
@@ -289,8 +292,10 @@ fn check_net_cmd(opts: &HashMap<String, String>) {
     let start = Instant::now();
     let mut evals = 0;
     let path = opts.get("data").unwrap();
-    let size = if path.ends_with(".v3.bin") {
+    let size = if path.ends_with(selfplay::SUFFIX) {
         selfplay::RECORD
+    } else if path.ends_with(".v3.bin") {
+        selfplay::RECORD_V3
     } else if path.ends_with(".v2.bin") {
         selfplay::RECORD_V2
     } else {
@@ -619,6 +624,25 @@ fn audit_cmd(opts: &HashMap<String, String>) {
     kinds.sort_by_key(|k| std::cmp::Reverse(k.1));
     for (what, count) in kinds.iter().take(15) {
         println!("{count:>8}  {what}");
+    }
+}
+
+fn reencode_cmd(opts: &HashMap<String, String>) {
+    let (logs, _) = game_logs(opts);
+    let data = opts.get("data").unwrap_or_else(|| usage());
+    let out = opts.get("out").unwrap_or_else(|| usage());
+    let start = Instant::now();
+    let threads = get(opts, "threads", threads());
+    match smallmobile_lab::reencode::run(&logs, std::path::Path::new(data), std::path::Path::new(out), threads) {
+        Ok((files, positions)) => println!(
+            "{positions} positions ({files} fichiers, {} parties) réencodées en {:.0} s",
+            logs.len(),
+            start.elapsed().as_secs_f64()
+        ),
+        Err(e) => {
+            eprintln!("échec : {e}");
+            std::process::exit(1)
+        }
     }
 }
 

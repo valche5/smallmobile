@@ -7,11 +7,15 @@ import numpy as np
 KEYS = 448
 REGIONS = 48
 NODE = 77
-GLOBAL = 700
+# entrées de la partie : encodage de la version 2 (lab/src/encode.rs) ; les GLOBAL_V1 premières sont
+# celles de la version 1, seules présentes dans les fichiers jusqu'à *.v3.bin
+GLOBAL = 806
+GLOBAL_V1 = 700
 ILLEGAL = 65535
 
-FIELDS = (
-    [
+
+def fields(glob):
+    return [
         ("players", "u1"),
         ("regions", "u1"),
         ("full", "u1"),
@@ -21,22 +25,27 @@ FIELDS = (
         ("visits", "<u2", KEYS),
         ("adj", "<u8", REGIONS),
         ("node", "u1", (REGIONS, NODE)),
-        ("glob", "u1", GLOBAL),
+        ("glob", "u1", glob),
     ]
-)
+
+
 # anciens fichiers (*.bin) : sans ce qu'attendait la recherche
-RECORD_V1 = np.dtype(FIELDS)
+RECORD_V1 = np.dtype(fields(GLOBAL_V1))
 # fichiers *.v2.bin : pièces encore attendues par la recherche pour chaque joueur relatif (NaN : inconnu)
-RECORD_V2 = np.dtype(FIELDS + [("qgain", "<f4", 5)])
+RECORD_V2 = np.dtype(fields(GLOBAL_V1) + [("qgain", "<f4", 5)])
 # fichiers *.v3.bin : et part de victoire attendue par la recherche (NaN : inconnue)
-RECORD = np.dtype(FIELDS + [("qgain", "<f4", 5), ("qwin", "<f4", 5)])
+RECORD_V3 = np.dtype(fields(GLOBAL_V1) + [("qgain", "<f4", 5), ("qwin", "<f4", 5)])
+# fichiers *.v4.bin : encodage de la version 2, clés de paix relatives au joueur qui agit
+# (`lab reencode` y convertit les *.v3.bin, qui désignent la cible de la paix par sa place absolue)
+RECORD = np.dtype(fields(GLOBAL) + [("qgain", "<f4", 5), ("qwin", "<f4", 5)])
 
 
 def dtype_of(f):
     """Le format des enregistrements d'un fichier, d'après son nom."""
-    if f.name.endswith(".v3.bin"):
-        return RECORD
-    return RECORD_V2 if f.name.endswith(".v2.bin") else RECORD_V1
+    for suffix, dtype in ((".v4.bin", RECORD), (".v3.bin", RECORD_V3), (".v2.bin", RECORD_V2)):
+        if f.name.endswith(suffix):
+            return dtype
+    return RECORD_V1
 
 
 # fichier `x.bin.games` à côté de `x.bin` : le nombre de positions de chaque partie, dans l'ordre
@@ -75,12 +84,16 @@ class Records:
 
 def fill(dst, src):
     """Copie des enregistrements (anciens ou nouveaux) dans un tableau `RECORD` ; ce qui manque aux
-    anciens vaut NaN."""
+    anciens vaut NaN, et leurs entrées de la version 2 zéro."""
     if src.dtype == RECORD:
         dst[...] = src
         return
     for name in RECORD.names:
-        dst[name] = src[name] if name in src.dtype.names else np.nan
+        if name == "glob":
+            dst["glob"] = 0
+            dst["glob"][:, : src["glob"].shape[1]] = src["glob"]
+        else:
+            dst[name] = src[name] if name in src.dtype.names else np.nan
 
 
 def games(f, dtype, count):

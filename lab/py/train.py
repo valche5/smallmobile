@@ -18,23 +18,28 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from data import ILLEGAL, in_validation, load
-from model import GAIN_SCALE, Net, export, unpack_adj
+from data import GLOBAL_V1, ILLEGAL, in_validation, load
+from model import GAIN_SCALE, Net, export, unpack_adj, widen
 
 
-def batches(recs, idx, size, device, temp, value_mask, policy_mask):
+def batches(recs, idx, size, device, temp, value_mask, policy_mask, old_inputs=False):
     for start in range(0, len(idx), size):
         sel = np.sort(idx[start : start + size])
-        r = recs[sel]
+        recs_sel = recs[sel]
+        # champs copiés à part : un enregistrement (5 866 octets) n'aligne pas ses nombres sur 4 octets
+        r = {name: np.ascontiguousarray(recs_sel[name]) for name in recs_sel.dtype.names}
         visits = torch.from_numpy(r["visits"].astype(np.int32)).to(device)
         legal = visits != ILLEGAL
         visits = torch.where(legal, visits, 0).float()
         if temp != 1.0:
             # cibles aiguisées : visites^(1/T), le coup le plus visité pèse davantage
             visits = (visits / visits.amax(1, keepdim=True).clamp(min=1)) ** (1.0 / temp)
+        glob = torch.from_numpy(r["glob"])
+        if old_inputs:
+            glob[:, GLOBAL_V1:] = 0
         yield dict(
             node=torch.from_numpy(r["node"]).to(device),
-            glob=torch.from_numpy(r["glob"]).to(device),
+            glob=glob.to(device),
             adj=unpack_adj(torch.from_numpy(r["adj"].astype(np.int64)).to(device)),
             regions=torch.from_numpy(r["regions"].astype(np.int64)).to(device),
             players=torch.from_numpy(r["players"].astype(np.int64)).to(device),
@@ -88,6 +93,9 @@ def main():
     ap.add_argument("--lazy", action="store_true", help="lire les données à la demande (plus grosses que la mémoire)")
     ap.add_argument("--policy-temp", type=float, default=1.0, help="cible de politique : visites^(1/T)")
     ap.add_argument("--seed", type=int, default=0, help="tirage des parties gardées (`@part`) et ordre des lots")
+    ap.add_argument(
+        "--old-inputs", action="store_true", help="entrées de la version 2 mises à zéro (témoin de l'encodage)"
+    )
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -108,7 +116,7 @@ def main():
     if args.init:
         state = torch.load(args.init, map_location="cpu")
         net = Net(state["hidden"], state["layers"])
-        net.load_state_dict(state["weights"])
+        net.load_state_dict(widen(state["weights"]))
     net.to(device)
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=args.wd)
     per_epoch = math.ceil(len(train_idx) / args.batch)
@@ -122,7 +130,8 @@ def main():
         start = time.time()
         sums = np.zeros(5)
         count = 0
-        for b in batches(recs, rng.permutation(train_idx), args.batch, device, args.policy_temp, value_mask, policy_mask):
+        train = rng.permutation(train_idx)
+        for b in batches(recs, train, args.batch, device, args.policy_temp, value_mask, policy_mask, args.old_inputs):
             if done == steps:
                 break
             done += 1
@@ -140,7 +149,7 @@ def main():
         vs = np.zeros(5)
         vc = np.zeros(5)
         with torch.no_grad():
-            for b in batches(recs, val_idx, 2048, device, args.policy_temp, value_mask, policy_mask):
+            for b in batches(recs, val_idx, 2048, device, args.policy_temp, value_mask, policy_mask, args.old_inputs):
                 w = np.array([b["has_policy"].sum().item(), b["has_value"].sum().item()])[[0, 1, 1, 0, 1]]
                 vs += [x.item() for x in losses(net, b, args.q_weight)] * w
                 vc += w

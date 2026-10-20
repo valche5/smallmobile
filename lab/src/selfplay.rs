@@ -12,14 +12,17 @@
 //! u16 × KEYS  visites de chaque coup (65535 : coup impossible)
 //! u8 × REGIONS × 8  voisines (un bit par région, 64 bits par région)
 //! u8 × REGIONS × NODE  entrées par région
-//! u8 × GLOBAL  entrées de la partie
+//! u8 × GLOBAL  entrées de la partie (GLOBAL_V1 avant la version 4)
 //! f32 × 5  pièces que la recherche attendait encore pour chaque joueur relatif (NaN : inconnu)
 //! f32 × 5  part de victoire que la recherche attendait pour chaque joueur relatif (NaN : inconnu)
 //! ```
 //!
-//! Les fichiers `*.v3.bin` ont tout ; les `*.v2.bin` s'arrêtent avant la dernière ligne, les `*.bin`
-//! avant les deux dernières. À côté de chaque fichier : `games_file` (positions de chaque partie)
-//! et, depuis la version 3, `moves_file` (de quoi rejouer chaque partie, `GameLog`).
+//! Les fichiers `*.v4.bin` ont tout, avec l'encodage de la version 2 (`encode`) et les clés de paix
+//! relatives (`moves::FINISH`) ; les `*.v3.bin` ont l'encodage et les clés de la version 1 ; les
+//! `*.v2.bin` s'arrêtent de plus avant la dernière ligne, les `*.bin` avant les deux dernières.
+//! `lab reencode` passe des fichiers de la version 3 à la version 4. À côté de chaque fichier :
+//! `games_file` (positions de chaque partie) et, depuis la version 3, `moves_file` (de quoi rejouer
+//! chaque partie, `GameLog`).
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -32,15 +35,18 @@ use smallmobile_kernel::wire::{self, Writer};
 use smallmobile_kernel::{Action, Game, Phase};
 
 use crate::az::Searched;
-use crate::encode::{Encoded, GLOBAL, NODE, REGIONS, encode};
+use crate::encode::{Encoded, GLOBAL, GLOBAL_V1, NODE, REGIONS, encode};
 use crate::know::{Knowledge, Returns};
 use crate::moves::{self, KEYS};
 use crate::rand::{Rng, mix};
 use crate::table::{Outcome, Table};
 
-pub const RECORD_V1: usize = 4 + 20 + 20 + KEYS * 2 + REGIONS * 8 + REGIONS * NODE + GLOBAL;
+pub const RECORD_V1: usize = 4 + 20 + 20 + KEYS * 2 + REGIONS * 8 + REGIONS * NODE + GLOBAL_V1;
 pub const RECORD_V2: usize = RECORD_V1 + 20;
-pub const RECORD: usize = RECORD_V2 + 20;
+pub const RECORD_V3: usize = RECORD_V2 + 20;
+pub const RECORD: usize = RECORD_V3 - GLOBAL_V1 + GLOBAL;
+/// Le suffixe des fichiers de positions écrits aujourd'hui.
+pub const SUFFIX: &str = ".v4.bin";
 pub const ILLEGAL: u16 = u16::MAX;
 
 /// Une IA qui cherche, et rend les visites de la racine.
@@ -405,7 +411,7 @@ pub fn run(cfg: &Config, searcher: &dyn Searcher, dir: &Path) -> std::io::Result
         for t in 0..cfg.threads {
             let (next, positions) = (&next, &positions);
             handles.push(scope.spawn(move || -> std::io::Result<()> {
-                let path = dir.join(format!("s{:x}-{t:02}.v3.bin", cfg.seed));
+                let path = dir.join(format!("s{:x}-{t:02}{SUFFIX}", cfg.seed));
                 let mut out = BufWriter::new(File::create(&path)?);
                 let mut games = BufWriter::new(File::create(games_file(&path))?);
                 let mut logs = BufWriter::new(File::create(moves_file(&path))?);
@@ -444,9 +450,10 @@ pub fn run(cfg: &Config, searcher: &dyn Searcher, dir: &Path) -> std::io::Result
     })
 }
 
-/// Relit un enregistrement : la position encodée et les voisines de chaque région.
+/// Relit un enregistrement : la position encodée et les voisines de chaque région. Avant la version
+/// 4, les entrées de la version 2 restent nulles, et la place du joueur qui agit est inconnue (0).
 pub fn read_record(rec: &[u8]) -> (Encoded, Vec<Vec<u8>>) {
-    assert!([RECORD_V1, RECORD_V2, RECORD].contains(&rec.len()));
+    assert!([RECORD_V1, RECORD_V2, RECORD_V3, RECORD].contains(&rec.len()));
     let players = rec[0] as usize;
     let regions = rec[1] as usize;
     let mut at = 4 + 20 + 20 + KEYS * 2;
@@ -458,11 +465,12 @@ pub fn read_record(rec: &[u8]) -> (Encoded, Vec<Vec<u8>>) {
             adj.push((0..64u8).filter(|&b| bits >> b & 1 == 1).collect());
         }
     }
-    let mut e = Encoded { regions, players, node: [[0; NODE]; REGIONS], global: [0; GLOBAL] };
+    let mut e = Encoded { regions, players, seat: 0, node: [[0; NODE]; REGIONS], global: [0; GLOBAL] };
     for row in e.node.iter_mut() {
         row.copy_from_slice(&rec[at..at + NODE]);
         at += NODE;
     }
-    e.global.copy_from_slice(&rec[at..at + GLOBAL]);
+    let global = if rec.len() == RECORD { GLOBAL } else { GLOBAL_V1 };
+    e.global[..global].copy_from_slice(&rec[at..at + global]);
     (e, adj)
 }
