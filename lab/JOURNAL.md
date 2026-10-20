@@ -1,7 +1,7 @@
 # IA SmallMobile : résultats utiles et plan d'expériences
 
-État au 19 octobre 2026. Ce document remplace le journal chronologique ; les anciens détails
-restent dans Git. Les résultats ci-dessous ont été mesurés. Les étapes P0 à P5 sont un plan
+État au 20 octobre 2026. Ce document remplace le journal chronologique ; les anciens détails
+restent dans Git. Les résultats ci-dessous ont été mesurés. Les étapes P0 à P7 sont un plan
 à exécuter : la réécriture du document ne vaut pas réalisation de ces étapes.
 
 ## Objectif et priorité
@@ -10,11 +10,18 @@ Construire l'IA la plus forte possible sur les cartes générées, à **2, 3, 4 
 Le labo peut chercher longtemps ; la version du jeu doit aussi être évaluée au temps de
 réflexion disponible sur mini. Conserver ces deux mesures de force.
 
-**Prochain levier : apprendre politique et valeur sur du jeu fort, après avoir fiabilisé les
-mesures.** L'enseignant est gen8 `rp=1` : en auto-apprentissage, les adversaires sont le réseau.
-Le choix de l'Expert livré (P1) se fait à côté, sans bloquer cet apprentissage. Une génération
-identique à gen8 a peu de rendement. L'adaptation aux adversaires mérite un essai séparé ; sa
-réussite ne doit pas conditionner le lancement de ce nouvel apprentissage.
+**Où on en est (20 octobre) :** apprendre valeur et politique sur du jeu fort a relancé le
+progrès que les générations identiques à gen8 n'apportaient plus : C (+5 à +6 sur gen8), gen9
+(+7,9 sur C, plus de +10 sur gen8, livré le 20 octobre), gen10 (fenêtre W : +6,3 sur gen9, mais
+moins bon face à Normale). **Leviers suivants, dans l'ordre :** auditer l'encodage ; entraîner
+face à une population d'adversaires (P6) ; cibles territoriales (P7) ; placements et recherche
+(P5). Détail : « Suite du plan après gen10 ».
+
+**Décision du 20 octobre : l'Expert ne sait pas contre qui il joue.** Il doit bien jouer dans tous
+les cas, avec le même réglage quels que soient ses adversaires : ni `rp=4` (simulation selon le
+type de chaque place), ni type de place ou profil d'adversaire en entrée du réseau, ni
+adaptation en cours de partie (P3). La robustesse face aux styles différents vient de
+l'entraînement (P6), pas de l'identification des adversaires.
 
 Règle d'honnêteté : connaître seulement ce qu'un humain attentif peut savoir. Les scores se
 reconstituent à partir des gains annoncés. Le contenu des pioches et l'ordre des cartes rendues
@@ -218,10 +225,11 @@ Différences à la même table : n=80 − livré +27,3 ± 4,8 (3 j.) et +9,5 ± 
 n=200 − livré +5,4 ± 3,5 ; n=80 − n=200 +4,1 ± 4,0, indécis.
 
 **Conclusion :** à temps égal ou moindre, `rp=4` n=80 bat l'Expert livré parmi des Expert et sur
-les tables mixtes, et l'égale face à Difficile seul en 40 % du temps. C'est le candidat pour le
-jeu ; `rp=4` n=200 est la référence forte. Limites : temps mesurés sur une machine pleine (rapport
-avec mini à étalonner) ; aucune table n'avait d'humain, pour qui `rp=4` prendrait le mélange
-égal, non mesuré (P3).
+les tables mixtes, et l'égale face à Difficile seul en 40 % du temps. Limites : temps mesurés sur
+une machine pleine (rapport avec mini à étalonner) ; aucune table n'avait d'humain, pour qui
+`rp=4` prendrait le mélange égal, non mesuré. **Non retenu pour le jeu (décision du
+20 octobre) :** `rp=4` suppose de savoir qui occupe chaque place ; l'Expert ne doit pas le savoir.
+Son gain vient de là : simuler chaque place selon son type.
 
 ### Progression des réseaux et rendement du calcul
 
@@ -276,6 +284,8 @@ le bucket. Réseaux exportés `.bin` : `lab/nets/`.
 | `p2`, `p2-judged` | 5 000 parties gen8 `rp=1` (377 000 positions) ; 221 000 positions rejugées par 32 fins de gen8 |
 | `gen9`, `gen9-judged` | 20 000 parties p2c `rp=1` (1,51 million de positions) ; 861 000 positions rejugées par 32 fins de p2c |
 | gen9 | Depuis gen8 ; anciennes sources au quart, plus `p2`, `p2-judged`, `gen9`, `gen9-judged` (valeur et politique), 24 000 lots (P2 étendu) |
+| `gen10`, `gen10-judged` | 20 000 parties gen9 `rp=1` (1,54 million de positions) ; 888 000 positions rejugées par 32 fins de gen9 |
+| `gen10f`, `gen10w` | Depuis gen9, 24 000 lots : F comme gen9 plus `gen10` ; W seulement `p2`, `gen9`, `gen10` (fenêtre) |
 
 Les générations récentes gardent 50 % des décisions cherchées à fond, les autres à 50 itérations,
 avec bruit 0,25 pour les recherches complètes. Générer 20 000 parties prenait environ une heure
@@ -308,14 +318,28 @@ entières (64 fichiers, environ 20 000 parties).
    donc un mélange 50/50 sans adaptation. Aucun gain adaptatif n'est mesuré. Les types de
    places (humain, Expert, niveau d'IA) sont publics : simuler chaque place selon son type est
    honnête et ne demande aucune croyance ; seul le jeu des humains reste à deviner.
+   **Non poursuivie (décision du 20 octobre) :** l'Expert ne sait pas contre qui il joue.
 3. **Cibles de politique.** Une recherche à 200 itérations peut bien jouer sans suffisamment
    améliorer la politique qu'elle doit enseigner. Comparer les recettes à coût total comparable.
 4. **Coups absents.** `brain/src/moves.rs` fixe certains placements de pouvoirs et limite les
    plans de redéploiement/défense. La recherche ne peut choisir un plan absent. L'importance
    de cette restriction n'a pas été mesurée.
-5. **Entrées de la valeur.** L'erreur de valeur ne baisse ni avec les données ni avec la taille
-   du réseau, et l'erreur d'entraînement égale celle de validation. Il peut manquer une
-   information dans l'encodage ; de nouvelles cibles n'y changeraient rien.
+5. **Entrées de la valeur.** Avec les anciennes cibles, l'erreur de valeur ne baissait ni avec
+   les données ni avec la taille du réseau. Les nouvelles la font baisser (9,3 → 8,4 → 6,6
+   pièces face aux fins du réseau, gen8 → C → gen9), sauf à la dernière manche, presque
+   déterministe (2,5 → 3,3). Deux informations publiques manquent dans `brain/src/encode.rs`
+   (vérifié le 20 octobre) : une paix n'est encodée que si elle concerne le joueur qui agit,
+   celle entre deux adversaires est invisible ; des cartes rendues sous la pioche, le réseau
+   reçoit le nombre (`G_KNOWN_TAIL`), pas l'ordre, public. Le type de chaque place n'est pas
+   non plus une entrée, et ne doit pas l'être (décision du 20 octobre). Effet non mesuré :
+   l'erreur résiduelle seule ne prouve pas que ces manques en sont la cause.
+6. **Angle mort de l'auto-apprentissage.** Des parties entre réseaux apprennent peu à exploiter
+   des adversaires d'un autre style. Mesuré en gen10 : sans les anciennes parties de Normal, W
+   bat F parmi des gen9 (+3,0) mais exploite moins bien Normale (−4,3). Essai direct : une
+   population d'adversaires dans les parties d'entraînement (P6).
+7. **Cibles trop globales.** Victoire et pièces finales disent mal quelle région ou quel choix a
+   été mal jugé. Des cibles locales (propriétaire de chaque région après une rotation, revenu
+   au prochain décompte, pertes d'une armée) pourraient enrichir le tronc commun (P7).
 
 ## Protocole commun
 
@@ -353,6 +377,12 @@ entières (64 fichiers, environ 20 000 parties).
   bloque la promotion que si son recul est significatif. Si l'incertitude ne permet pas
   d'exclure une régression supérieure à la tolérance, le résultat est **indécis**, pas une
   preuve d'équivalence.
+- Panel de chaque génération (depuis le 20 octobre) : la génération précédente ne suffit pas.
+  Ajouter Difficile et Normale à chaque génération (le recul de gen10 face à Normale ne se voyait
+  pas entre réseaux) ; pour une recette nouvelle (P6), un panel tenu à l'écart de
+  l'entraînement : générations figées et tables mixtes absentes des parties d'entraînement.
+  Publier les résultats par adversaire et par taille : à plusieurs joueurs, un classement
+  unique peut cacher une dépendance à la composition de la table.
 - Tests ciblés pour chaque modification, puis vérifications Rust du projet avec timeout.
   Entraînement et campagnes de parties se font sur AWS.
 
@@ -411,9 +441,9 @@ et sortent de la liste.
 
 **Confirmation faite le 19 octobre** (« `rp=4` à temps égal ») : `rp=4` n=80 bat `rp=2` n=200 à
 temps égal (+5,8 ± 1,5 parmi des Expert, +9,5 et +27,3 aux tables mixtes) et l'égale face à
-Difficile. Restent, non décidés : l'intégrer au jeu, ce qui demande d'envoyer à `expert` le type
-de chaque place (un humain : modèle inconnu, mélange égal), après avoir étalonné son temps sur
-mini ; puis la profondeur 5.
+Difficile. **Non intégré au jeu** (décision du 20 octobre : l'Expert ne sait pas contre qui il
+joue). Restent possibles, sans identifier les adversaires : `rp=1` ou `rp=2`, le même modèle
+pour toutes les places (livré : `rp=2`), et la profondeur 5.
 
 - Poids figés gen8 ; comparer `roll=1,rp=2,n=200,depth=3`, `roll=1,rp=1,n=200,depth=3`,
   `roll=0,n=800` et le modèle par type de place (P0). Fixer `w=0.5,c=2.5,rt=0`, sans bruit à la
@@ -487,7 +517,7 @@ apprise des résultats des parties et des fins du réseau, avec les anciennes so
 
 Prochaine étape, à décider : étendre à 20 000 parties avec cette recette (génération et jugement
 environ 4 h sur une machine, 3 $). C est aussi un candidat pour le jeu (+5,3 face à gen8 aux
-réglages livrés) ; il cumulerait avec `rp=4`, non mesuré ensemble.
+réglages livrés) ; il cumulerait avec `rp=4`, non mesuré ensemble (`rp=4` écarté depuis).
 
 **Extension lancée le 20 octobre** : 20 000 parties de C (`lab/nets/p2c.bin`) et leurs positions
 rejugées par C (`lab/runs/gen9-data.sh`, `lab/data/gen9` et `gen9-judged`), puis entraînement de
@@ -678,6 +708,9 @@ Son efficacité dans SmallMobile reste à mesurer.
 
 ### P3 — Mesurer l'intérêt de l'adaptation aux adversaires
 
+**Écartée le 20 octobre :** l'Expert ne doit pas savoir contre qui il joue, ni le deviner en cours
+de partie. Plan gardé pour mémoire.
+
 **Hypothèse :** reconnaître un style pendant la partie améliore les simulations sur les tables mixtes.
 
 - Brancher des croyances propres à chaque observateur et chaque partie dans l'arène, alimentées
@@ -729,9 +762,14 @@ d'un jeton, autre région pour un héros/forteresse, autre répartition des camp
 leurs suites, puis la force en arène. Vérifier légalité, clés d'actions et compatibilité des
 formats ; de nouvelles clés nécessitent un apprentissage.
 
-**Entrées du réseau :** si le diagnostic de P0 montre une erreur de valeur forte même en fin de
-partie, compléter l'encodage. Un nouvel encodage rend les anciens tenseurs inutilisables ; les
-graines et actions enregistrées depuis P2 permettent de réencoder.
+**Entrées du réseau :** pour les manques vérifiés (hypothèse 5), construire d'abord des
+positions qui ne diffèrent que par eux (paix entre deux adversaires, ordre des cartes rendues)
+et vérifier qu'elles ont le même encodage ; mesurer leur fréquence et leur effet, puis
+corriger, séparément des cibles auxiliaires (P7). N'encoder que de l'information publique :
+l'ordre caché des pioches et les dés restent tirés au sort. Un nouvel encodage rend les anciens
+tenseurs inutilisables ; les parties de `p2`, `gen9` et `gen10` se rejouent à l'identique
+(fichiers `.moves` : donne, graines, actions) et se réencodent sans relancer l'Expert,
+contrairement à `label`, `gen6` et `gen7`. Les nouvelles entrées démarrent à poids nuls, pour affiner depuis le dernier réseau.
 
 **Recherche :** si davantage d'itérations aide toujours peu après P2/P4, examiner le regroupement
 en boucle ouverte. Une même suite d'actions peut mener à des marchés ou dés différents ; tester
@@ -745,6 +783,68 @@ inchangées à graine fixée ; pour une approximation, remesurer la force à tem
 **Faible priorité aujourd'hui :** réseau plus gros sur les mêmes cibles, nouvelles positions
 jugées uniquement par Normal, nombreuses générations identiques, modèle humain appris sur les
 quelques parties disponibles. Réexaminer si les nouvelles mesures le justifient.
+
+### P6 — Entraîner face à une population d'adversaires
+
+**Hypothèse (6) :** des parties d'entraînement face à une population d'adversaires donnent une
+stratégie plus robuste que l'auto-apprentissage seul, sans les anciennes cibles de Normal.
+
+- Recette candidate : la fenêtre de W (parties récentes de jeu fort), dont une part des tables
+  mêle le réseau courant à des générations figées (gen8, C, gen9), à Normale et à Difficile.
+  Valeur apprise des **vrais résultats** de ces parties ; volume borné comme pour W. Témoin : la
+  fenêtre pure, à calcul total égal, mêmes cibles, même réseau, même nombre de mises à jour.
+- Évaluer sur un panel tenu à l'écart (protocole) : gen10 parmi les réseaux, Difficile, Normale,
+  tables mixtes, au moins un adversaire absent de l'entraînement.
+- **Succès :** progrès sur le panel sans effondrement face à un style. Battre la génération
+  précédente seule ne suffit pas.
+- Ensuite seulement : des adversaires spécialisés contre le champion, faibles ailleurs mais
+  révélateurs de ses failles (« exploiteurs » d'AlphaStar). Le réseau ne reçoit jamais
+  l'identité ni le profil de ses adversaires (décision du 20 octobre) : il doit apprendre une
+  stratégie qui tient face à tous.
+- Piste distincte : garder une sélection d'anciennes positions en renouvelant leurs cibles,
+  plutôt que leurs valeurs de Normal. Le recul de W face à Normale ne prouve pas que ces
+  positions sont inutiles, seulement que leurs anciennes cibles freinent ailleurs.
+
+### P7 — Cibles territoriales auxiliaires
+
+**Hypothèse (7) :** des cibles locales rendent chaque partie plus instructive que victoire,
+pièces et politique seules.
+
+Le réseau prédit déjà les pièces à venir : un score de plus ne serait pas nouveau. Décomposer :
+propriétaire de chaque région après une rotation complète, revenu au prochain décompte,
+territoires gardés et jetons perdus par une armée. La victoire reste l'objectif ; des têtes
+utilisées seulement à l'entraînement ne coûtent rien en jeu. Inspiration : la propriété du
+plateau de KataGo (section 4.1), à adapter, car les pièces s'accumulent à chaque tour : la carte
+finale seule ne suffit pas.
+
+**Premier essai :** cibles tirées des parties rejouables (`p2`, `gen9`, `gen10`), d'abord la
+propriété après une rotation et le revenu au prochain décompte ; avec et sans, mêmes parties,
+mêmes mises à jour, mêmes pertes principales. Critère : la force en arène à temps égal ;
+calibration et erreurs par région en diagnostic. Après l'audit de l'encodage, et séparément.
+
+### Suite du plan après gen10 (20 octobre)
+
+Ordre retenu après la revue du 20 octobre (pistes proposées par un autre modèle, vérifiées dans
+le code et confrontées aux mesures ci-dessus) :
+
+La revue proposait d'abord de brancher `rp=4` dans le jeu : écarté (décision du 20 octobre,
+l'Expert ne sait pas contre qui il joue).
+
+1. **Audit de l'encodage** (hypothèse 5, P5) : du code et des tests, sans AWS ; peut avancer
+   pendant les campagnes.
+2. **gen11, essai de population (P6)** contre la fenêtre pure, à calcul égal. Choisir d'ici là
+   le réseau livré et l'enseignant entre gen9, `gen10w` et `gen10f` ; repère manquant : gen9
+   face à Normale et Difficile.
+3. **Cibles territoriales (P7)**, après l'audit.
+4. **Placements** (P5, espace des coups) : variantes locales avant tout générateur appris de
+   plans. Le placement des héros, forteresses et campements est fixe, et la défense n'a que deux
+   répartitions candidates : la restriction est certaine, son coût en jeu non mesuré.
+5. **Recherche par observations publiques** (P5, recherche) : sur des cas construits d'abord ;
+   plus de branches peuvent diluer 200 itérations, à valider à temps égal.
+
+Garder les résultats de parties fortes au cœur des cibles de valeur. Faible priorité inchangée :
+réseau plus gros (latence sur mini ; l'échec passé portait sur les anciennes cibles), davantage
+de fins moyennées du même réseau, générations identiques sans mesurer leur gain marginal.
 
 ## Les machines AWS
 
@@ -801,12 +901,13 @@ Ne pas lancer toute la feuille de route d'un seul bloc. L'en-tête de `tools/clo
   [texte intégral](https://arxiv.org/html/1902.10565v5).
   Sections 3.1/3.2 : allocation variable de recherche, exploration et cibles de politique.
   Application : P4. La randomisation du budget existe déjà dans le labo ; ses réglages et la
-  qualité des cibles restent à comparer dans ce jeu.
+  qualité des cibles restent à comparer dans ce jeu. Section 4.1 : propriété du plateau et score
+  comme cibles auxiliaires. Application : P7.
 - **Équipe AlphaStar — Mastering the real-time strategy game StarCraft II (2019).**
   [Présentation des auteurs](https://deepmind.google/blog/alphastar-mastering-the-real-time-strategy-game-starcraft-ii/).
   « How AlphaStar is trained » : population de concurrents, versions figées, diversité des
-  stratégies. Application : mélange d'adversaires après P2. Cela inspire un essai, sans garantie
-  de progrès pour un jeu à 2–5 joueurs.
+  stratégies. Application : P6, population d'adversaires puis exploiteurs. Cela inspire un essai,
+  sans garantie de progrès pour un jeu à 2–5 joueurs.
 
 Après chaque expérience, mettre à jour la synthèse et le statut de l'étape concernée. Garder
 dans `lab/runs/` scripts, résultats détaillés et manifeste : hypothèse, code/poids, sources,
