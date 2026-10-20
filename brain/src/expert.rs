@@ -11,10 +11,11 @@ use crate::net::Net;
 use crate::rand::{Rng, mix};
 use crate::search::{Az, Config};
 
-/// Les réglages de la meilleure IA du labo (`lab/JOURNAL.md`, gen8) : n=200, w=0,5, c=2,5, fins
-/// simulées de 3 tours, jouées par le réseau pour le joueur qui cherche (`rp=2`).
+/// Les réglages de l'Expert du jeu (`lab/JOURNAL.md`) : n=200, w=0,5, c=2,5, fins simulées de 3 tours,
+/// jouées par le réseau pour tous les joueurs (`rp=1`, depuis le 20 octobre ; `rp=2` avant : l'IA
+/// Normale y jouait les adversaires).
 pub fn config(iterations: usize) -> Config {
-    Config { iterations, c_puct: 2.5, win_weight: 0.5, rollout: 1.0, depth: 3, net_rollouts: 2, ..Config::default() }
+    Config { iterations, c_puct: 2.5, win_weight: 0.5, rollout: 1.0, depth: 3, net_rollouts: 1, ..Config::default() }
 }
 
 pub struct Expert {
