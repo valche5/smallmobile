@@ -13,9 +13,12 @@ réflexion disponible sur mini. Conserver ces deux mesures de force.
 **Où on en est (20 octobre) :** apprendre valeur et politique sur du jeu fort a relancé le
 progrès que les générations identiques à gen8 n'apportaient plus : C (+5 à +6 sur gen8), gen9
 (+7,9 sur C, plus de +10 sur gen8, livré le 20 octobre), gen10 (fenêtre W : +6,3 sur gen9, mais
-moins bon face à Normale). **Leviers suivants, dans l'ordre :** auditer l'encodage ; entraîner
-face à une population d'adversaires (P6) ; cibles territoriales (P7) ; placements et recherche
-(P5). Détail : « Suite du plan après gen10 ».
+moins bon face à Normale). **Leviers suivants, dans l'ordre :** auditer l'encodage (fait :
+encodage v2) ; entraîner face à une population d'adversaires (P6, campagne gen11 en cours) ;
+**puis, en priorité, l'adaptation aux adversaires** (P3 : deviner le style de chacun d'après ses
+coups dans la partie, et le simuler ainsi ; « fondamental dans Small World » pour l'utilisateur,
+20 octobre au soir) ; cibles territoriales (P7) ; placements et recherche (P5). Détail : « Suite
+du plan après gen10 ».
 
 **Décision du 20 octobre : l'Expert ne sait pas contre qui il joue.** Il doit bien jouer dans tous
 les cas : ni `rp=4` (simulation selon le type de chaque place), ni type de place (humain, IA,
@@ -36,8 +39,10 @@ pour décider. Voir `brain/src/know.rs` et le correctif P0.
   d'actions en boucle ouverte, mondes possibles, sélection PUCT ; chaque joueur maximise sa
   propre valeur. Les placements sont regroupés en quelques plans candidats.
 - `lab/` : arène, auto-apprentissage, cibles de valeur ; `lab/py/` : entraînement PyTorch.
-- Réseau : graphe des régions, 4 couches de largeur 64 ; 77 entrées par région, 700 globales,
-  448 clés d'actions. Sorties : politique, victoire par joueur, pièces encore à gagner.
+- Réseau : graphe des régions, 4 couches de largeur 64 ; 77 entrées par région, 700 globales
+  jusqu'à gen10 (version 1), 806 pour gen11 (version 2), 926 avec l'histoire des joueurs
+  (version 3, P3) ; 448 clés d'actions. Sorties : politique, victoire par joueur, pièces encore à
+  gagner ; depuis la version 3, une tête « coup réel » facultative (P3).
   Inférence Rust AVX2/FMA ; concordance Python/Rust déjà vérifiée à environ 5·10⁻⁵.
 - Expert livré : `lab/nets/gen10w.bin` depuis le 20 octobre au soir (gen9 le matin, gen8 avant), via `target/release/expert`
   et `src/server/expert.ts`.
@@ -725,6 +730,51 @@ pur (tous les joueurs sont le même réseau) : à entraîner sur des parties à 
 réencodées depuis leurs fichiers `.moves`. Côté jeu, le serveur devra transmettre l'historique à
 `expert`. Le plan ci-dessous reste comme mémoire de l'ancienne forme.
 
+**Écrit le 20 octobre au soir** (branche `history`, fusionnée dans main après la campagne gen11,
+dont une relance éventuelle doit partir de l'ancien code ; priorité de l'utilisateur après les
+résultats de gen11) :
+- **Histoire des joueurs** (`know::History`, tenue par le journal de chaque coup,
+  `Knowledge::play`) : par joueur, régions vides, tribus oubliées, régions prises à un peuple actif
+  ou en déclin d'un adversaire, au plus riche du moment ; déclins et manches tenues par les peuples
+  déclinés ; peuples choisis, pièces payées et ramassées ; paix ; abandons ; dés de renfort ;
+  jetons perdus ; et régions prises par chacun à chacun, depuis le début et pendant le dernier
+  tour. Tout est public : la même histoire pour tous, refaite à l'identique en rejouant les actions
+  (test `version_3_inputs_tell_the_history`, coup par coup et action par action).
+- **Encodage v3** : 120 entrées de plus (926), par joueur relatif. Un réseau de la version 1 ou 2
+  lit le début : gen10w cherche exactement comme avant (mêmes empreintes `lab speed`, `rp=1` et
+  `rp=2`).
+- **Tête « coup réel »** (`beh_*`, même forme que la politique) : le coup que le joueur qui agit
+  va vraiment jouer, appris des coups joués (clé du coup joué dans les positions v5), y compris
+  ceux des autres joueurs aux tables variées (positions « observées », qui n'apprennent que cette
+  tête). Elle part de la politique (`model.widen`) : sans histoire, elle prévoit qu'on joue comme
+  le réseau. Coût : environ 10 % par évaluation (113 µs contre 102 pour gen10w sur mini).
+- **Recherche** : `bh=1`, les adversaires des fins simulées jouent le coup que cette tête leur
+  prévoit (tiré à la température `bt`, défaut 1) plutôt que le meilleur selon le réseau ; `bh=2`,
+  aussi comme a priori de leurs coups dans l'arbre. Le `rp=1` du jeu passe ainsi de « tout le
+  monde joue comme moi » à « chacun joue comme je l'ai vu jouer ».
+- **Données** : format v5 (5 988 octets par position) ; `lab selfplay --observe 1` ; `lab reencode`
+  passe les v3 et v4 en v5, avec `--observe 1` les coups des autres joueurs des tables variées
+  (test : réencodées, les parties redonnent octet pour octet celles jouées avec observation).
+- **Styles de Normale** pour varier les tables (`agent::STYLES`, `normal:aggressive`…), mesurés en
+  parties à 3 joueurs d'un même style (régions prises aux autres, part au plus riche, déclins,
+  manches par peuple décliné) : Normale 35,2, 59 %, 4,8, 2,0 ; `aggressive` 38,7, 61 %, 5,2, 2,1 ;
+  `hunter` 35,3, 66 %, 4,8, 2,0 ; `prudent` 21,4, 68 %, 4,3, 2,3 ; `early` 32,3, 58 %, 9,4, 1,4 ;
+  `late` 32,6, 60 %, 2,7, 3,0. L'agressivité de Normale sature vite (la prime `foe` au-delà de 1
+  ne change presque rien).
+- Python : `train.py --beh-weight` (1 par défaut), `--no-history` (témoin, histoire à zéro) ;
+  `check.py` compare aussi la tête « coup réel » (5·10⁻⁵ sur des positions v5, vérifié sur mini).
+
+**Essai prévu (gen12, scripts `lab/runs/gen12-data.sh` et `gen12-train.sh`, à lancer après accord) :**
+10 000 parties à tables variées avec observation, le champion de gen11 face à Facile, Normale,
+Difficile, les cinq styles, gen8, gen9, gen10w et lui-même affaibli ; réencodage v5 de gen10, gen11
+et de leurs tables variées ; H0 (histoire à zéro) et H1 (histoire), tous deux avec la tête « coup
+réel », depuis le champion de gen11. Arènes en `rp=1` : H0 et H1 sans modèle des adversaires,
+H1 avec `bh=1` et `bh=2`, face au champion de gen11, à Normale, à Difficile et à chaque style.
+**Critère :** H1 avec `bh` mieux que H1 sans, et H1 mieux que H0, face aux styles et aux IA du
+jeu, sans recul face au champion. La validation de la tête « coup réel » (H0 contre H1) dit en
+plus si l'histoire aide à prévoir les coups. Le jeu ne transmet pas encore l'histoire à `expert` :
+à faire si l'essai réussit (rejouer les actions de la partie, comme le labo).
+
 **Hypothèse :** reconnaître un style pendant la partie améliore les simulations sur les tables mixtes.
 
 - Brancher des croyances propres à chaque observateur et chaque partie dans l'arène, alimentées
@@ -834,6 +884,15 @@ la liste, -1 pour l'IA qui apprend), pour l'analyse et pour l'historique des cou
 autres parties restent identiques à l'auto-apprentissage pur. Pouvoirs connus et file des défenses : trop rares pour compter. Leur effet ne se
 mesure qu'en entraînant avec et sans, sur les mêmes parties réencodées.
 
+**Données de gen11, 20 octobre** (`lab/runs/gen11-data.sh`, 190 min de c7a.16xlarge, 2,38 $) :
+20 000 parties de gen10w en `rp=1` (morceaux de 500 parties en 136 à 152 s, contre 277 s avant
+l'accélération), 30 % de leurs positions rejugées par 32 fins de gen10w (79 à 88 s par morceau),
+puis 10 000 parties à tables variées (101 à 118 s par morceau). 8,7 Go (`gen11`), 5,2 Go
+(`gen11-judged`), 2,3 Go (`gen11-mixed`). Erreur de la valeur sur les mêmes 3 968 positions, avance
+en pièces du joueur qui agit : face aux fins du réseau, gen10w 4,85 contre 6,63 pour gen9 ; face
+aux fins de Normale, 9,95 contre 7,48. gen10w juge mieux le jeu fort et moins bien celui de
+Normale, comme ses arènes (« l'oubli » de W).
+
 **Recherche :** si davantage d'itérations aide toujours peu après P2/P4, examiner le regroupement
 en boucle ouverte. Une même suite d'actions peut mener à des marchés ou dés différents ; tester
 sur un petit cas la séparation des observations publiques avant une refonte de l'arbre.
@@ -889,8 +948,9 @@ stratégie plus robuste que l'auto-apprentissage seul, sans les anciennes cibles
   précédente seule ne suffit pas.
 - Ensuite seulement : des adversaires spécialisés contre le champion, faibles ailleurs mais
   révélateurs de ses failles (« exploiteurs » d'AlphaStar). Le réseau ne reçoit jamais
-  l'identité ni le profil de ses adversaires (décision du 20 octobre) : il doit apprendre une
-  stratégie qui tient face à tous.
+  l'identité ni le type de place de ses adversaires (décision du 20 octobre) : il doit apprendre
+  une stratégie qui tient face à tous, et ne peut deviner leur style que d'après leurs coups dans
+  la partie (P3).
 - Piste distincte : garder une sélection d'anciennes positions en renouvelant leurs cibles,
   plutôt que leurs valeurs de Normal. Le recul de W face à Normale ne prouve pas que ces
   positions sont inutiles, seulement que leurs anciennes cibles freinent ailleurs.
@@ -921,15 +981,17 @@ La revue proposait d'abord de brancher `rp=4` dans le jeu : écarté (décision 
 l'Expert ne sait pas contre qui il joue).
 
 1. **Audit de l'encodage** (hypothèse 5, P5) : du code et des tests, sans AWS ; peut avancer
-   pendant les campagnes.
+   pendant les campagnes. Fait (encodage v2).
 2. **gen11, essai de population (P6)** contre la fenêtre pure, à calcul égal. Choisir d'ici là
    le réseau livré et l'enseignant entre gen9, `gen10w` et `gen10f` ; repère manquant : gen9
-   face à Normale et Difficile.
-3. **Cibles territoriales (P7)**, après l'audit.
-4. **Placements** (P5, espace des coups) : variantes locales avant tout générateur appris de
+   face à Normale et Difficile. En cours (20 octobre au soir).
+3. **Adaptation aux adversaires (P3), en priorité après gen11** (demande de l'utilisateur) :
+   histoire des joueurs, tête « coup réel », essai gen12 (P3).
+4. **Cibles territoriales (P7)**, après l'audit.
+5. **Placements** (P5, espace des coups) : variantes locales avant tout générateur appris de
    plans. Le placement des héros, forteresses et campements est fixe, et la défense n'a que deux
    répartitions candidates : la restriction est certaine, son coût en jeu non mesuré.
-5. **Recherche par observations publiques** (P5, recherche) : sur des cas construits d'abord ;
+6. **Recherche par observations publiques** (P5, recherche) : sur des cas construits d'abord ;
    plus de branches peuvent diluer 200 itérations, à valider à temps égal.
 
 Garder les résultats de parties fortes au cœur des cibles de valeur. Faible priorité inchangée :
@@ -976,7 +1038,8 @@ et 21,54 $ de réserve. Depuis ce relevé, estimations de `cloud.sh` : P0 0,87 $
 0,02 $, P1 1,11 $, pilote P2 0,86 $, entraînement et arènes P2 1,54 $ (dont 0,10 $ perdus sur un
 script non exécutable, et une reprise par AWS à 20 h 30, sans perte grâce à `--save`),
 confirmation P2 1,19 $, données de gen9 3,31 $, entraînement et arènes de gen9 0,96 $,
-données de gen10 3,46 $, entraînement et arènes de gen10 1,26 $, soit 14,58 $. **Montants datés : consulter coûts et crédits du compte de gestion
+données de gen10 3,46 $, entraînement et arènes de gen10 1,26 $, données de gen11 2,38 $, soit
+16,96 $ (entraînement et arènes de gen11 en cours depuis le 20 octobre, 23 h 32). **Montants datés : consulter coûts et crédits du compte de gestion
 avant chaque campagne. Les crédits ne se renouvellent pas chaque semaine.**
 
 Pour chaque étape autorisée : mesurer un petit échantillon sur AWS, estimer durée et coût total
