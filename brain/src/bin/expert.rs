@@ -2,7 +2,7 @@
 //! demandes de décision une à une (voir `src/server/expert.ts`).
 //!
 //! ```text
-//! expert --net lab/nets/gen8.bin
+//! expert --net lab/nets/gen9.bin
 //! ```
 //!
 //! Messages sur l'entrée et la sortie standard : un nombre de mots, puis les mots (32 bits,

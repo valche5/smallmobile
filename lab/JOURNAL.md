@@ -31,7 +31,8 @@ pour décider. Voir `brain/src/know.rs` et le correctif P0.
 - Réseau : graphe des régions, 4 couches de largeur 64 ; 77 entrées par région, 700 globales,
   448 clés d'actions. Sorties : politique, victoire par joueur, pièces encore à gagner.
   Inférence Rust AVX2/FMA ; concordance Python/Rust déjà vérifiée à environ 5·10⁻⁵.
-- Expert livré : `lab/nets/gen8.bin`, via `target/release/expert` et `src/server/expert.ts`.
+- Expert livré : `lab/nets/gen9.bin` depuis le 20 octobre (gen8 avant), via `target/release/expert`
+  et `src/server/expert.ts`.
   `bun run kernel:build` construit le noyau WebAssembly et cet exécutable.
 - Mesure : `lab arena --hero A --field B`, ou `--table 'A|B|C'` pour une table fixe ; chaque
   joueur passe à chaque place. `--out r.tsv` écrit chaque place de chaque partie ;
@@ -43,10 +44,11 @@ pour décider. Voir `brain/src/know.rs` et le correctif P0.
   2 humains et 1 à 3 Expert : l'Expert affronte surtout d'autres Expert, qu'il simule pourtant
   comme Normal (`rp=2`).
 
-Réglage livré, à garder comme témoin figé :
+Réglage livré (gen9 depuis le 20 octobre ; gen8, livré avant, reste le témoin figé des mesures
+ci-dessous) :
 
 ```text
-az:net=lab/nets/gen8.bin,n=200,w=0.5,c=2.5,roll=1,depth=3,rp=2
+az:net=lab/nets/gen9.bin,n=200,w=0.5,c=2.5,roll=1,depth=3,rp=2
 ```
 
 | Paramètre | Sens |

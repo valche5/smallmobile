@@ -35,7 +35,7 @@ export interface ExpertOptions {
 
 export const DEFAULT_EXPERT: ExpertOptions = {
   binary: process.env.EXPERT_BIN ?? './target/release/expert',
-  net: process.env.EXPERT_NET ?? './lab/nets/gen8.bin',
+  net: process.env.EXPERT_NET ?? './lab/nets/gen9.bin',
   // n=200 : la meilleure IA du labo (lab/JOURNAL.md) ; ~0,1 à 0,2 s par décision sur mini
   iterations: Number(process.env.EXPERT_N ?? 200),
 };
