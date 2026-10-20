@@ -548,6 +548,28 @@ d'où `--disk 200`). Arènes aux réglages livrés : F et W parmi des gen9 (grai
 différence W − F) ; face à Difficile et à Normale (graines 702 et 703), pour voir si W a oublié
 les positions de jeu plus faible, que des arènes entre réseaux ne montreraient pas.
 
+**Données de gen10 produites le 20 octobre** (272 min, 3,46 $ ; graines 10 000 000 à 10 000 039,
+jugement 10 100 000 à 10 100 039) : 1,54 million de positions (8,4 Go) et 888 000 rejugées
+(5,0 Go), dans le bucket et sur mini ; 4 min 35 par lot de 500 parties (C : 4 min 20), 2 min 05
+de jugement. Erreur de valeur sur les 3 968 positions de P0, chaque réseau jugé par ses propres
+fins, gen8 → C → gen9 :
+
+| Positions | Face aux fins de Normal | Face aux fins du réseau |
+| --- | --- | --- |
+| Toutes | 6,2 → 6,5 → 7,5 | 9,3 → 8,4 → **6,6** |
+| 2, 3, 4, 5 joueurs (réseau) | | 11,8, 9,1, 9,3, 8,0 → 12,5, 8,0, 7,9, 6,6 → 10,5, 6,5, 5,9, 4,7 |
+| Dernière manche | 2,4 → 2,7 → 3,4 | 2,5 → 2,7 → 3,3 |
+| 1 à 2 manches restantes | 3,6 → 4,0 → 4,7 | 5,5 → 5,2 → 4,9 |
+| 3 à 5 manches restantes | 6,6 → 6,9 → 8,1 | 10,3 → 9,0 → 7,3 |
+| 6 manches ou plus | 7,3 → 7,6 → 8,6 | 10,6 → 9,9 → 7,3 |
+| Pièces finales par joueur | 4,1 → 5,0 → 7,4 | 11,1 → 8,9 → 7,2 |
+
+gen9 apprend nettement mieux les fins de son propre jeu (−2,7 pièces depuis gen8, à toutes les
+tailles et surtout tôt dans la partie) et s'éloigne de celles de Normal, comme attendu. Seule
+régression : la dernière manche, presque déterministe, passe de 2,5 à 3,3 face aux deux juges.
+Les résultats de parties, bruités, ont pu dégrader la précision de fin de partie : à surveiller
+(piste P5, entrées de la valeur).
+
 **Partie perdue contre la paix des Diplomates** (API LLM, 20 octobre, `gpt-6-astra`, 110 à 65) :
 à 2 joueurs, des Tritons Diplomates ont imposé la paix à l'Expert à chacun des 10 tours, ce que la
 règle officielle permet (elle reste telle quelle). L'Expert le voit : au tour 3, il s'estime à
@@ -742,8 +764,8 @@ ne s'appliquent plus. Dernier relevé du 19 octobre : 8,31 $ consommés sur la p
 et 21,54 $ de réserve. Depuis ce relevé, estimations de `cloud.sh` : P0 0,87 $, essais Spot
 0,02 $, P1 1,11 $, pilote P2 0,86 $, entraînement et arènes P2 1,54 $ (dont 0,10 $ perdus sur un
 script non exécutable, et une reprise par AWS à 20 h 30, sans perte grâce à `--save`),
-confirmation P2 1,19 $, données de gen9 3,31 $, entraînement et arènes de gen9 0,96 $, soit
-9,86 $. **Montants datés : consulter coûts et crédits du compte de gestion
+confirmation P2 1,19 $, données de gen9 3,31 $, entraînement et arènes de gen9 0,96 $,
+données de gen10 3,46 $, soit 13,32 $. **Montants datés : consulter coûts et crédits du compte de gestion
 avant chaque campagne. Les crédits ne se renouvellent pas chaque semaine.**
 
 Pour chaque étape autorisée : mesurer un petit échantillon sur AWS, estimer durée et coût total
