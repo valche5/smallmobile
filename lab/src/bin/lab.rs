@@ -7,14 +7,16 @@
 //! lab bench --agent random [--players 2] [--games 20]
 //! lab speed --agent az:net=poids.bin,n=200 [--positions 12] [--seed 1]   (temps et empreinte des recherches)
 //! lab selfplay --agent mcts:n=200 --games 1000 --out lab/data/gen0 [--players 2,3,4,5] [--sample-rounds 2]
-//!     [--field 'easy|hard|az:net=gen9.bin,rp=2' --mixed 0.5]   (tables variées)
+//!     [--field 'easy|normal:aggressive|az:net=gen9.bin,rp=2' --mixed 0.5 [--observe 1]]   (tables variées ;
+//!     --observe : coups des autres joueurs enregistrés aussi, pour la tête « coup réel »)
 //! lab check-net --net poids.bin --data parties.bin [--count 5]   (comparaison avec lab/py/check.py)
 //! lab label --games 20000 --out lab/data/label1 [--share 0.1] [--rollouts 32] [--random 0.1] [--agent az:net=poids.bin,n=50]
 //!     [--judge az:net=poids.bin]   (fins de partie jouées par le réseau plutôt que par l'IA Normal)
 //! lab judge --games lab/data/p2 --out lab/data/p2-judged [--share 0.1] [--rollouts 32] [--judge az:net=poids.bin]
 //!     (positions de parties déjà jouées, fichiers .moves de lab selfplay)
-//! lab reencode --games lab/data/gen10 --data lab/data/gen10-judged --out lab/data/gen10-judged.v4
-//!     (positions *.v3.bin passées à l'encodage d'aujourd'hui, *.v4.bin, d'après les parties .moves)
+//! lab reencode --games lab/data/gen10 --data lab/data/gen10-judged --out lab/data/gen10-judged-v5 [--observe 1]
+//!     (positions *.v3.bin et *.v4.bin passées à l'encodage d'aujourd'hui, *.v5.bin, d'après les
+//!     parties .moves ; --observe : coups des autres joueurs des tables variées en plus)
 //! lab audit --games lab/data/gen10/c00   (ce que l'entrée du réseau laisse de côté, dans des parties jouées)
 //! lab noise --net poids.bin [--positions 2000] [--rollouts 32] [--judge az:…]   (bruit des cibles, erreur du réseau)
 //! lab analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par lab/tools/export-room.ts)
@@ -203,7 +205,7 @@ fn bench_cmd(opts: &HashMap<String, String>) {
 /// les décisions (coup et visites de la racine) et les valeurs (au bit près). Une optimisation qui
 /// ne change pas la recherche garde les deux.
 fn speed_cmd(opts: &HashMap<String, String>) {
-    use smallmobile_lab::know::{Knowledge, Returns};
+    use smallmobile_lab::know::Knowledge;
     use smallmobile_lab::moves;
     use smallmobile_lab::rand::{Rng, mix};
 
@@ -234,9 +236,7 @@ fn speed_cmd(opts: &HashMap<String, String>) {
                 choices += 1;
             }
             let m = normal.act(&g, &k, &mut rng.fork());
-            let mut returns = Returns::default();
-            moves::play(&mut g, &m, &mut returns).expect("coup de l'IA Normale");
-            k.observe(returns.0, &g.state);
+            k.play(&mut g, &m).expect("coup de l'IA Normale");
         }
         let start = Instant::now();
         for (i, (g, k)) in positions.iter().enumerate() {
@@ -274,6 +274,7 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
             sample_rounds: get(opts, "sample-rounds", 2),
             full_share: get(opts, "full-share", 1.0),
             fast: get(opts, "fast", 50),
+            observe: get(opts, "observe", 0) == 1,
         },
     };
     // tables variées : les adversaires possibles, séparés par « | » (leur numéro dans les .moves)
@@ -302,6 +303,8 @@ fn check_net_cmd(opts: &HashMap<String, String>) {
     let path = opts.get("data").unwrap();
     let size = if path.ends_with(selfplay::SUFFIX) {
         selfplay::RECORD
+    } else if path.ends_with(".v4.bin") {
+        selfplay::RECORD_V4
     } else if path.ends_with(".v3.bin") {
         selfplay::RECORD_V3
     } else if path.ends_with(".v2.bin") {
@@ -318,7 +321,11 @@ fn check_net_cmd(opts: &HashMap<String, String>) {
             .take(8)
             .map(|k| format!("{k}:{:.4}", ev.logits[k]))
             .collect();
-        println!("win {:?} gain {:?} logits {}", ev.win, ev.gain, legal.join(" "));
+        let behaviour = ev.behaviour.as_ref().map_or(String::new(), |b| {
+            let keys = (0..smallmobile_lab::moves::KEYS).filter(|&k| b[k].is_finite()).take(8);
+            format!(" behaviour {}", keys.map(|k| format!("{k}:{:.4}", b[k])).collect::<Vec<_>>().join(" "))
+        });
+        println!("win {:?} gain {:?} logits {}{behaviour}", ev.win, ev.gain, legal.join(" "));
     }
     eprintln!("{:.1} µs par évaluation", 1e6 * start.elapsed().as_secs_f64() / evals.max(1) as f64);
 }
@@ -401,11 +408,7 @@ fn agree_cmd(opts: &HashMap<String, String>) {
 
 /// Une partie du joueur testé (place 0) contre le reste de la table, coup par coup.
 fn trace_cmd(opts: &HashMap<String, String>) {
-    use smallmobile_lab::{
-        know::{Knowledge, Returns},
-        moves,
-        rand::Rng,
-    };
+    use smallmobile_lab::{know::Knowledge, moves, rand::Rng};
     let hero = agent(opts, "hero");
     let field = agent(opts, "field");
     let n: usize = get(opts, "players", 2);
@@ -419,9 +422,7 @@ fn trace_cmd(opts: &HashMap<String, String>) {
         let m = a.act(&g, &k, &mut rng.fork());
         let coins: Vec<i32> = g.state.players.iter().map(|p| p.coins).collect();
         println!("m{} j{} {:?} {:?} : {}", g.state.round, pid + 1, g.state.phase, coins, moves::describe(&g, &m));
-        let mut ret = Returns::default();
-        moves::play(&mut g, &m, &mut ret).unwrap();
-        k.observe(ret.0, &g.state);
+        k.play(&mut g, &m).unwrap();
     }
     let coins: Vec<i32> = g.state.players.iter().map(|p| p.coins).collect();
     println!("fin : {coins:?}");
@@ -590,7 +591,7 @@ fn audit_cmd(opts: &HashMap<String, String>) {
             for (c, gap) in counts[n][1..].iter_mut().zip(gaps) {
                 *c += gap as u64;
             }
-            let e = encode(g, k.race_tail);
+            let e = encode(g, k);
             let mut input = vec![e.regions as u8, e.players as u8];
             e.node[..e.regions].iter().for_each(|row| input.extend_from_slice(row));
             input.extend_from_slice(&e.global);
@@ -641,7 +642,9 @@ fn reencode_cmd(opts: &HashMap<String, String>) {
     let out = opts.get("out").unwrap_or_else(|| usage());
     let start = Instant::now();
     let threads = get(opts, "threads", threads());
-    match smallmobile_lab::reencode::run(&logs, std::path::Path::new(data), std::path::Path::new(out), threads) {
+    let observe = get(opts, "observe", 0) == 1;
+    match smallmobile_lab::reencode::run(&logs, std::path::Path::new(data), std::path::Path::new(out), threads, observe)
+    {
         Ok((files, positions)) => println!(
             "{positions} positions ({files} fichiers, {} parties) réencodées en {:.0} s",
             logs.len(),
@@ -682,7 +685,7 @@ fn noise_cmd(opts: &HashMap<String, String>) {
     use smallmobile_kernel::{Level, Phase};
     use smallmobile_lab::agent::KernelAi;
     use smallmobile_lab::encode::encode;
-    use smallmobile_lab::know::{Knowledge, Returns};
+    use smallmobile_lab::know::Knowledge;
     use smallmobile_lab::label::judge;
     use smallmobile_lab::moves;
     use smallmobile_lab::rand::{Rng, mix};
@@ -723,7 +726,7 @@ fn noise_cmd(opts: &HashMap<String, String>) {
                             let s = &g.state;
                             let n = s.player_count();
                             let me = s.actor().expect("un joueur doit agir");
-                            let ev = net.eval(&encode(&g, k.race_tail), g.map);
+                            let ev = net.eval(&encode(&g, &k), g.map);
                             let mut pred = [0.0f32; 5];
                             for r in 0..n {
                                 let q = (me + r) % n;
@@ -745,9 +748,7 @@ fn noise_cmd(opts: &HashMap<String, String>) {
                         } else {
                             normal.act(&g, &k, &mut rng)
                         };
-                        let mut ret = Returns::default();
-                        moves::play(&mut g, &mv, &mut ret).expect("coup possible");
-                        k.observe(ret.0, &g.state);
+                        k.play(&mut g, &mv).expect("coup possible");
                     }
                 }
                 samples.lock().unwrap().extend(local);

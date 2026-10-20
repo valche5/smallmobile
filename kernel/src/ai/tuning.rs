@@ -10,6 +10,17 @@ macro_rules! tuning {
                 Tuning { $($field: $default),+ }
             }
         }
+
+        impl Tuning {
+            /// Change un réglage d'après son nom ; faux si le nom est inconnu.
+            pub fn set(&mut self, name: &str, value: f64) -> bool {
+                match name {
+                    $(stringify!($field) => self.$field = value,)+
+                    _ => return false,
+                }
+                true
+            }
+        }
     };
 }
 

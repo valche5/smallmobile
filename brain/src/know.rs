@@ -14,40 +14,171 @@
 //! tirage compatible avec ce que le joueur sait.
 
 use smallmobile_kernel::action::{Event, Journal, Logged};
+use smallmobile_kernel::ids::MAX_PLAYERS;
+use smallmobile_kernel::state::Occupant;
 use smallmobile_kernel::{Game, State};
 
 use crate::rand::Rng;
 
-/// Ce qu'un joueur attentif sait des pioches : le nombre de cartes connues au fond de chacune.
+/// Ce qu'un joueur attentif sait : le nombre de cartes connues au fond de chaque pioche, et ce que
+/// chaque joueur a fait depuis le début de la partie (`History`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Knowledge {
     pub race_tail: usize,
     pub power_tail: usize,
+    pub history: History,
 }
 
-/// Un journal qui ne garde que ce qui sert à `Knowledge` (évite d'allouer pour chaque action).
+/// Les habitudes d'un joueur (`History::habits`) : des comptes depuis le début de la partie.
+pub mod habit {
+    /// Régions vides prises.
+    pub const EMPTY: usize = 0;
+    /// Régions prises aux tribus oubliées.
+    pub const LOST_TRIBES: usize = 1;
+    /// Régions prises au peuple actif d'un adversaire.
+    pub const ACTIVE: usize = 2;
+    /// Régions prises au peuple en déclin d'un adversaire.
+    pub const DECLINED: usize = 3;
+    /// Régions prises à l'adversaire le plus riche du moment.
+    pub const LEADER: usize = 4;
+    /// Déclins, et manches tenues par les peuples déclinés (somme).
+    pub const DECLINES: usize = 5;
+    pub const DECLINE_AGE: usize = 6;
+    /// Peuples choisis, pièces payées (place au marché) et pièces ramassées avec eux (sommes).
+    pub const PICKS: usize = 7;
+    pub const PAID: usize = 8;
+    pub const GAINED: usize = 9;
+    /// Paix imposées (Diplomates).
+    pub const PEACE: usize = 10;
+    /// Régions abandonnées.
+    pub const ABANDONS: usize = 11;
+    /// Dés de renfort lancés.
+    pub const DICE: usize = 12;
+    /// Jetons perdus sous les attaques des autres.
+    pub const TOKENS_LOST: usize = 13;
+    pub const COUNT: usize = 14;
+}
+
+/// Ce que chaque joueur a fait depuis le début de la partie, d'après ses coups publics : de quoi
+/// deviner son style, comme un joueur attentif (attaque-t-il, et qui ? décline-t-il tôt ? paie-t-il
+/// cher ses peuples ?). Joueurs réels ; `encode` les range par joueur relatif. Rien de caché : la
+/// même histoire pour tous les joueurs, refaite à l'identique en rejouant les actions de la partie.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct History {
+    pub habits: [[u16; habit::COUNT]; MAX_PLAYERS],
+    /// Régions prises par chaque joueur à chaque joueur (peuple actif ou en déclin, les siens compris).
+    pub attacks: [[u16; MAX_PLAYERS]; MAX_PLAYERS],
+    /// De même, pendant le dernier tour de chaque joueur (celui en cours compris).
+    pub recent: [[u8; MAX_PLAYERS]; MAX_PLAYERS],
+    /// Le joueur dont c'est le tour (aucun avant le premier).
+    turn: Option<u8>,
+    /// La manche où chaque joueur a choisi son dernier peuple.
+    picked: [u8; MAX_PLAYERS],
+}
+
+fn add(x: &mut u16, v: i32) {
+    *x = x.saturating_add(v.clamp(0, u16::MAX as i32) as u16);
+}
+
+impl History {
+    /// Le tour de `p` commence (son premier événement : choix du peuple ou début des conquêtes).
+    fn start(&mut self, p: usize) {
+        if self.turn != Some(p as u8) {
+            self.turn = Some(p as u8);
+            self.recent[p] = [0; MAX_PLAYERS];
+        }
+    }
+}
+
+/// Le journal d'un coup (`Knowledge::journal`), pour `Knowledge::observe` : les cartes rendues
+/// sous les pioches, et l'histoire des joueurs, mise à jour événement par événement (sans allouer).
 #[derive(Default)]
-pub struct Returns(pub usize);
+pub struct Returns {
+    pub returned: usize,
+    history: History,
+    /// Les pièces de chaque joueur, suivies d'un événement à l'autre (pour `habit::LEADER`).
+    coins: [i32; MAX_PLAYERS],
+    players: usize,
+}
 
 impl Journal for Returns {
     fn record(&mut self, entry: Logged) {
-        if let Event::Declined { removed, .. } = &entry.event {
-            self.0 += removed.len();
+        use habit::*;
+        let h = &mut self.history;
+        match entry.event {
+            Event::Picked { player, paid, gained, .. } => {
+                h.start(player);
+                let x = &mut h.habits[player];
+                add(&mut x[PICKS], 1);
+                add(&mut x[PAID], paid);
+                add(&mut x[GAINED], gained);
+                h.picked[player] = entry.round.clamp(0, 255) as u8;
+                self.coins[player] += gained - paid;
+            }
+            Event::TurnStarted { player, .. } => h.start(player),
+            Event::Conquered { player, victim, victim_occupant, victim_active, lost, .. } => {
+                let x = &mut h.habits[player];
+                match (victim, victim_occupant) {
+                    (Some(v), _) => {
+                        add(&mut h.attacks[player][v], 1);
+                        h.recent[player][v] = h.recent[player][v].saturating_add(1);
+                        if v != player {
+                            add(&mut x[if victim_active { ACTIVE } else { DECLINED }], 1);
+                            let richest = (0..self.players).filter(|&q| q != player).map(|q| self.coins[q]).max();
+                            if richest == Some(self.coins[v]) {
+                                add(&mut x[LEADER], 1);
+                            }
+                            add(&mut h.habits[v][TOKENS_LOST], lost);
+                        }
+                    }
+                    (None, Occupant::Lost) => add(&mut x[LOST_TRIBES], 1),
+                    (None, _) => add(&mut x[EMPTY], 1),
+                }
+            }
+            Event::DieRolled { player, region: Some(_), .. } => add(&mut h.habits[player][DICE], 1),
+            Event::Abandoned { player, .. } => add(&mut h.habits[player][ABANDONS], 1),
+            Event::Declined { player, removed, .. } => {
+                self.returned += removed.len();
+                add(&mut h.habits[player][DECLINES], 1);
+                add(&mut h.habits[player][DECLINE_AGE], entry.round - h.picked[player] as i32);
+            }
+            Event::PeaceImposed { player, .. } => add(&mut h.habits[player][PEACE], 1),
+            Event::Scored { player, gain, .. } => self.coins[player] += gain,
+            _ => {}
         }
     }
 }
 
 impl Knowledge {
     /// Ce que sait un joueur de la partie en cours : le noyau suit le fond public des pioches.
+    /// L'histoire des joueurs reste vide : elle se refait en rejouant la partie depuis le début.
     pub fn of(s: &State) -> Knowledge {
-        Knowledge { race_tail: s.race_tail as usize, power_tail: s.power_tail as usize }
+        Knowledge { race_tail: s.race_tail as usize, power_tail: s.power_tail as usize, ..Knowledge::default() }
     }
 
-    /// Met à jour ce qui est su après une action : `returns` cartes rendues sous les pioches (voir
-    /// `Returns`), puis les pioches de l'état qui en résulte (les cartes tirées partent du dessus).
-    pub fn observe(&mut self, returns: usize, after: &State) {
-        self.race_tail = (self.race_tail + returns).min(after.race_deck.len());
-        self.power_tail = (self.power_tail + returns).min(after.power_deck.len());
+    /// Le journal à passer au noyau pour l'action ou le coup qui suit, joué depuis `before`.
+    pub fn journal(&self, before: &State) -> Returns {
+        let mut coins = [0; MAX_PLAYERS];
+        for (c, p) in coins.iter_mut().zip(&before.players) {
+            *c = p.coins;
+        }
+        Returns { returned: 0, history: self.history, coins, players: before.player_count() }
+    }
+
+    /// Met à jour ce qui est su après une action ou un coup : son journal (`journal`), puis les
+    /// pioches de l'état qui en résulte (les cartes tirées partent du dessus).
+    pub fn observe(&mut self, ret: Returns, after: &State) {
+        self.race_tail = (self.race_tail + ret.returned).min(after.race_deck.len());
+        self.power_tail = (self.power_tail + ret.returned).min(after.power_deck.len());
+        self.history = ret.history;
+    }
+
+    /// Joue un coup en suivant ce qui est su.
+    pub fn play(&mut self, g: &mut Game, mv: &crate::moves::Move) -> Result<(), smallmobile_kernel::Reason> {
+        let mut ret = self.journal(&g.state);
+        crate::moves::play(g, mv, &mut ret)?;
+        self.observe(ret, &g.state);
+        Ok(())
     }
 }
 

@@ -2,9 +2,19 @@
 //! des pioches est exact. Et l'IA Expert telle que le jeu l'emploie (`smallmobile_brain::expert`).
 
 use smallmobile_kernel::Phase;
-use smallmobile_kernel::action::{Event, Logged};
+use smallmobile_kernel::action::{Event, Journal, Logged};
 use smallmobile_kernel::ids::Race;
 use smallmobile_lab::know::{Knowledge, Returns, determinize};
+
+/// Le journal d'un coup pour ce que sait le joueur, gardé aussi en entier.
+struct Both<'a>(&'a mut Returns, &'a mut Vec<Logged>);
+
+impl Journal for Both<'_> {
+    fn record(&mut self, entry: Logged) {
+        self.0.record(entry);
+        self.1.push(entry);
+    }
+}
 use smallmobile_lab::moves;
 use smallmobile_lab::rand::Rng;
 use smallmobile_lab::table::Table;
@@ -48,20 +58,17 @@ fn known_deck_bottom_is_exact() {
             let legal = moves::legal(&g);
             let m = legal[rng.below(legal.len())].mv;
             let mut events: Vec<Logged> = Vec::new();
-            moves::play(&mut g, &m, &mut events).unwrap();
-            let returns: usize = events
-                .iter()
-                .map(|e| match &e.event {
-                    Event::Declined { removed, .. } => {
-                        seen.extend(removed.iter().copied());
-                        removed.len()
-                    }
-                    _ => 0,
-                })
-                .sum();
-            k.observe(returns, &g.state);
+            let mut ret = k.journal(&g.state);
+            moves::play(&mut g, &m, &mut Both(&mut ret, &mut events)).unwrap();
+            for e in &events {
+                if let Event::Declined { removed, .. } = &e.event {
+                    seen.extend(removed.iter().copied());
+                }
+            }
+            k.observe(ret, &g.state);
             // le noyau suit lui-même ce fond connu (c'est ce que reçoit l'IA Expert dans le jeu)
-            assert_eq!(Knowledge::of(&g.state), k);
+            let public = Knowledge::of(&g.state);
+            assert_eq!((public.race_tail, public.power_tail), (k.race_tail, k.power_tail));
             let deck = g.state.race_deck.as_slice();
             let tail = &deck[deck.len() - k.race_tail..];
             assert_eq!(tail, &seen[seen.len() - k.race_tail..]);
@@ -90,17 +97,15 @@ fn the_network_sees_only_what_the_player_knows() {
         let mut k = Knowledge::default();
         while g.state.phase != Phase::GameOver {
             // deux mondes possibles donnent exactement la même entrée au réseau
-            let a = encode(&determinize(&g, &k, &mut rng), k.race_tail);
-            let b = encode(&determinize(&g, &k, &mut rng), k.race_tail);
+            let a = encode(&determinize(&g, &k, &mut rng), &k);
+            let b = encode(&determinize(&g, &k, &mut rng), &k);
             assert!(a.node == b.node && a.global == b.global, "l'encodage dépend de ce qui est caché");
             // « moi » est le joueur qui agit : ses pièces sont en tête des joueurs
             let me = g.state.actor().unwrap();
             assert_eq!(a.global[67 + 1] as i32, g.state.players[me].coins.clamp(0, 255));
             let legal = moves::legal(&g);
             let m = legal[rng.below(legal.len())].mv;
-            let mut ret = Returns::default();
-            moves::play(&mut g, &m, &mut ret).unwrap();
-            k.observe(ret.0, &g.state);
+            k.play(&mut g, &m).unwrap();
         }
     }
 }
@@ -113,7 +118,7 @@ fn varied_tables_record_only_the_learner() {
     let dir = std::env::temp_dir().join(format!("smallmobile-field-{}", std::process::id()));
     let (easy, hard) = (KernelAi::new(Level::Easy), KernelAi::new(Level::Hard));
     let field = Field { agents: vec![&easy as &dyn Agent, &hard], share: 0.5 };
-    let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1 };
+    let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1, observe: false };
     let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 16, threads: 2, seed: 12, opts };
     selfplay::run_with(&cfg, &KernelAi::new(Level::Normal), &field, &dir).unwrap();
     let (mut mixed, mut plain) = (0, 0);
@@ -156,22 +161,32 @@ fn varied_tables_record_only_the_learner() {
 #[test]
 fn old_positions_can_be_reencoded() {
     use smallmobile_kernel::Level;
-    use smallmobile_lab::agent::KernelAi;
-    use smallmobile_lab::encode::{GLOBAL, GLOBAL_V1, NODE, REGIONS};
+    use smallmobile_lab::agent::{Agent, KernelAi};
+    use smallmobile_lab::encode::{GLOBAL, GLOBAL_V1, GLOBAL_V2, NODE, REGIONS};
     use smallmobile_lab::moves::{FINISH, KEYS};
-    use smallmobile_lab::selfplay::{self, GameLog, ILLEGAL, RECORD};
+    use smallmobile_lab::selfplay::{self, Field, GameLog, ILLEGAL, RECORD};
     let dir = std::env::temp_dir().join(format!("smallmobile-reencode-{}", std::process::id()));
-    // des positions d'aujourd'hui (Diplomates compris)…
-    let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1 };
-    let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 12, threads: 2, seed: 9, opts };
-    selfplay::run(&cfg, &KernelAi::new(Level::Normal), &dir.join("new")).unwrap();
-    // … remises au format de la version 3 : entrées de la version 1, clés de paix par place absolue
+    // des positions d'aujourd'hui (Diplomates compris, tables variées comprises), sans puis avec
+    // les coups observés des autres joueurs
+    let (easy, hard) = (KernelAi::new(Level::Easy), KernelAi::new(Level::Hard));
+    let field = Field { agents: vec![&easy as &dyn Agent, &hard], share: 0.5 };
+    for observe in [false, true] {
+        // un seul fil : chaque fichier reçoit les mêmes parties d'une fois à l'autre
+        let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1, observe };
+        let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 24, threads: 1, seed: 9, opts };
+        let out = dir.join(if observe { "observed" } else { "new" });
+        selfplay::run_with(&cfg, &KernelAi::new(Level::Normal), &field, &out).unwrap();
+    }
+    // … remises aux formats des versions 3 (entrées de la version 1, clés de paix par place absolue)
+    // et 4 (entrées de la version 2), sans le coup joué
     let (keys_at, node_at) = (44, 44 + KEYS * 2 + REGIONS * 8);
     let global_at = node_at + REGIONS * NODE;
     let mut logs = Vec::new();
     let mut originals = Vec::new();
-    let mut peaces = 0;
-    std::fs::create_dir_all(dir.join("old")).unwrap();
+    let (mut peaces, mut played, mut observed) = (0, 0, 0);
+    for old in ["old3", "old4"] {
+        std::fs::create_dir_all(dir.join(old)).unwrap();
+    }
     for entry in std::fs::read_dir(dir.join("new")).unwrap() {
         let path = entry.unwrap().path();
         if !path.to_string_lossy().ends_with(selfplay::SUFFIX) {
@@ -184,14 +199,16 @@ fn old_positions_can_be_reencoded() {
             .collect();
         let bytes = std::fs::read(&path).unwrap();
         let mut records = bytes.chunks(RECORD);
-        let mut old = Vec::new();
+        let (mut v3s, mut v4s) = (Vec::new(), Vec::new());
         for log in &games {
             let table = log.table();
             log.replay(&table, |g, _| {
-                if moves::legal(g).len() < 2 {
+                let me = g.state.actor().unwrap();
+                if moves::legal(g).len() < 2 || log.seats.get(me).is_some_and(|&s| s >= 0) {
                     return;
                 }
                 let rec = records.next().unwrap();
+                played += (rec[RECORD - 2..] != ILLEGAL.to_le_bytes()) as usize;
                 let (seat, n) = (g.state.actor().unwrap(), g.state.player_count());
                 let mut v3 = rec[..node_at].to_vec();
                 for plan in 0..6 {
@@ -213,26 +230,47 @@ fn old_positions_can_be_reencoded() {
                     }
                 }
                 v3.extend_from_slice(&rec[node_at..global_at + GLOBAL_V1]);
-                v3.extend_from_slice(&rec[global_at + GLOBAL..]);
-                old.extend(v3);
+                v3.extend_from_slice(&rec[global_at + GLOBAL..RECORD - 2]);
+                v3s.extend(v3);
+                v4s.extend_from_slice(&rec[..global_at + GLOBAL_V2]);
+                v4s.extend_from_slice(&rec[global_at + GLOBAL..RECORD - 2]);
             })
             .unwrap();
         }
-        assert!(records.next().is_none(), "une position par décision");
-        let name = path.file_name().unwrap().to_string_lossy().replace(selfplay::SUFFIX, ".v3.bin");
-        let target = dir.join("old").join(name);
-        std::fs::write(&target, old).unwrap();
-        std::fs::copy(selfplay::games_file(&path), selfplay::games_file(&target)).unwrap();
-        std::fs::copy(selfplay::moves_file(&path), selfplay::moves_file(&target)).unwrap();
+        assert!(records.next().is_none(), "une position par décision de l'IA qui apprend");
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        for (old, suffix, bytes) in [("old3", ".v3.bin", v3s), ("old4", ".v4.bin", v4s)] {
+            let target = dir.join(old).join(name.replace(selfplay::SUFFIX, suffix));
+            std::fs::write(&target, bytes).unwrap();
+            std::fs::copy(selfplay::games_file(&path), selfplay::games_file(&target)).unwrap();
+            std::fs::copy(selfplay::moves_file(&path), selfplay::moves_file(&target)).unwrap();
+        }
         logs.extend(games);
-        originals.push((path.file_name().unwrap().to_owned(), bytes));
+        let with = std::fs::read(dir.join("observed").join(&name)).unwrap();
+        observed += with.chunks(RECORD).filter(|r| r[3] & 2 != 0).count();
+        originals.push((name, bytes, with));
     }
-    // le réencodage redonne les positions d'aujourd'hui, octet pour octet
-    let (files, positions) = smallmobile_lab::reencode::run(&logs, &dir.join("old"), &dir.join("again"), 2).unwrap();
+    // le réencodage redonne les positions d'aujourd'hui, octet pour octet : sans les coups observés
+    // depuis la version 3, avec depuis la version 4
+    let reencode = |from: &str, to: &str, observe: bool| {
+        smallmobile_lab::reencode::run(&logs, &dir.join(from), &dir.join(to), 2, observe).unwrap()
+    };
+    let (files, positions) = reencode("old3", "again3", false);
     assert_eq!(files, originals.len());
-    assert!(positions > 100 && peaces > 0, "{positions} positions, {peaces} clés de paix possibles");
-    for (name, bytes) in originals {
-        assert!(std::fs::read(dir.join("again").join(&name)).unwrap() == bytes, "{name:?}");
+    let (_, with_observed) = reencode("old4", "again4", true);
+    assert!(
+        positions > 100 && peaces > 0 && played > 100,
+        "{positions} positions, {peaces} clés de paix, {played} coups"
+    );
+    assert!(
+        with_observed == positions + observed && observed > 50,
+        "{with_observed} positions, {observed} coups observés"
+    );
+    for (name, bytes, with) in originals {
+        assert!(std::fs::read(dir.join("again3").join(&name)).unwrap() == bytes, "{name}");
+        assert!(std::fs::read(dir.join("again4").join(&name)).unwrap() == with, "{name} (coups observés)");
+        let counts = |d: &str| std::fs::read(selfplay::games_file(&dir.join(d).join(&name))).unwrap();
+        assert_eq!(counts("again4"), counts("observed"));
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -258,9 +296,7 @@ fn peace_keys_name_the_target_relative_to_the_player() {
                 }
             }
             let m = legal[rng.below(legal.len())].mv;
-            let mut ret = Returns::default();
-            moves::play(&mut g, &m, &mut ret).unwrap();
-            k.observe(ret.0, &g.state);
+            k.play(&mut g, &m).unwrap();
         }
     }
     assert!(peaces > 0);
@@ -279,7 +315,7 @@ fn the_fast_network_computes_like_the_simple_one() {
         let mut g = table.game(game as u32);
         let mut k = Knowledge::default();
         while g.state.phase != Phase::GameOver {
-            let e = encode(&g, k.race_tail);
+            let e = encode(&g, &k);
             let fast = net.eval(&e, g.map);
             let simple = net.eval_portable(&e, |i| &g.map.regions[i].adj);
             let pairs = fast.win.iter().chain(&fast.gain).chain(&fast.logits);
@@ -289,9 +325,7 @@ fn the_fast_network_computes_like_the_simple_one() {
             checked += 1;
             let legal = moves::legal(&g);
             let m = legal[rng.below(legal.len())].mv;
-            let mut ret = Returns::default();
-            moves::play(&mut g, &m, &mut ret).unwrap();
-            k.observe(ret.0, &g.state);
+            k.play(&mut g, &m).unwrap();
         }
     }
     assert!(checked > 500, "{checked} positions");
@@ -330,9 +364,7 @@ fn the_search_sees_only_what_the_player_knows() {
                 checked += 1;
             }
             let m = legal[rng.below(legal.len())].mv;
-            let mut ret = Returns::default();
-            moves::play(&mut g, &m, &mut ret).unwrap();
-            k.observe(ret.0, &g.state);
+            k.play(&mut g, &m).unwrap();
         }
     }
     assert!(checked > 10, "trop peu de positions vérifiées : {checked}");
@@ -401,7 +433,7 @@ fn position_files_say_how_many_positions_each_game_has() {
     use smallmobile_lab::agent::KernelAi;
     use smallmobile_lab::{label, selfplay};
     let dir = std::env::temp_dir().join(format!("smallmobile-games-{}", std::process::id()));
-    let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1 };
+    let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1, observe: false };
     let cfg = selfplay::Config { players: vec![2, 3], games: 5, threads: 2, seed: 3, opts };
     selfplay::run(&cfg, &KernelAi::new(Level::Normal), &dir.join("play")).unwrap();
     let cfg = label::Config {
@@ -446,7 +478,7 @@ fn self_play_games_can_be_replayed() {
     use smallmobile_lab::selfplay::{self, GameLog};
     use smallmobile_lab::table::Outcome;
     let dir = std::env::temp_dir().join(format!("smallmobile-replay-{}", std::process::id()));
-    let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1 };
+    let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1, observe: false };
     let cfg = selfplay::Config { players: vec![2, 4], games: 4, threads: 2, seed: 5, opts };
     selfplay::run(&cfg, &KernelAi::new(Level::Normal), &dir).unwrap();
     let mut games = 0;
@@ -487,7 +519,7 @@ fn played_games_can_be_judged_again_by_the_network() {
     use smallmobile_lab::label::{self, Judge};
     use smallmobile_lab::selfplay::{self, GameLog};
     let dir = std::env::temp_dir().join(format!("smallmobile-judge-{}", std::process::id()));
-    let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1 };
+    let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1, observe: false };
     let cfg = selfplay::Config { players: vec![3, 5], games: 2, threads: 1, seed: 8, opts };
     selfplay::run(&cfg, &KernelAi::new(Level::Normal), &dir.join("play")).unwrap();
     let mut logs = Vec::new();
@@ -581,4 +613,56 @@ fn the_expert_plays_whole_games() {
         }
         assert!(decisions > 10);
     }
+}
+
+#[test]
+fn game_ai_styles_play_differently() {
+    use smallmobile_kernel::Level;
+    use smallmobile_lab::agent::{Agent, KernelAi, STYLES};
+    use smallmobile_lab::know::habit;
+    assert!(KernelAi::style(Level::Normal, "foe=1,nothing=2").is_none(), "réglage inconnu");
+    // par style : régions prises aux autres joueurs, déclins, manches tenues par peuple décliné (par
+    // partie), part des prises faites au plus riche
+    let profile = |ai: &KernelAi| {
+        let mut rng = Rng::new(17);
+        let (mut taken, mut declines, mut age, mut leader) = (0.0, 0.0, 0.0, 0.0);
+        let games = 30;
+        for game in 0..games {
+            let table = Table::new(3, 1700 + game);
+            let mut g = table.game(game as u32);
+            let mut k = Knowledge::default();
+            while g.state.phase != Phase::GameOver {
+                let m = ai.act(&g, &k, &mut rng.fork());
+                k.play(&mut g, &m).unwrap();
+            }
+            for x in &k.history.habits[..3] {
+                taken += (x[habit::ACTIVE] + x[habit::DECLINED]) as f64 / games as f64;
+                declines += x[habit::DECLINES] as f64 / games as f64;
+                age += x[habit::DECLINE_AGE] as f64 / games as f64;
+                leader += x[habit::LEADER] as f64 / games as f64;
+            }
+        }
+        (taken, declines, age / declines, leader / taken)
+    };
+    let normal = profile(&KernelAi::new(Level::Normal));
+    let styles: Vec<_> =
+        STYLES.iter().map(|(name, _)| profile(&KernelAi::style(Level::Normal, name).unwrap())).collect();
+    for ((name, _), p) in STYLES.iter().zip(&styles) {
+        eprintln!(
+            "{name:>10} : {:.1} régions prises aux autres ({:.0} % au plus riche), {:.1} déclins, {:.1} manches par peuple décliné",
+            p.0,
+            100.0 * p.3,
+            p.1,
+            p.2
+        );
+    }
+    eprintln!("{:>10} : {:.1} ({:.0} %), {:.1}, {:.1}", "normal", normal.0, 100.0 * normal.3, normal.1, normal.2);
+    let [aggressive, hunter, prudent, early, late] = styles[..] else { unreachable!() };
+    assert!(aggressive.0 > normal.0 * 1.05, "l'agressive prend plus aux autres");
+    assert!(hunter.3 > normal.3 + 0.03, "la chasseuse vise davantage le plus riche");
+    assert!(prudent.0 < normal.0 * 0.8, "la prudente prend moins aux autres");
+    assert!(
+        early.1 > late.1 * 1.2 && early.2 < late.2,
+        "décliner tôt : plus de déclins, des peuples tenus moins longtemps"
+    );
 }

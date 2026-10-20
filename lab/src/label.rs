@@ -21,7 +21,7 @@ use smallmobile_kernel::{Ai, Game, Level, Phase, Tuning};
 use crate::agent::{Agent, KernelAi};
 use crate::az::Az;
 use crate::encode::encode;
-use crate::know::{Knowledge, Returns, determinize};
+use crate::know::{Knowledge, determinize};
 use crate::moves::{self, KEYS};
 use crate::rand::{Rng, mix};
 use crate::selfplay::{GameLog, ILLEGAL, Record, games_file};
@@ -81,8 +81,9 @@ pub fn judge(
     (win, coins)
 }
 
-/// L'enregistrement d'une position jugée : cibles de valeur seulement (aucun coup visité).
-fn judged(g: &Game, k: &Knowledge, count: usize, by: &Judge, rng: &mut Rng) -> Vec<u8> {
+/// L'enregistrement d'une position jugée : cibles de valeur (aucun coup visité), et le coup joué
+/// ensuite dans la partie s'il est connu (`ILLEGAL` sinon).
+fn judged(g: &Game, k: &Knowledge, count: usize, by: &Judge, played: u16, rng: &mut Rng) -> Vec<u8> {
     let (win, finals) = judge(g, k, count, by, rng);
     let s = &g.state;
     let n = s.player_count();
@@ -99,8 +100,20 @@ fn judged(g: &Game, k: &Knowledge, count: usize, by: &Judge, rng: &mut Rng) -> V
         gain[r] = finals[q] - s.players[q].coins as f32;
         qgain[r] = gain[r];
     }
-    let enc = encode(g, k.race_tail);
-    Record { enc: &enc, mixed: false, map: g.map, win: w, gain, visits: &visits, qgain, qwin: w }.bytes()
+    let enc = encode(g, k);
+    Record {
+        enc: &enc,
+        mixed: false,
+        observed: false,
+        played,
+        map: g.map,
+        win: w,
+        gain,
+        visits: &visits,
+        qgain,
+        qwin: w,
+    }
+    .bytes()
 }
 
 /// Une partie qui fournit des positions : `random` de coups au hasard, le reste par `agent`.
@@ -118,13 +131,11 @@ fn label_game(
     while g.state.phase != Phase::GameOver {
         let legal = moves::legal(&g);
         if legal.len() > 1 && rng.unit() < cfg.share {
-            out.write_all(&judged(&g, &k, cfg.rollouts, &cfg.judge, rng))?;
+            out.write_all(&judged(&g, &k, cfg.rollouts, &cfg.judge, ILLEGAL, rng))?;
             count += 1;
         }
         let mv = if rng.unit() < cfg.random { legal[rng.below(legal.len())].mv } else { agent.act(&g, &k, rng) };
-        let mut ret = Returns::default();
-        moves::play(&mut g, &mv, &mut ret).expect("coup possible");
-        k.observe(ret.0, &g.state);
+        k.play(&mut g, &mv).expect("coup possible");
     }
     Ok(count)
 }
@@ -211,11 +222,15 @@ pub fn rejudge(
         let table = log.table();
         let mut rng = Rng::new(mix(seed, log.deal));
         let mut count = 0;
+        let mut step = 0;
         log.replay(&table, |g, k| {
-            if moves::legal(g).len() > 1 && rng.unit() < share {
-                out.extend(judged(g, k, rollouts, by, &mut rng));
+            let legal = moves::legal(g);
+            if legal.len() > 1 && rng.unit() < share {
+                let played = log.played(step, g, &legal, &table);
+                out.extend(judged(g, k, rollouts, by, played, &mut rng));
                 count += 1;
             }
+            step += 1;
         })
         .map_err(std::io::Error::other)?;
         Ok(count)

@@ -7,11 +7,16 @@ import numpy as np
 KEYS = 448
 REGIONS = 48
 NODE = 77
-# entrées de la partie : encodage de la version 2 (lab/src/encode.rs) ; les GLOBAL_V1 premières sont
-# celles de la version 1, seules présentes dans les fichiers jusqu'à *.v3.bin
-GLOBAL = 806
+# entrées de la partie : encodage de la version 3 (lab/src/encode.rs) ; les GLOBAL_V1 premières sont
+# celles de la version 1, seules présentes dans les fichiers jusqu'à *.v3.bin, les GLOBAL_V2 premières
+# celles de la version 2 (*.v4.bin) ; la version 3 ajoute l'histoire des joueurs
+GLOBAL = 926
+GLOBAL_V2 = 806
 GLOBAL_V1 = 700
 ILLEGAL = 65535
+# drapeaux d'un enregistrement (champ `flags`) : table variée ; coup observé d'un autre joueur que
+# l'IA qui apprend, qui n'apprend que la tête « coup réel »
+MIXED, OBSERVED = 1, 2
 
 
 def fields(glob):
@@ -19,7 +24,7 @@ def fields(glob):
         ("players", "u1"),
         ("regions", "u1"),
         ("full", "u1"),
-        ("spare", "u1"),
+        ("flags", "u1"),
         ("win", "<f4", 5),
         ("gain", "<f4", 5),
         ("visits", "<u2", KEYS),
@@ -36,13 +41,17 @@ RECORD_V2 = np.dtype(fields(GLOBAL_V1) + [("qgain", "<f4", 5)])
 # fichiers *.v3.bin : et part de victoire attendue par la recherche (NaN : inconnue)
 RECORD_V3 = np.dtype(fields(GLOBAL_V1) + [("qgain", "<f4", 5), ("qwin", "<f4", 5)])
 # fichiers *.v4.bin : encodage de la version 2, clés de paix relatives au joueur qui agit
-# (`lab reencode` y convertit les *.v3.bin, qui désignent la cible de la paix par sa place absolue)
-RECORD = np.dtype(fields(GLOBAL) + [("qgain", "<f4", 5), ("qwin", "<f4", 5)])
+# (les *.v3.bin désignent la cible de la paix par sa place absolue)
+RECORD_V4 = np.dtype(fields(GLOBAL_V2) + [("qgain", "<f4", 5), ("qwin", "<f4", 5)])
+# fichiers *.v5.bin : encodage de la version 3, et la clé du coup joué (ILLEGAL : inconnu) ;
+# `lab reencode` y convertit les *.v3.bin et *.v4.bin
+RECORD = np.dtype(fields(GLOBAL) + [("qgain", "<f4", 5), ("qwin", "<f4", 5), ("played", "<u2")])
 
 
 def dtype_of(f):
     """Le format des enregistrements d'un fichier, d'après son nom."""
-    for suffix, dtype in ((".v4.bin", RECORD), (".v3.bin", RECORD_V3), (".v2.bin", RECORD_V2)):
+    versions = ((".v5.bin", RECORD), (".v4.bin", RECORD_V4), (".v3.bin", RECORD_V3), (".v2.bin", RECORD_V2))
+    for suffix, dtype in versions:
         if f.name.endswith(suffix):
             return dtype
     return RECORD_V1
@@ -84,7 +93,7 @@ class Records:
 
 def fill(dst, src):
     """Copie des enregistrements (anciens ou nouveaux) dans un tableau `RECORD` ; ce qui manque aux
-    anciens vaut NaN, et leurs entrées de la version 2 zéro."""
+    anciens vaut NaN (ILLEGAL pour le coup joué), et leurs entrées des versions suivantes zéro."""
     if src.dtype == RECORD:
         dst[...] = src
         return
@@ -92,8 +101,10 @@ def fill(dst, src):
         if name == "glob":
             dst["glob"] = 0
             dst["glob"][:, : src["glob"].shape[1]] = src["glob"]
+        elif name in src.dtype.names:
+            dst[name] = src[name]
         else:
-            dst[name] = src[name] if name in src.dtype.names else np.nan
+            dst[name] = ILLEGAL if name == "played" else np.nan
 
 
 def games(f, dtype, count):

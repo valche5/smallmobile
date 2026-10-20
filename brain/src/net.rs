@@ -9,7 +9,13 @@
 //!   g   += g2(relu(g1([g, moyenne h, max h])))
 //! politique : par région  node_pol([h_i, g]) → 5 sortes de coups ; globale glob_pol2(relu(glob_pol1(g)))
 //! valeur    : val2(relu(val1([g, moyenne h]))) → 5 logits de victoire, 5 gains de pièces (÷ 50)
+//! coup réel : comme la politique (beh_node, beh_glob1, beh_glob2), facultative
 //! ```
+//!
+//! La politique dit le meilleur coup (appris des visites de la recherche) ; la tête « coup réel »
+//! (réseaux de la version 3 des entrées) prévoit le coup que le joueur qui agit va vraiment jouer,
+//! d'après la position et ce qu'il a fait jusque-là dans la partie (`know::History`) : elle a appris
+//! des coups joués par des joueurs de tous styles, et sert à simuler les adversaires.
 //!
 //! Format des poids : « SMNN1 », nombre de tenseurs, puis pour chacun nom, dimensions et `f32`
 //! (petit-boutiste). Les poids des couches linéaires sont rangés comme dans PyTorch (sortie × entrée).
@@ -21,7 +27,7 @@ use std::path::Path;
 
 use smallmobile_kernel::Map;
 
-use crate::encode::{Encoded, GLOBAL, GLOBAL_V1, NODE, REGIONS};
+use crate::encode::{Encoded, GLOBAL, GLOBAL_V1, GLOBAL_V2, NODE, REGIONS};
 use crate::moves::KEYS;
 
 /// Sortes de coups par région, dans l'ordre des clés (`moves::REGION`).
@@ -78,18 +84,54 @@ struct Layer {
     g2: Linear,
 }
 
+/// Une tête de politique : un logit par clé de coup, par région (`node`) et pour la partie
+/// (`glob1`, `glob2`).
+struct Policy {
+    node: Linear,
+    glob1: Linear,
+    glob2: Linear,
+}
+
+impl Policy {
+    fn load(t: &mut HashMap<String, (Vec<usize>, Vec<f32>)>, names: [&str; 3]) -> io::Result<Policy> {
+        Ok(Policy {
+            node: Linear::load(t, names[0])?,
+            glob1: Linear::load(t, names[1])?,
+            glob2: Linear::load(t, names[2])?,
+        })
+    }
+
+    /// Les logits des clés (`-inf` pour les régions absentes) : `g` le vecteur de la partie, `h` les
+    /// `r` lignes des régions.
+    #[inline(always)]
+    fn logits<const AVX2: bool>(&self, g: &[f32], h: &[f32], r: usize, hd: usize) -> Vec<f32> {
+        let mut logits = vec![f32::NEG_INFINITY; KEYS];
+        let mut gp = vec![0.0f32; hd];
+        self.glob1.apply::<AVX2>(g, &mut gp);
+        relu(&mut gp);
+        let mut gl = vec![0.0f32; GLOBAL_KEYS];
+        self.glob2.apply::<AVX2>(&gp, &mut gl);
+        logits[..GLOBAL_KEYS].copy_from_slice(&gl);
+        let mut gpol = [0.0f32; REGION_KINDS];
+        gpol.copy_from_slice(&self.node.b);
+        accumulate_rows::<AVX2>(&self.node, hd, g, &mut gpol);
+        region_policy::<AVX2>(&self.node, h, r, hd, &gpol, &mut logits);
+        logits
+    }
+}
+
 pub struct Net {
     pub hidden: usize,
     node_in: Linear,
     glob_in: Linear,
     layers: Vec<Layer>,
-    node_pol: Linear,
-    glob_pol1: Linear,
-    glob_pol2: Linear,
+    policy: Policy,
+    /// La tête « coup réel », si le réseau en a une.
+    behaviour: Option<Policy>,
     val1: Linear,
     val2: Linear,
     node_scale: [f32; NODE],
-    /// Une par entrée de la partie que lit ce réseau (`GLOBAL_V1` ou `GLOBAL`).
+    /// Une par entrée de la partie que lit ce réseau (`GLOBAL_V1`, `GLOBAL_V2` ou `GLOBAL`).
     global_scale: Vec<f32>,
 }
 
@@ -100,8 +142,11 @@ pub struct Eval {
     pub win: [f32; 5],
     /// Pièces que chaque joueur relatif gagnera encore d'ici la fin.
     pub gain: [f32; 5],
-    /// Logit de chaque clé de coup (`moves::Key`).
+    /// Logit de chaque clé de coup (`moves::Key`) : le meilleur coup selon le réseau.
     pub logits: Vec<f32>,
+    /// Logit de chaque clé pour le coup que le joueur qui agit va vraiment jouer, si le réseau a
+    /// cette tête.
+    pub behaviour: Option<Vec<f32>>,
 }
 
 fn read_u32(r: &mut impl Read) -> io::Result<u32> {
@@ -157,9 +202,11 @@ impl Net {
             node_in,
             glob_in,
             layers,
-            node_pol: Linear::load(t, "node_pol")?,
-            glob_pol1: Linear::load(t, "glob_pol1")?,
-            glob_pol2: Linear::load(t, "glob_pol2")?,
+            policy: Policy::load(t, ["node_pol", "glob_pol1", "glob_pol2"])?,
+            behaviour: match t.contains_key("beh_node.weight") {
+                true => Some(Policy::load(t, ["beh_node", "beh_glob1", "beh_glob2"])?),
+                false => None,
+            },
             val1: Linear::load(t, "val1")?,
             val2: Linear::load(t, "val2")?,
             node_scale: scale(t, "node_scale")?,
@@ -167,9 +214,10 @@ impl Net {
         };
         let inputs = net.glob_in.inp;
         if net.node_in.inp != NODE
-            || ![GLOBAL_V1, GLOBAL].contains(&inputs)
+            || ![GLOBAL_V1, GLOBAL_V2, GLOBAL].contains(&inputs)
             || net.global_scale.len() != inputs
-            || net.glob_pol2.out != GLOBAL_KEYS
+            || net.policy.glob2.out != GLOBAL_KEYS
+            || net.behaviour.as_ref().is_some_and(|b| b.glob2.out != GLOBAL_KEYS)
         {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "réseau d'une autre version des entrées"));
         }
@@ -177,7 +225,7 @@ impl Net {
     }
 
     /// Les entrées de la partie que lit ce réseau : les `GLOBAL_V1` premières (version 1, jusqu'à
-    /// gen10), ou toutes.
+    /// gen10), les `GLOBAL_V2` premières (version 2), ou toutes.
     pub fn inputs(&self) -> usize {
         self.glob_in.inp
     }
@@ -271,17 +319,8 @@ impl Net {
         }
         let mut mid = gmid;
 
-        let mut logits = vec![f32::NEG_INFINITY; KEYS];
-        let mut gp = vec![0.0f32; hd];
-        self.glob_pol1.apply::<AVX2>(&g, &mut gp);
-        relu(&mut gp);
-        let mut gl = vec![0.0f32; GLOBAL_KEYS];
-        self.glob_pol2.apply::<AVX2>(&gp, &mut gl);
-        logits[..GLOBAL_KEYS].copy_from_slice(&gl);
-        let mut gpol = [0.0f32; REGION_KINDS];
-        gpol.copy_from_slice(&self.node_pol.b);
-        accumulate_rows::<AVX2>(&self.node_pol, hd, &g, &mut gpol);
-        region_policy::<AVX2>(&self.node_pol, &h, r, hd, &gpol, &mut logits);
+        let mut logits = self.policy.logits::<AVX2>(&g, &h, r, hd);
+        let behaviour = self.behaviour.as_ref().map(|b| b.logits::<AVX2>(&g, &h, r, hd));
 
         cat[..hd].copy_from_slice(&g);
         let (mean, max) = cat[hd..].split_at_mut(hd);
@@ -306,7 +345,7 @@ impl Net {
         if inputs == GLOBAL_V1 {
             crate::moves::relative_peace(&mut logits, e.seat, e.players, f32::NEG_INFINITY);
         }
-        Eval { win, gain, logits }
+        Eval { win, gain, logits, behaviour }
     }
 }
 

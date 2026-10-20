@@ -34,17 +34,53 @@ pub struct KernelAi {
     /// Voit la vraie partie (pioches et dés compris), comme dans le jeu : pour mesurer ce que ça change.
     pub sees_all: bool,
     tuning: Tuning,
+    /// Les réglages changés (`style`), pour le nom.
+    style: String,
 }
 
 impl KernelAi {
     pub fn new(level: Level) -> Self {
-        KernelAi { level, sees_all: false, tuning: Tuning::default() }
+        KernelAi { level, sees_all: false, tuning: Tuning::default(), style: String::new() }
+    }
+
+    /// Un autre style de jeu au même niveau : des réglages de l'IA du jeu changés (`Tuning`), du type
+    /// `foe=1,foe_declined=0.5`, ou un style nommé (`STYLES`). `None` si un réglage est inconnu.
+    pub fn style(level: Level, style: &str) -> Option<Self> {
+        let settings = STYLES.iter().find(|(name, _)| *name == style).map_or(style, |(_, s)| s);
+        let mut ai = KernelAi::new(level);
+        for part in settings.split(',').filter(|p| !p.is_empty()) {
+            let (k, v) = part.split_once('=')?;
+            if !ai.tuning.set(k, v.parse().ok()?) {
+                return None;
+            }
+        }
+        ai.style = style.to_string();
+        Some(ai)
     }
 }
 
+/// Des styles de jeu de l'IA Normale, pour des tables variées (`lab/JOURNAL.md`, P3) : nom, réglages.
+/// Les conquêtes au rendement immédiat (`conquest_model=0`) laissent jouer les primes et malus des
+/// régions visées ; le déclin à seuils (`decline_model=0`), ses seuils.
+pub const STYLES: [(&str, &str); 5] = [
+    // prend aux autres joueurs, même à ceux qui ne dominent pas
+    ("aggressive", "conquest_model=0,foe=1,foe_declined=0.5"),
+    // s'en prend au plus riche dès qu'il mène
+    ("hunter", "conquest_model=0,dom_min=0,dom_share=0,dom_base=2,dom_max=4"),
+    // garde ses jetons pour la défense, évite les régions exposées
+    ("prudent", "conquest_model=0,min_ratio=0.6,exposure=0.3"),
+    // décline dès que les conquêtes faiblissent
+    ("early", "decline_model=0,decline_est=3,decline_left=1"),
+    // garde son peuple jusqu'à l'épuisement
+    ("late", "decline_model=0,decline_est=0,decline_left=4"),
+];
+
 impl Agent for KernelAi {
     fn name(&self) -> String {
-        let name = format!("{:?}", self.level).to_lowercase();
+        let mut name = format!("{:?}", self.level).to_lowercase();
+        if !self.style.is_empty() {
+            name += &format!(":{}", self.style);
+        }
         if self.sees_all { name + "!" } else { name }
     }
 
@@ -72,6 +108,7 @@ impl Agent for Random {
 }
 
 /// Un joueur d'après son nom (`easy`, `normal`, `hard`, `random` ; `hard!` : voit tout ;
+/// `normal:aggressive`, `normal:foe=1` : un autre style, voir `KernelAi::style` ;
 /// `mcts:n=1000,c=0.7` : recherche, voir `mcts::Config::parse` ; `az:net=poids.bin,n=400` : recherche
 /// guidée par le réseau, voir `az::Config::parse`).
 pub fn by_name(name: &str) -> Option<Box<dyn Agent>> {
@@ -84,6 +121,9 @@ pub fn by_name(name: &str) -> Option<Box<dyn Agent>> {
     }
     if let Some(level) = name.strip_suffix('!') {
         return Some(Box::new(KernelAi { sees_all: true, ..KernelAi::new(level_named(level)?) }));
+    }
+    if let Some((level, style)) = name.split_once(':') {
+        return Some(Box::new(KernelAi::style(level_named(level)?, style)?));
     }
     Some(match name {
         "easy" => Box::new(KernelAi::new(Level::Easy)),
