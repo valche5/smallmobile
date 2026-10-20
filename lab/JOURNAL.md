@@ -18,10 +18,11 @@ face à une population d'adversaires (P6) ; cibles territoriales (P7) ; placemen
 (P5). Détail : « Suite du plan après gen10 ».
 
 **Décision du 20 octobre : l'Expert ne sait pas contre qui il joue.** Il doit bien jouer dans tous
-les cas, avec le même réglage quels que soient ses adversaires : ni `rp=4` (simulation selon le
-type de chaque place), ni type de place ou profil d'adversaire en entrée du réseau, ni
-adaptation en cours de partie (P3). La robustesse face aux styles différents vient de
-l'entraînement (P6), pas de l'identification des adversaires.
+les cas : ni `rp=4` (simulation selon le type de chaque place), ni type de place (humain, IA,
+niveau, réseau) en entrée du réseau. La robustesse face aux styles différents vient de
+l'entraînement (P6), pas de l'identification des adversaires. **Permis, en revanche :** se faire un
+profil de chaque joueur d'après ses coups publics dans la partie, comme un humain attentif
+(historique en entrée du réseau ; P3 revue).
 
 Règle d'honnêteté : connaître seulement ce qu'un humain attentif peut savoir. Les scores se
 reconstituent à partir des gains annoncés. Le contenu des pioches et l'ordre des cartes rendues
@@ -320,7 +321,8 @@ entières (64 fichiers, environ 20 000 parties).
    donc un mélange 50/50 sans adaptation. Aucun gain adaptatif n'est mesuré. Les types de
    places (humain, Expert, niveau d'IA) sont publics : simuler chaque place selon son type est
    honnête et ne demande aucune croyance ; seul le jeu des humains reste à deviner.
-   **Non poursuivie (décision du 20 octobre) :** l'Expert ne sait pas contre qui il joue.
+   **Type de place exclu (décision du 20 octobre) :** l'Expert ne sait pas contre qui il joue ;
+   seul le profil observé dans la partie est permis (P3).
 3. **Cibles de politique.** Une recherche à 200 itérations peut bien jouer sans suffisamment
    améliorer la politique qu'elle doit enseigner. Comparer les recettes à coût total comparable.
 4. **Coups absents.** `brain/src/moves.rs` fixe certains placements de pouvoirs et limite les
@@ -710,8 +712,13 @@ Son efficacité dans SmallMobile reste à mesurer.
 
 ### P3 — Mesurer l'intérêt de l'adaptation aux adversaires
 
-**Écartée le 20 octobre :** l'Expert ne doit pas savoir contre qui il joue, ni le deviner en cours
-de partie. Plan gardé pour mémoire.
+**Revue le 20 octobre :** pas de type de place (décision du 20 octobre) ; le profil d'un joueur
+vient seulement de ses coups publics dans la partie. Forme retenue : un historique résumé par
+joueur en entrée du réseau (attaques subies et portées, déclins, prudence des placements…),
+plutôt que les croyances bayésiennes de `opponents.rs` ci-dessous. Inutile en auto-apprentissage
+pur (tous les joueurs sont le même réseau) : à entraîner sur des parties à tables variées (P6),
+réencodées depuis leurs fichiers `.moves`. Côté jeu, le serveur devra transmettre l'historique à
+`expert`. Le plan ci-dessous reste comme mémoire de l'ancienne forme.
 
 **Hypothèse :** reconnaître un style pendant la partie améliore les simulations sur les tables mixtes.
 
