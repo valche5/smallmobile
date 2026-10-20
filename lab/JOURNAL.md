@@ -784,6 +784,7 @@ l'encodage, puis fréquence de chaque information publique absente, aux décisio
 | quels pouvoirs sont connus au fond, bientôt au marché | 0 % | 0 % | 0,2 % | 0,1 % | 0,1 % |
 | la file des défenses au-delà de la première | 0 % | 0 % | 0 % | 0 % | 0 % |
 | l'âge du peuple actif d'un adversaire (choisi il y a 3 manches ou plus) | 24 % | 41 % | 47 % | 45 % | 41 % |
+| (politique) à qui imposer la paix : la clé désigne la place absolue de la cible | 0,4 % | 1,0 % | 1,0 % | 0,9 % | 0,9 % |
 
 Le réseau reçoit le nombre de peuples connus au fond, pas lesquels ni leur ordre ; rien des
 pouvoirs connus. L'âge des peuples (`picked_round`) sert à l'IA Normale du jeu, pas au réseau.
@@ -791,7 +792,11 @@ Aucune collision : dans une même partie, deux positions publiquement différent
 donné la même entrée (l'information manque, mais d'autres entrées changent avec elle). Tout le
 reste de l'état public est encodé ; le type des places est exclu volontairement. Candidats à
 ajouter : l'âge des peuples actifs, les prochains peuples connus de la pioche, la paix entre
-adversaires. Pouvoirs connus et file des défenses : trop rares pour compter. Leur effet ne se
+adversaires ; et le contenu des pioches (peuples et pouvoirs encore à venir), public mais
+seulement déductible par élimination sur tout le plateau. Côté politique, la clé de fin de tour
+des Diplomates (`moves::finishes`) désigne la cible par sa place absolue, alors que le réseau voit
+les joueurs relativement à lui : « la paix au joueur suivant » change de clé selon sa place, même
+à 2 joueurs. À rendre relative (et à convertir dans les visites des données réencodées). Pouvoirs connus et file des défenses : trop rares pour compter. Leur effet ne se
 mesure qu'en entraînant avec et sans, sur les mêmes parties réencodées.
 
 **Recherche :** si davantage d'itérations aide toujours peu après P2/P4, examiner le regroupement

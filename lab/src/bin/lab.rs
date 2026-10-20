@@ -484,7 +484,7 @@ fn audit_cmd(opts: &HashMap<String, String>) {
     use smallmobile_lab::encode::encode;
     use smallmobile_lab::moves;
 
-    const GAPS: [&str; 7] = [
+    const GAPS: [&str; 8] = [
         "paix entre deux adversaires",
         "peuples connus au fond de la pioche",
         "  dont bientôt au marché (≤ 2 cachés)",
@@ -492,6 +492,7 @@ fn audit_cmd(opts: &HashMap<String, String>) {
         "  dont bientôt au marché (≤ 2 cachés)",
         "plusieurs défenses en attente",
         "peuple actif d'un adversaire choisi il y a 3 manches ou plus",
+        "fin de tour avec paix à imposer (clé : place absolue)",
     ];
     // ce qu'un joueur sait : sans l'ordre caché des pioches, les dés à venir, ni le type des places
     fn public(s: &State, race_tail: usize, power_tail: usize) -> State {
@@ -560,6 +561,8 @@ fn audit_cmd(opts: &HashMap<String, String>) {
                 .iter()
                 .enumerate()
                 .any(|(q, p)| q != me && p.active.is_some_and(|race| s.round - s.race(race).picked_round >= 3));
+            let peace_keys =
+                moves::legal(g).iter().any(|c| matches!(c.mv, moves::Move::Finish(f) if f.peace.is_some()));
             let gaps = [
                 s.peace.iter().any(|p| p.diplomat != me && p.target != me),
                 k.race_tail > 0,
@@ -568,6 +571,7 @@ fn audit_cmd(opts: &HashMap<String, String>) {
                 soon(s.power_deck.len(), k.power_tail),
                 s.defense.len() > 1,
                 old,
+                peace_keys,
             ];
             counts[n][0] += 1;
             for (c, gap) in counts[n][1..].iter_mut().zip(gaps) {
