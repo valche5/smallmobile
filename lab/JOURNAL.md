@@ -536,6 +536,17 @@ quatre fois plus de parties, la politique des nouvelles parties aide nettement f
 gen8, trop peu de donnes pour départager. Retenu : **VP = `lab/nets/gen9.bin`** (V :
 `gen9v.bin`), candidat pour le jeu et enseignant de la génération suivante. Pertes de validation
 finales, V puis VP : politique 1,574 et 1,578, valeur 0,984 et 0,983, Brier 0,325 et 0,324.
+**gen9 livré dans le jeu le 20 octobre à 11 h 58.**
+
+**gen10 lancé le 20 octobre** : 20 000 parties de gen9 et positions rejugées par gen9
+(`lab/runs/gen10-data.sh`, `lab/data/gen10` et `gen10-judged`), puis deux branches depuis gen9
+(`lab/runs/gen10-train.sh`, recette de VP, 24 000 lots) : **F, complet** (anciennes sources au
+quart, comme gen9, plus `p2`, `gen9`, `gen10`) et **W, fenêtre** (`p2`, `gen9`, `gen10` seulement).
+Question : les anciennes parties (fins de Normal, réseaux faibles) servent-elles encore ? Sans
+elles, disque et mémoire cessent de croître à chaque génération (71 Go à télécharger pour F,
+d'où `--disk 200`). Arènes aux réglages livrés : F et W parmi des gen9 (graine 701, 920 donnes,
+différence W − F) ; face à Difficile et à Normale (graines 702 et 703), pour voir si W a oublié
+les positions de jeu plus faible, que des arènes entre réseaux ne montreraient pas.
 
 **Partie perdue contre la paix des Diplomates** (API LLM, 20 octobre, `gpt-6-astra`, 110 à 65) :
 à 2 joueurs, des Tritons Diplomates ont imposé la paix à l'Expert à chacun des 10 tours, ce que la
