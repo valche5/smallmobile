@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { basename } from 'node:path';
 import { aiAction } from '../src/engine/ai';
 import { PLAYER_COLORS } from '../src/engine/data';
 import { applyAction, createGame } from '../src/engine/game';
@@ -55,7 +56,7 @@ class FakeExpert implements Expert {
       actions.push(a);
       cur = applyAction(cur, a);
     } while (cur.phase === 'redeploy' && g.phase === 'redeploy' && currentActor(cur) === actor);
-    return { actions, value: 0.5, iterations: 200, computeMs: 3 };
+    return { actions, value: 0.5, iterations: 200, computeMs: 3, net: 'test' };
   }
 }
 
@@ -120,6 +121,9 @@ describe('seul contre l’IA, sur le serveur', () => {
     expect(moves.filter((m) => m.p !== 0).length).toBeGreaterThan(thoughts.length);
     expect(thoughts.every((m) => m.ai!.level === 'expert' && m.ai!.iterations === 200 && m.ai!.ms >= 0)).toBe(true);
     expect(moves.filter((m) => m.p === 0).every((m) => !m.ai)).toBe(true);
+    // le réseau de chaque décision, et en tête de la partie
+    expect(thoughts.every((m) => m.ai!.net === 'test')).toBe(true);
+    expect(game!.expert).toEqual(['test']);
   });
 
   test('Expert en panne : l’IA Difficile joue à sa place, et c’est noté', async () => {
@@ -128,9 +132,11 @@ describe('seul contre l’IA, sur le serveur', () => {
     const { sched, archive, rooms, host } = soloRoom(2, 'expert', expert);
     const final = await playOut(sched, host, rooms);
     expect(final.phase).toBe('gameOver');
-    const thoughts = [...archive.games.values()][0]!.record.moves.filter((m) => m.ai);
+    const [game] = [...archive.games.values()];
+    const thoughts = game!.record.moves.filter((m) => m.ai);
     expect(thoughts.length).toBeGreaterThan(10);
     expect(thoughts.every((m) => m.ai!.fallback)).toBe(true);
+    expect(game!.expert).toBeUndefined();
   });
 
   test('une partie archivée se rejoue à l’identique', async () => {
@@ -172,6 +178,7 @@ describe('le processus natif de l’Expert', () => {
       for (let decision = 0; decision < 12; decision++) {
         const move = await expert.decide(g);
         expect(move.actions.length).toBeGreaterThan(0);
+        expect(move.net).toBe(basename(DEFAULT_EXPERT.net, '.bin'));
         for (const a of move.actions) g = applyAction(g, a);
         if (decision === 5) expert.close();
       }

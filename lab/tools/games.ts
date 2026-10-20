@@ -1,4 +1,5 @@
-// Les parties archivées par le serveur (data/games/*.json) : qui a gagné, le temps de décision des IA
+// Les parties archivées par le serveur (data/games/*.json) : qui a gagné (entre crochets, les réseaux de
+// l'Expert qui y ont joué), le temps de décision des IA
 // par niveau et par nombre de joueurs, et les résultats des LLM (parties de l'API llm, fichiers
 // `*_llm-*`, place marquée `llm`) par modèle.
 //
@@ -26,7 +27,8 @@ for (const g of games) {
     return coins ? `${tag} ${coins[i]}${coins[i] === best ? ' 🏆' : ''}` : tag;
   });
   const state = coins ? '' : ` — en cours, ${g.record.moves.length} actions`;
-  console.log(`${g.id} : ${who.join(' · ')}${state}`);
+  const nets = g.expert ? ` [${g.expert.join(', ')}]` : '';
+  console.log(`${g.id}${nets} : ${who.join(' · ')}${state}`);
 }
 
 // temps de décision : une décision = la première action d'un coup d'IA
@@ -57,24 +59,26 @@ if (groups.size) {
   }
 }
 
-// les LLM : parties finies par modèle, victoires, place moyenne (d'après les pièces), bilans donnés
+// les LLM : parties finies par modèle et réseaux de l'Expert en face, victoires, place moyenne (d'après
+// les pièces), bilans donnés
 const models = new Map<string, { games: number; wins: number; places: number; debriefs: number }>();
 for (const g of games) {
   if (!g.llm || !g.coins) continue;
   const mine = g.coins[g.llm.seat]!;
   const place = 1 + g.coins.filter((c) => c > mine).length;
-  const e = models.get(g.llm.model) ?? { games: 0, wins: 0, places: 0, debriefs: 0 };
+  const key = g.expert ? `${g.llm.model} / ${g.expert.join('+')}` : g.llm.model;
+  const e = models.get(key) ?? { games: 0, wins: 0, places: 0, debriefs: 0 };
   e.games++;
   e.wins += +(place === 1);
   e.places += place;
   e.debriefs += +!!g.llm.debrief;
-  models.set(g.llm.model, e);
+  models.set(key, e);
 }
 if (models.size) {
   console.log('\nLLM (parties finies) :');
-  console.log('modèle                          parties   victoires   place moy.   bilans');
+  console.log('modèle / réseau de l’Expert          parties   victoires   place moy.   bilans');
   for (const [model, e] of [...models].sort()) {
     const cols = [String(e.games).padStart(7), String(e.wins).padStart(11), (e.places / e.games).toFixed(2).padStart(12), String(e.debriefs).padStart(8)];
-    console.log(`${model.padEnd(30)} ${cols.join(' ')}`);
+    console.log(`${model.padEnd(35)} ${cols.join(' ')}`);
   }
 }

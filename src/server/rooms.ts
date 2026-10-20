@@ -18,7 +18,7 @@ import {
   type ServerMsg,
   type Snapshot,
 } from '../shared/protocol';
-import { gameId, type GameArchive } from './archive';
+import { expertNets, gameId, type GameArchive } from './archive';
 import type { Expert } from './expert';
 
 /** Un téléphone connecté. */
@@ -486,6 +486,7 @@ export class RoomManager {
           iterations: move.iterations,
           computeMs: Math.round(move.computeMs),
           ...(value !== undefined ? { value } : {}),
+          net: move.net,
         };
         if (move.iterations) {
           const chance = value !== undefined ? `, chance ${Math.round(value * 100)} %` : '';
@@ -697,6 +698,7 @@ export class RoomManager {
       players: g.players.map((p) => ({ name: p.name, kind: p.kind, ai: p.ai })),
       coins: g.phase === 'gameOver' ? g.players.map((p) => p.coins) : null,
       record: g.record,
+      ...expertNets(g.record),
     });
   }
 

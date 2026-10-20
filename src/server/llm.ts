@@ -20,7 +20,7 @@ import { KernelRefusal } from '../engine/kernel';
 import { randomSeed } from '../engine/rng';
 import { allTargets, currentActor, ranking, regionsOf, tokensOnBoard } from '../engine/rules';
 import type { Action, AiLevel, AiThought, GameState, RaceId } from '../engine/types';
-import { gameId, type ArchivedGame, type GameArchive } from './archive';
+import { expertNets, gameId, type ArchivedGame, type GameArchive } from './archive';
 import type { Expert } from './expert';
 
 const LEVELS: AiLevel[] = ['facile', 'normal', 'difficile', 'expert'];
@@ -217,6 +217,7 @@ export class LlmGames {
             actions: move.actions.length,
             iterations: move.iterations,
             computeMs: Math.round(move.computeMs),
+            net: move.net,
           };
           // le coup entier de l'Expert ; s'il est refusé en route, il redemande au tour de boucle suivant
           let played = 0;
@@ -298,6 +299,7 @@ function archived(entry: LlmGame): ArchivedGame | null {
     players: g.players.map((p, i) => ({ name: p.name, kind: i === entry.seat ? ('llm' as const) : p.kind, ai: p.ai })),
     coins: g.phase === 'gameOver' ? g.players.map((p) => p.coins) : null,
     record: g.record,
+    ...expertNets(g.record),
     llm: {
       seat: entry.seat,
       model: entry.model,

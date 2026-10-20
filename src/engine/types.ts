@@ -264,6 +264,8 @@ export interface AiThought {
   iterations?: number;
   value?: number;
   computeMs?: number;
+  /** Expert : son réseau (nom du fichier sans `.bin`, par exemple `gen9`). */
+  net?: string;
   /** L'Expert n'a pas répondu : l'IA Difficile a joué à sa place. */
   fallback?: boolean;
 }

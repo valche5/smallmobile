@@ -24,7 +24,7 @@ class FakeExpert implements Expert {
       actions.push(a);
       cur = applyAction(cur, a);
     } while (cur.phase === 'redeploy' && g.phase === 'redeploy' && currentActor(cur) === actor);
-    return { actions, value: 0.5, iterations: 200, computeMs: 3 };
+    return { actions, value: 0.5, iterations: 200, computeMs: 3, net: 'test' };
   }
 }
 
@@ -97,6 +97,7 @@ describe('parties pour un LLM', () => {
     expect(kept!.players.map((p) => p.kind)).toEqual(['ai', 'llm', 'ai']);
     expect(kept!.llm).toEqual({ seat: 1, model: 'claude-test', client: 'tests', debrief: 'J’ai trop attendu pour passer en déclin.' });
     expect(kept!.coins).toEqual(games.game(v.id).players.map((p) => p.coins));
+    expect(kept!.expert).toEqual(['test']);
   });
 
   test('le modèle est obligatoire ; le bilan attend la fin de la partie', async () => {

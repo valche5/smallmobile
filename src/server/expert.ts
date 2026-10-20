@@ -5,6 +5,7 @@
  */
 import type { Subprocess } from 'bun';
 import { existsSync } from 'node:fs';
+import { basename } from 'node:path';
 import { gameWords, readAction } from '../engine/kernel';
 import type { Action, GameState } from '../engine/types';
 
@@ -16,6 +17,8 @@ export interface ExpertMove {
   iterations: number;
   /** Temps de calcul dans le processus (ms), sans l'aller-retour. */
   computeMs: number;
+  /** Le réseau qui a joué (nom du fichier sans `.bin`). */
+  net: string;
 }
 
 export interface Expert {
@@ -68,7 +71,7 @@ export class ExpertProcess implements Expert {
     const request = new Uint32Array(4 + game.length);
     request.set([3 + game.length, this.opts.iterations, seed, 0]);
     request.set(game, 4);
-    return this.ask(request).then((words) => readMove(words, g));
+    return this.ask(request).then((words) => ({ ...readMove(words, g), net: basename(this.opts.net, '.bin') }));
   }
 
   /** Arrête le processus (fin du serveur). */
@@ -152,7 +155,7 @@ export class ExpertProcess implements Expert {
 }
 
 /** La réponse du processus (voir `brain/src/bin/expert.rs`). */
-function readMove(xs: Uint32Array, g: GameState): ExpertMove {
+function readMove(xs: Uint32Array, g: GameState): Omit<ExpertMove, 'net'> {
   if ((xs[0]! | 0) < 0) {
     const bytes = new Uint8Array(xs.buffer, xs.byteOffset + 8, Math.min(xs[1]!, 4 * (xs.length - 2)));
     throw new Error(`l'Expert refuse : ${new TextDecoder().decode(bytes)}`);

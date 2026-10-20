@@ -19,8 +19,16 @@ export interface ArchivedGame {
   /** Fin de partie : pièces de chaque joueur. */
   coins: number[] | null;
   record: GameRecord;
+  /** Les réseaux de l'Expert qui ont joué dans la partie, dans l'ordre (détail : `ai.net` de chaque décision). */
+  expert?: string[];
   /** Partie jouée par un LLM : sa place, le modèle déclaré, l'outil qui le fait jouer, son bilan. */
   llm?: { seat: number; model: string; client?: string; debrief?: string };
+}
+
+/** Les réseaux de l'Expert qui ont joué dans la partie (`expert` d'`ArchivedGame`), rien sans Expert. */
+export function expertNets(record: GameRecord): { expert?: string[] } {
+  const nets = [...new Set(record.moves.flatMap((m) => (m.ai?.net ? [m.ai.net] : [])))];
+  return nets.length ? { expert: nets } : {};
 }
 
 export interface GameArchive {
