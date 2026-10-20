@@ -12,6 +12,7 @@
 //!     [--judge az:net=poids.bin]   (fins de partie jouées par le réseau plutôt que par l'IA Normal)
 //! lab judge --games lab/data/p2 --out lab/data/p2-judged [--share 0.1] [--rollouts 32] [--judge az:net=poids.bin]
 //!     (positions de parties déjà jouées, fichiers .moves de lab selfplay)
+//! lab audit --games lab/data/gen10/c00   (ce que l'entrée du réseau laisse de côté, dans des parties jouées)
 //! lab noise --net poids.bin [--positions 2000] [--rollouts 32] [--judge az:…]   (bruit des cibles, erreur du réseau)
 //! lab analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par lab/tools/export-room.ts)
 //! ```
@@ -40,6 +41,7 @@ fn main() {
         "label" => label_cmd(&opts),
         "judge" => judge_cmd(&opts),
         "noise" => noise_cmd(&opts),
+        "audit" => audit_cmd(&opts),
         _ => usage(),
     }
 }
@@ -446,7 +448,9 @@ fn judge_option(opts: &HashMap<String, String>) -> smallmobile_lab::label::Judge
 }
 
 /// Juge à nouveau les positions de parties déjà jouées : les fichiers `.moves` de `--games`.
-fn judge_cmd(opts: &HashMap<String, String>) {
+/// Les parties enregistrées (fichiers `.moves` de `lab selfplay`) du dossier `--games`, et le nombre
+/// de fichiers lus.
+fn game_logs(opts: &HashMap<String, String>) -> (Vec<smallmobile_lab::selfplay::GameLog>, usize) {
     use smallmobile_lab::selfplay::GameLog;
     fn moves_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{} : {e}", dir.display())) {
@@ -468,6 +472,154 @@ fn judge_cmd(opts: &HashMap<String, String>) {
             text.lines().map(|l| GameLog::parse(l).unwrap_or_else(|| panic!("ligne illisible : {}", path.display()))),
         );
     }
+    (logs, files.len())
+}
+
+/// Ce que l'entrée du réseau (`encode`) laisse de côté, dans des parties déjà jouées : à chaque
+/// décision (plusieurs coups possibles), la fréquence de chaque information publique absente de
+/// l'entrée, par nombre de joueurs ; puis, dans chaque partie, les positions publiquement
+/// différentes qui donnent au réseau exactement la même entrée, et ce qui les distingue.
+fn audit_cmd(opts: &HashMap<String, String>) {
+    use smallmobile_kernel::State;
+    use smallmobile_lab::encode::encode;
+    use smallmobile_lab::moves;
+
+    const GAPS: [&str; 7] = [
+        "paix entre deux adversaires",
+        "peuples connus au fond de la pioche",
+        "  dont bientôt au marché (≤ 2 cachés)",
+        "pouvoirs connus au fond de la pioche",
+        "  dont bientôt au marché (≤ 2 cachés)",
+        "plusieurs défenses en attente",
+        "peuple actif d'un adversaire choisi il y a 3 manches ou plus",
+    ];
+    // ce qu'un joueur sait : sans l'ordre caché des pioches, les dés à venir, ni le type des places
+    fn public(s: &State, race_tail: usize, power_tail: usize) -> State {
+        let mut p = *s;
+        let hidden = p.race_deck.len() - race_tail.min(p.race_deck.len());
+        p.race_deck.as_mut_slice()[..hidden].sort_unstable();
+        let hidden = p.power_deck.len() - power_tail.min(p.power_deck.len());
+        p.power_deck.as_mut_slice()[..hidden].sort_unstable();
+        (p.rng, p.seq, p.last_die, p.last_region) = (0, 0, None, None);
+        for q in p.players.as_mut_slice() {
+            q.level = smallmobile_kernel::Level::Normal;
+        }
+        p
+    }
+    fn differences(a: &State, b: &State) -> Vec<&'static str> {
+        let (t, u) = (&a.turn, &b.turn);
+        [
+            ("joueurs", a.players != b.players),
+            ("peuples", a.races != b.races),
+            ("régions", a.regions != b.regions),
+            ("marché", a.market != b.market),
+            ("pioche des peuples", a.race_deck != b.race_deck || a.race_tail != b.race_tail),
+            ("pioche des pouvoirs", a.power_deck != b.power_deck || a.power_tail != b.power_tail),
+            ("manche, joueur, phase", (a.round, a.current, a.phase) != (b.round, b.current, b.phase)),
+            ("défenses", a.defense != b.defense),
+            ("paix", a.peace != b.peace),
+            ("tour : peuple, étape", (t.army, t.stage) != (u.army, u.stage)),
+            (
+                "tour : conquêtes",
+                (t.conquests, t.non_empty, t.attacked, t.sorcery) != (u.conquests, u.non_empty, u.attacked, u.sorcery),
+            ),
+            (
+                "tour : dés, dragon, forteresse",
+                (t.berserk_die, t.die_rolled, t.dragon_used, t.fortress_region)
+                    != (u.berserk_die, u.die_rolled, u.dragon_used, u.fortress_region),
+            ),
+            (
+                "tour : choix, déclin, Amazones",
+                (t.picked, t.declined, t.amazon_bonus) != (u.picked, u.declined, u.amazon_bonus),
+            ),
+            ("tour : jetons ramassés", t.readied != u.readied),
+        ]
+        .into_iter()
+        .filter_map(|(name, differ)| differ.then_some(name))
+        .collect()
+    }
+
+    let (logs, _) = game_logs(opts);
+    let mut counts = [[0u64; GAPS.len() + 1]; 6];
+    let mut same_input = 0u64;
+    let mut kinds: HashMap<String, u64> = HashMap::new();
+    for log in &logs {
+        let table = log.table();
+        // dans une partie : entrée du réseau → état public déjà vu avec cette entrée
+        let mut seen: HashMap<Vec<u8>, State> = HashMap::new();
+        log.replay(&table, |g, k| {
+            if moves::legal(g).len() < 2 {
+                return;
+            }
+            let s = &g.state;
+            let n = s.player_count();
+            let me = s.actor().expect("un joueur doit agir");
+            let soon = |deck: usize, tail: usize| tail > 0 && deck - tail.min(deck) <= 2;
+            let old = s
+                .players
+                .iter()
+                .enumerate()
+                .any(|(q, p)| q != me && p.active.is_some_and(|race| s.round - s.race(race).picked_round >= 3));
+            let gaps = [
+                s.peace.iter().any(|p| p.diplomat != me && p.target != me),
+                k.race_tail > 0,
+                soon(s.race_deck.len(), k.race_tail),
+                k.power_tail > 0,
+                soon(s.power_deck.len(), k.power_tail),
+                s.defense.len() > 1,
+                old,
+            ];
+            counts[n][0] += 1;
+            for (c, gap) in counts[n][1..].iter_mut().zip(gaps) {
+                *c += gap as u64;
+            }
+            let e = encode(g, k.race_tail);
+            let mut input = vec![e.regions as u8, e.players as u8];
+            e.node[..e.regions].iter().for_each(|row| input.extend_from_slice(row));
+            input.extend_from_slice(&e.global);
+            let p = public(s, k.race_tail, k.power_tail);
+            match seen.get(&input) {
+                Some(q) if *q != p => {
+                    same_input += 1;
+                    *kinds.entry(differences(q, &p).join(", ")).or_default() += 1;
+                }
+                Some(_) => {}
+                None => {
+                    seen.insert(input, p);
+                }
+            }
+        })
+        .unwrap_or_else(|e| panic!("partie {} : {e}", log.deal));
+    }
+    let total: u64 = counts.iter().map(|c| c[0]).sum();
+    println!("{} parties, {total} décisions", logs.len());
+    println!(
+        "{:<62} {:>8} {:>8} {:>8} {:>8} {:>8}",
+        "décisions où le réseau ne voit pas…", "2 j.", "3 j.", "4 j.", "5 j.", "toutes"
+    );
+    for (i, gap) in GAPS.iter().enumerate() {
+        let share = |c: &[u64; GAPS.len() + 1]| format!("{:.1} %", 100.0 * c[i + 1] as f64 / c[0].max(1) as f64);
+        let all: u64 = counts.iter().map(|c| c[i + 1]).sum();
+        let cols: Vec<String> = counts[2..6].iter().map(share).collect();
+        println!(
+            "{gap:<62} {:>8} {:>8} {:>8} {:>8} {:>7.1} %",
+            cols[0],
+            cols[1],
+            cols[2],
+            cols[3],
+            100.0 * all as f64 / total as f64
+        );
+    }
+    println!("\npositions différentes, même entrée que la précédente (dans une partie) : {same_input}");
+    let mut kinds: Vec<_> = kinds.into_iter().collect();
+    kinds.sort_by(|a, b| b.1.cmp(&a.1));
+    for (what, count) in kinds.iter().take(15) {
+        println!("{count:>8}  {what}");
+    }
+}
+
+fn judge_cmd(opts: &HashMap<String, String>) {
+    let (logs, files) = game_logs(opts);
     let out = opts.get("out").unwrap_or_else(|| usage());
     let start = Instant::now();
     let judged = smallmobile_lab::label::rejudge(
@@ -483,7 +635,7 @@ fn judge_cmd(opts: &HashMap<String, String>) {
         eprintln!("échec : {e}");
         std::process::exit(1)
     }
-    println!("{} parties ({} fichiers) rejugées en {:.0} s", logs.len(), files.len(), start.elapsed().as_secs_f64());
+    println!("{} parties ({files} fichiers) rejugées en {:.0} s", logs.len(), start.elapsed().as_secs_f64());
 }
 
 /// Bruit des positions jugées et erreur du réseau : chaque position (parties de l'IA Normal, 10 % de

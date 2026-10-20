@@ -773,6 +773,27 @@ tenseurs inutilisables ; les parties de `p2`, `gen9` et `gen10` se rejouent à l
 (fichiers `.moves` : donne, graines, actions) et se réencodent sans relancer l'Expert,
 contrairement à `label`, `gen6` et `gen7`. Les nouvelles entrées démarrent à poids nuls, pour affiner depuis le dernier réseau.
 
+**Audit fait le 20 octobre** (`lab audit --games lab/data/gen10/c00` : 500 parties, 76 074
+décisions, 1 s sur mini). Comparaison de tout l'état du noyau (`kernel/src/state.rs`) avec
+l'encodage, puis fréquence de chaque information publique absente, aux décisions :
+
+| Le réseau ne voit pas… | 2 j. | 3 j. | 4 j. | 5 j. | Toutes |
+| --- | --- | --- | --- | --- | --- |
+| une paix entre deux adversaires | 0 % | 1,6 % | 4,0 % | 6,1 % | 3,4 % |
+| quels peuples sont connus au fond de la pioche, bientôt au marché (≤ 2 cachés) | 8,8 % | 35,7 % | 17,2 % | 9,2 % | 17,5 % |
+| quels pouvoirs sont connus au fond, bientôt au marché | 0 % | 0 % | 0,2 % | 0,1 % | 0,1 % |
+| la file des défenses au-delà de la première | 0 % | 0 % | 0 % | 0 % | 0 % |
+| l'âge du peuple actif d'un adversaire (choisi il y a 3 manches ou plus) | 24 % | 41 % | 47 % | 45 % | 41 % |
+
+Le réseau reçoit le nombre de peuples connus au fond, pas lesquels ni leur ordre ; rien des
+pouvoirs connus. L'âge des peuples (`picked_round`) sert à l'IA Normale du jeu, pas au réseau.
+Aucune collision : dans une même partie, deux positions publiquement différentes n'ont jamais
+donné la même entrée (l'information manque, mais d'autres entrées changent avec elle). Tout le
+reste de l'état public est encodé ; le type des places est exclu volontairement. Candidats à
+ajouter : l'âge des peuples actifs, les prochains peuples connus de la pioche, la paix entre
+adversaires. Pouvoirs connus et file des défenses : trop rares pour compter. Leur effet ne se
+mesure qu'en entraînant avec et sans, sur les mêmes parties réencodées.
+
 **Recherche :** si davantage d'itérations aide toujours peu après P2/P4, examiner le regroupement
 en boucle ouverte. Une même suite d'actions peut mener à des marchés ou dés différents ; tester
 sur un petit cas la séparation des observations publiques avant une refonte de l'arbre.
