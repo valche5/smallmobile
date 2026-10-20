@@ -62,7 +62,7 @@ ci-dessous) :
 az:net=lab/nets/gen10w.bin,n=200,w=0.5,c=2.5,roll=1,depth=3,rp=1
 ```
 
-`rp=1` dans le jeu depuis le 20 octobre, 20 h 55 (décision de l'utilisateur : plus d'IA Normale
+`rp=1` dans le jeu depuis le 20 octobre, 20 h 47 (décision de l'utilisateur : plus d'IA Normale
 dans les fins simulées ; environ 190 ms par décision sur mini avec le code accéléré). Les mesures
 « aux réglages livrés » de ce journal ont été faites en `rp=2` jusqu'à gen10 ; la comparaison
 `rp=1`/`rp=2` avec gen10w est prévue dans la campagne gen11.
