@@ -5,6 +5,7 @@
 //!     [--stop 3]   (arrêt dès que le score du joueur testé est clairement 0 ou 3 points : test séquentiel)
 //! lab arena --table 'az:net=poids.bin,rp=4|hard|normal' [--deals 100] [--out r.tsv]   (table fixe)
 //! lab bench --agent random [--players 2] [--games 20]
+//! lab speed --agent az:net=poids.bin,n=200 [--positions 12] [--seed 1]   (temps et empreinte des recherches)
 //! lab selfplay --agent mcts:n=200 --games 1000 --out lab/data/gen0 [--players 2,3,4,5] [--sample-rounds 2]
 //! lab check-net --net poids.bin --data parties.bin [--count 5]   (comparaison avec lab/py/check.py)
 //! lab label --games 20000 --out lab/data/label1 [--share 0.1] [--rollouts 32] [--random 0.1] [--agent az:net=poids.bin,n=50]
@@ -30,6 +31,7 @@ fn main() {
     match cmd.as_str() {
         "arena" => arena_cmd(&opts),
         "bench" => bench_cmd(&opts),
+        "speed" => speed_cmd(&opts),
         "selfplay" => selfplay_cmd(&opts),
         "check-net" => check_net_cmd(&opts),
         "analyze" => analyze_cmd(&opts),
@@ -49,6 +51,7 @@ fn usage() -> ! {
     );
     eprintln!("        lab arena --table 'A|B|B' [--deals N] [--threads N] [--seed S] [--out F]");
     eprintln!("        lab bench --agent A [--players N] [--games N]");
+    eprintln!("        lab speed --agent az:… [--players 2,3,4,5] [--positions 12] [--seed S]");
     eprintln!("        lab selfplay --agent A --games N --out DIR [--players 2,3,4,5] [--sample-rounds R] [--seed S]");
     eprintln!("            [--full-share 0.25 --fast 50]   (part des recherches complètes, itérations des autres)");
     eprintln!("        lab analyze --game partie.smk --agent az:net=poids.bin,n=20000");
@@ -186,6 +189,67 @@ fn bench_cmd(opts: &HashMap<String, String>) {
             1e6 * secs / moves as f64
         );
     }
+}
+
+/// Des recherches sur des positions fixes (parties de l'IA Normale, `--positions` par nombre de
+/// joueurs), chacune avec sa graine : leur temps sur un cœur, et deux empreintes de leurs résultats,
+/// les décisions (coup et visites de la racine) et les valeurs (au bit près). Une optimisation qui
+/// ne change pas la recherche garde les deux.
+fn speed_cmd(opts: &HashMap<String, String>) {
+    use smallmobile_lab::know::{Knowledge, Returns};
+    use smallmobile_lab::moves;
+    use smallmobile_lab::rand::{Rng, mix};
+
+    let name = opts.get("agent").unwrap_or_else(|| usage());
+    let az = agent::az_named(name).unwrap_or_else(|| {
+        eprintln!("recherche guidée par le réseau attendue (az:…) : {name}");
+        std::process::exit(2)
+    });
+    let per: usize = get(opts, "positions", 12);
+    let seed: u64 = get(opts, "seed", 1);
+    let normal = agent_named("normal");
+    let fnv = |h: u64, bytes: &[u8]| bytes.iter().fold(h, |h, &b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+    let (mut decisions, mut values) = (0xcbf2_9ce4_8422_2325u64, 0xcbf2_9ce4_8422_2325u64);
+    let (mut count, mut secs) = (0, 0.0);
+    for n in players(opts, "2,3,4,5") {
+        let table = Table::new(n, mix(seed, n as u64));
+        let mut g = table.game(mix(seed, 10 + n as u64) as u32);
+        let mut k = Knowledge::default();
+        let mut rng = Rng::new(mix(seed, 20 + n as u64));
+        // une position sur 7 parmi celles où le joueur a le choix
+        let mut positions = Vec::new();
+        let mut choices = 0;
+        while g.state.phase != smallmobile_kernel::Phase::GameOver && positions.len() < per {
+            if moves::legal(&g).len() > 1 {
+                if choices % 7 == 3 {
+                    positions.push((g, k));
+                }
+                choices += 1;
+            }
+            let m = normal.act(&g, &k, &mut rng.fork());
+            let mut returns = Returns::default();
+            moves::play(&mut g, &m, &mut returns).expect("coup de l'IA Normale");
+            k.observe(returns.0, &g.state);
+        }
+        let start = Instant::now();
+        for (i, (g, k)) in positions.iter().enumerate() {
+            let s = az.search(g, k, &mut Rng::new(mix(seed, (100 * n + i) as u64)));
+            decisions = fnv(decisions, format!("{:?}{:?}", s.mv, s.visits).as_bytes());
+            for v in [s.value].iter().chain(&s.finals).chain(&s.wins) {
+                values = fnv(values, &v.to_bits().to_le_bytes());
+            }
+        }
+        let t = start.elapsed().as_secs_f64();
+        println!(
+            "{n} joueurs : {} recherches, {:.1} ms par recherche",
+            positions.len(),
+            1000.0 * t / positions.len() as f64
+        );
+        count += positions.len();
+        secs += t;
+    }
+    println!("total : {count} recherches, {:.1} ms par recherche (1 cœur)", 1000.0 * secs / count as f64);
+    println!("empreintes : décisions {decisions:016x}, valeurs {values:016x}");
 }
 
 fn selfplay_cmd(opts: &HashMap<String, String>) {

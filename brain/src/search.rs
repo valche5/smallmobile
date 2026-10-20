@@ -6,15 +6,17 @@
 //! prometteurs (a priori des coups), et l'on choisit ensuite les coups par PUCT. Le réseau ne voit que
 //! ce que sait le joueur (`encode`).
 
+use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use smallmobile_kernel::ids::MAX_PLAYERS;
-use smallmobile_kernel::{Ai, Game, Level, Phase, Restrictions, Tuning};
+use smallmobile_kernel::{Ai, Game, Level, Map, Phase, Restrictions, Tuning};
 
-use crate::encode::encode;
+use crate::encode::{Encoded, GLOBAL, NODE, encode};
 use crate::know::{Knowledge, Returns, determinize};
 use crate::moves::{self, Key, Move};
-use crate::net::Net;
+use crate::net::{Eval, Net};
 use crate::opponents::{Beliefs, Model};
 use crate::outcome::Outcome;
 use crate::rand::Rng;
@@ -124,6 +126,46 @@ struct Node {
     edges: Vec<Edge>,
 }
 
+/// Les évaluations du réseau déjà faites pendant une recherche. Une même position revient souvent
+/// (environ un tiers des évaluations : coups joués dans un autre ordre, fins simulées qui se
+/// recroisent) ; le réseau répond toujours pareil à la même entrée sur la même carte : reprendre sa
+/// réponse ne change rien à la recherche, au bit près. Sur une autre carte, tout est oublié.
+#[derive(Default)]
+pub struct Evals {
+    map: usize,
+    known: HashMap<u64, Vec<Known>>,
+}
+
+/// Une position déjà évaluée : son entrée (`Evals::get`) et la réponse du réseau.
+type Known = (Box<[u8]>, Rc<Eval>);
+
+impl Evals {
+    fn get(&mut self, net: &Net, e: &Encoded, map: &Map) -> Rc<Eval> {
+        let at = std::ptr::from_ref(map) as usize;
+        if at != self.map {
+            self.known.clear();
+            self.map = at;
+        }
+        let mut key = Vec::with_capacity(2 + e.regions * NODE + GLOBAL);
+        key.extend_from_slice(&[e.regions as u8, e.players as u8]);
+        e.node[..e.regions].iter().for_each(|row| key.extend_from_slice(row));
+        key.extend_from_slice(&e.global);
+        // une empreinte rapide pour trouver la place ; l'entrée entière pour reconnaître la position
+        let hash = key.chunks(8).fold(0u64, |h, c| {
+            let mut w = [0u8; 8];
+            w[..c.len()].copy_from_slice(c);
+            (h.rotate_left(5) ^ u64::from_le_bytes(w)).wrapping_mul(0x517c_c1b7_2722_0a95)
+        });
+        let same = self.known.entry(hash).or_default();
+        if let Some((_, eval)) = same.iter().find(|(k, _)| **k == *key) {
+            return eval.clone();
+        }
+        let eval = Rc::new(net.eval(e, map));
+        same.push((key.into_boxed_slice(), eval.clone()));
+        eval
+    }
+}
+
 /// Le résultat d'une recherche : le coup choisi et les visites de chaque coup de la racine.
 pub struct Searched {
     pub mv: Move,
@@ -221,6 +263,7 @@ impl Az {
     #[allow(clippy::too_many_arguments)]
     fn expand(
         &self,
+        evals: &mut Evals,
         node: &mut Node,
         w: &Game,
         k: &Knowledge,
@@ -229,7 +272,7 @@ impl Az {
         beliefs: &Beliefs,
         rng: &mut Rng,
     ) -> Value {
-        let eval = self.net.eval(&encode(w, k.race_tail), w.map);
+        let eval = evals.get(&self.net, &encode(w, k.race_tail), w.map);
         let top = legal.iter().map(|c| eval.logits[c.key as usize]).fold(f32::NEG_INFINITY, f32::max);
         let exps: Vec<f32> = legal.iter().map(|c| (eval.logits[c.key as usize] - top).exp()).collect();
         let sum: f32 = exps.iter().sum();
@@ -249,9 +292,9 @@ impl Az {
             // la première dans ce monde-ci, les suivantes dans d'autres mondes possibles (pioches, dés)
             let world = if i == 0 { *w } else { determinize(w, k, rng) };
             let one = if self.cfg.net_rollouts > 0 {
-                self.simulate_net(&world, k, me, beliefs, rng)
+                self.simulate_net(evals, &world, k, me, beliefs, rng)
             } else {
-                self.simulate(&world, k)
+                self.simulate(evals, &world, k)
             };
             r.iter_mut().zip(one).for_each(|(a, b)| *a += b / self.cfg.rollouts as f32);
         }
@@ -263,7 +306,7 @@ impl Az {
     }
 
     /// La valeur que le réseau donne à une position (joueurs réels).
-    fn judge(&self, w: &Game, eval: &crate::net::Eval) -> Value {
+    fn judge(&self, w: &Game, eval: &Eval) -> Value {
         let s = &w.state;
         let me = s.actor().expect("un joueur doit agir");
         let n = s.player_count();
@@ -277,7 +320,7 @@ impl Az {
 
     /// L'IA Normal joue la suite pour tout le monde : jusqu'au bout, ou `depth` tours de joueur puis
     /// le réseau juge.
-    fn simulate(&self, w: &Game, k: &Knowledge) -> Value {
+    fn simulate(&self, evals: &mut Evals, w: &Game, k: &Knowledge) -> Value {
         let mut end = *w;
         for p in end.state.players.as_mut_slice() {
             p.level = Level::Normal;
@@ -287,7 +330,7 @@ impl Az {
         let mut current = end.state.current;
         while end.state.phase != Phase::GameOver {
             if self.cfg.depth > 0 && turns >= self.cfg.depth {
-                let eval = self.net.eval(&encode(&end, k.race_tail), end.map);
+                let eval = evals.get(&self.net, &encode(&end, k.race_tail), end.map);
                 return self.judge(&end, &eval);
             }
             let a = ai.decide(&end, Restrictions::default()).expect("l'IA du jeu trouve un coup");
@@ -304,7 +347,15 @@ impl Az {
     /// `rollout_temp` > 0) : la suite d'un joueur fort plutôt que celle de l'IA Normal. Avec
     /// `net_rollouts` = 2, seul `me` joue ainsi ; l'IA Normal joue pour les autres ; avec 3, chaque
     /// adversaire joue selon un modèle tiré d'après `beliefs`.
-    fn simulate_net(&self, w: &Game, k: &Knowledge, me: usize, beliefs: &Beliefs, rng: &mut Rng) -> Value {
+    fn simulate_net(
+        &self,
+        evals: &mut Evals,
+        w: &Game,
+        k: &Knowledge,
+        me: usize,
+        beliefs: &Beliefs,
+        rng: &mut Rng,
+    ) -> Value {
         let who: [Model; MAX_PLAYERS] = std::array::from_fn(|q| match self.cfg.net_rollouts {
             _ if q == me => Model::Net,
             1 => Model::Net,
@@ -337,7 +388,7 @@ impl Az {
             let mv = if legal.len() == 1 && !reached {
                 legal[0].mv
             } else {
-                let eval = self.net.eval(&encode(&end, kw.race_tail), end.map);
+                let eval = evals.get(&self.net, &encode(&end, kw.race_tail), end.map);
                 if reached {
                     return self.judge(&end, &eval);
                 }
@@ -357,7 +408,9 @@ impl Az {
     /// Joue la partie jusqu'au bout, le réseau choisissant pour tous (son coup préféré, ou tiré selon
     /// sa politique si `rollout_temp` > 0) : les fins de partie du juge de `lab label`. `w` est un
     /// monde possible (`determinize`).
-    pub fn play_out<'m>(&self, w: &Game<'m>, k: &Knowledge, rng: &mut Rng) -> Game<'m> {
+    /// `evals` : les évaluations déjà faites, à garder d'une fin à l'autre d'une même position (les
+    /// fins d'une position se ressemblent jusqu'au premier dé ou à la première carte tirée).
+    pub fn play_out<'m>(&self, evals: &mut Evals, w: &Game<'m>, k: &Knowledge, rng: &mut Rng) -> Game<'m> {
         let mut end = *w;
         let mut kw = *k;
         while end.state.phase != Phase::GameOver {
@@ -365,7 +418,7 @@ impl Az {
             let mv = if legal.len() == 1 {
                 legal[0].mv
             } else {
-                let eval = self.net.eval(&encode(&end, kw.race_tail), end.map);
+                let eval = evals.get(&self.net, &encode(&end, kw.race_tail), end.map);
                 pick(&legal, &eval.logits, self.cfg.rollout_temp, rng)
             };
             let mut ret = Returns::default();
@@ -436,9 +489,10 @@ impl Az {
             };
         }
         let mut nodes: Vec<Node> = vec![Node::default()];
+        let mut evals = Evals::default();
         // la racine aussi est jugée dans un monde possible : sa fin simulée ne voit pas les vrais dés
         let world = determinize(root, k, rng);
-        let root_value = self.expand(&mut nodes[0], &world, k, &legal, me, beliefs, rng);
+        let root_value = self.expand(&mut evals, &mut nodes[0], &world, k, &legal, me, beliefs, rng);
         nodes[0].visits = 1;
         nodes[0].total = root_value;
         if noise > 0.0 {
@@ -466,7 +520,7 @@ impl Az {
                 }
                 let n = &mut nodes[node as usize];
                 if !n.expanded {
-                    break self.expand(n, &w, &kw, &legal, me, beliefs, rng);
+                    break self.expand(&mut evals, n, &w, &kw, &legal, me, beliefs, rng);
                 }
                 let pid = w.state.actor().expect("un joueur doit agir");
                 // les coups de ce monde-ci ; un coup jamais vu reçoit un a priori moyen

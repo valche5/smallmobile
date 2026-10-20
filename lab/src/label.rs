@@ -59,6 +59,7 @@ pub fn judge(
     let tuning = Tuning::default();
     let ai = Ai::new(&tuning);
     let (mut win, mut coins) = ([0.0f32; MAX_PLAYERS], [0.0f32; MAX_PLAYERS]);
+    let mut evals = crate::az::Evals::default();
     for _ in 0..count {
         let mut w = determinize(g, k, rng);
         let end = match by {
@@ -69,7 +70,7 @@ pub fn judge(
                 ai.play(&mut w, 50_000).expect("l'IA du jeu finit la partie");
                 w
             }
-            Judge::Net(az) => az.play_out(&w, k, rng),
+            Judge::Net(az) => az.play_out(&mut evals, &w, k, rng),
         };
         let o = Outcome::of(&end);
         for q in 0..o.players {

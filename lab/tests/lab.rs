@@ -106,6 +106,37 @@ fn the_network_sees_only_what_the_player_knows() {
 }
 
 #[test]
+fn the_fast_network_computes_like_the_simple_one() {
+    use smallmobile_lab::encode::encode;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nets/gen8.bin");
+    let net = smallmobile_lab::net::Net::load(&path).unwrap();
+    let close = |a: f32, b: f32| a == b || (a - b).abs() <= 1e-3 * (1.0 + b.abs());
+    let mut rng = Rng::new(31);
+    let mut checked = 0;
+    for game in 0..8u64 {
+        let table = Table::new(2 + game as usize % 4, 3100 + game);
+        let mut g = table.game(game as u32);
+        let mut k = Knowledge::default();
+        while g.state.phase != Phase::GameOver {
+            let e = encode(&g, k.race_tail);
+            let fast = net.eval(&e, g.map);
+            let simple = net.eval_portable(&e, |i| &g.map.regions[i].adj);
+            let pairs = fast.win.iter().chain(&fast.gain).chain(&fast.logits);
+            for (&a, &b) in pairs.zip(simple.win.iter().chain(&simple.gain).chain(&simple.logits)) {
+                assert!(close(a, b), "calcul rapide {a}, calcul simple {b}");
+            }
+            checked += 1;
+            let legal = moves::legal(&g);
+            let m = legal[rng.below(legal.len())].mv;
+            let mut ret = Returns::default();
+            moves::play(&mut g, &m, &mut ret).unwrap();
+            k.observe(ret.0, &g.state);
+        }
+    }
+    assert!(checked > 500, "{checked} positions");
+}
+
+#[test]
 fn the_search_sees_only_what_the_player_knows() {
     use smallmobile_kernel::Level;
     use smallmobile_lab::agent::{Agent, KernelAi};

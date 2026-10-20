@@ -45,6 +45,8 @@ pour décider. Voir `brain/src/know.rs` et le correctif P0.
   joueur passe à chaque place. `--out r.tsv` écrit chaque place de chaque partie ;
   `python3 lab/py/score.py` en tire le score du protocole, ses intervalles par donne et les
   différences appariées (deux arènes de même graine, ou `--versus` pour deux rôles d'une table).
+- Vitesse : `lab speed --agent az:…` chronomètre des recherches sur des positions fixes et donne
+  deux empreintes de leurs résultats ; une optimisation qui ne change rien les garde.
 - Archives réelles : `data/games/`, graines, actions et temps de décision, réseau de l'Expert de
   chaque décision (`ai.net`, et `expert` en tête du fichier ; ajouté après coup, gen8, aux parties
   d'avant le 20 octobre) ; résumé par `bun lab/tools/games.ts`. Les quelques parties humaines disponibles ne suffisent pas encore
@@ -779,6 +781,33 @@ sur un petit cas la séparation des observations publiques avant une refonte de 
 entre conquêtes, inférence quantifiée/distillée et plusieurs cœurs. La réutilisation doit tenir
 compte des observations et croyances mises à jour. Pour un cache exact, vérifier des décisions
 inchangées à graine fixée ; pour une approximation, remesurer la force à temps égal.
+
+**Fait le 20 octobre, sans rien changer aux résultats** (mesures sur mini, un cœur). Profil :
+le réseau prenait 92 % d'une recherche `rp=1` (auto-apprentissage) et 65 % d'une recherche
+`rp=2` (jeu, arènes ; l'IA Normale des fins simulées 26 %), à 145 µs par évaluation ; un tiers des
+évaluations d'une recherche refaisaient une position déjà évaluée. Changements :
+- cache des évaluations par recherche, et entre les 32 fins d'une position rejugée (le réseau
+  répond toujours pareil à la même entrée) ; entre recherches successives, 5 % seulement de
+  positions communes : sans intérêt ;
+- réseau en AVX2 : multiplications matricielles par tuiles de 6 × 16 dans les registres, couches
+  du vecteur global et têtes 8 sorties à la fois, politique par région 8 régions à la fois.
+  Chaque nombre reçoit les mêmes opérations dans le même ordre : résultats identiques au bit
+  près. 145 → 93 µs par évaluation.
+
+| Mesure | Avant | Après |
+| --- | --- | --- |
+| Recherche `rp=1`, n=200 (`lab speed`, 48 positions) | 386 ms | 191 ms (×2,0) |
+| Recherche `rp=2`, n=200, réglage livré | 170 ms | 110 ms (×1,55) |
+| Parties d'auto-apprentissage (2 parties à 3 joueurs) | 3 positions/s | 6 positions/s |
+| Rejugement par 32 fins du réseau (43 positions) | 24 s | 12 s (×2,0) |
+
+Vérifié : `lab speed` donne les mêmes empreintes (décisions et valeurs au bit près) ; fichiers de
+`lab selfplay` et `lab judge` identiques octet pour octet entre l'ancien et le nouveau code ;
+test du calcul rapide contre le calcul simple (`Net::eval_portable`). Reste, pour le réglage du
+jeu : l'IA Normale du noyau (environ 40 % d'une recherche `rp=2`), code partagé avec le jeu.
+Regrouper les évaluations de plusieurs parties gagnerait peu désormais : les multiplications
+matricielles (60 % d'une évaluation) traitent déjà toutes les régions d'une position à la fois,
+près des limites du processeur.
 
 **Faible priorité aujourd'hui :** réseau plus gros sur les mêmes cibles, nouvelles positions
 jugées uniquement par Normal, nombreuses générations identiques, modèle humain appris sur les
