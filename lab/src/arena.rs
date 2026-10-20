@@ -21,7 +21,7 @@ use smallmobile_brain::opponents::Model;
 use smallmobile_kernel::Phase;
 
 use crate::agent::Agent;
-use crate::know::{Knowledge, Returns};
+use crate::know::Knowledge;
 use crate::moves;
 use crate::rand::{Rng, mix};
 use crate::table::{Outcome, Table};
@@ -54,11 +54,9 @@ pub fn play_game(table: &Table, seed: u32, seats: &[&dyn Agent], rng_seed: u64) 
         if choice {
             times[pid].push(start.elapsed().as_secs_f32());
         }
-        let mut returns = Returns::default();
-        if let Err(e) = moves::play(&mut g, &m, &mut returns) {
+        if let Err(e) = k.play(&mut g, &m) {
             panic!("coup refusé ({}) : {m:?} → {e:?}", seats[pid].name());
         }
-        k.observe(returns.0, &g.state);
         count += 1;
     }
     Played { outcome: Outcome::of(&g), moves: count, times }

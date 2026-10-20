@@ -7,12 +7,18 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from data import GLOBAL, GLOBAL_V1, KEYS, NODE, REGIONS
+from data import GLOBAL, GLOBAL_V1, GLOBAL_V2, KEYS, NODE, REGIONS
 
 GLOBAL_KEYS = 128
 # la tête de valeur prédit les pièces gagnées d'ici la fin divisées par ce nombre
 GAIN_SCALE = 50.0
 REGION_KINDS = 5
+# l'histoire des joueurs (version 3, lab/src/encode.rs) : habitudes de chaque joueur, puis régions
+# prises par chacun à chacun, depuis le début et pendant le dernier tour
+HABITS = 14
+G_HABITS = GLOBAL_V2
+G_ATTACKS = G_HABITS + 5 * HABITS
+G_RECENT = G_ATTACKS + 25
 
 
 def scales():
@@ -47,6 +53,11 @@ def scales():
         glob[b + 35] = 0.2
         glob[b + 36] = 0.1
     glob[GLOBAL_V1 : GLOBAL_V1 + 5] = 0.1  # âge des peuples actifs
+    glob[G_HABITS:G_ATTACKS] = 0.1  # comptes de chaque joueur (lab/src/know.rs, `habit`)
+    for q in range(5):
+        glob[G_HABITS + q * HABITS + 13] = 0.05  # jetons perdus sous les attaques
+    glob[G_ATTACKS:G_RECENT] = 0.1  # régions prises depuis le début
+    glob[G_RECENT : G_RECENT + 25] = 0.25  # pendant le dernier tour
     return node, glob
 
 
@@ -64,7 +75,10 @@ class Layer(nn.Module):
 
 
 class Net(nn.Module):
-    def __init__(self, hidden=64, layers=4):
+    """`behaviour` : la tête « coup réel » (le coup que le joueur qui agit va vraiment jouer, d'après
+    la position et son histoire dans la partie), de même forme que la politique."""
+
+    def __init__(self, hidden=64, layers=4, behaviour=True):
         super().__init__()
         h = self.hidden = hidden
         self.node_in = nn.Linear(NODE, h)
@@ -73,6 +87,11 @@ class Net(nn.Module):
         self.node_pol = nn.Linear(2 * h, REGION_KINDS)
         self.glob_pol1 = nn.Linear(h, h)
         self.glob_pol2 = nn.Linear(h, GLOBAL_KEYS)
+        self.behaviour = behaviour
+        if behaviour:
+            self.beh_node = nn.Linear(2 * h, REGION_KINDS)
+            self.beh_glob1 = nn.Linear(h, h)
+            self.beh_glob2 = nn.Linear(h, GLOBAL_KEYS)
         self.val1 = nn.Linear(2 * h, h)
         self.val2 = nn.Linear(h, 10)
         node, glob = scales()
@@ -82,7 +101,8 @@ class Net(nn.Module):
     def forward(self, node, glob, adj, regions):
         """node (B, R, NODE) u8 ; glob (B, GLOBAL) u8 ; adj (B, R, R) 0/1 ; regions (B,) nombre de régions.
 
-        Renvoie les logits des coups (B, KEYS) et la tête de valeur (B, 10)."""
+        Renvoie les logits des coups (B, KEYS), la tête de valeur (B, 10) et les logits de la tête
+        « coup réel » (B, KEYS ; None sans elle)."""
         B, R, _ = node.shape
         mask = (torch.arange(R, device=node.device)[None, :] < regions[:, None]).float()  # (B, R)
         h = self.node_in(node.float() * self.node_scale) * mask[..., None]
@@ -97,26 +117,37 @@ class Net(nn.Module):
             mean = h.sum(1) / count
             mx = (h + neg).max(1).values
             g = g + layer.g2(F.relu(layer.g1(torch.cat([g, mean, mx], -1))))
-        logits = torch.full((B, KEYS), -1e9, device=node.device)
-        logits[:, :GLOBAL_KEYS] = self.glob_pol2(F.relu(self.glob_pol1(g)))
-        per_region = self.node_pol(torch.cat([h, g[:, None].expand(B, R, -1)], -1))  # (B, R, 5)
-        for kind in range(REGION_KINDS):
-            start = GLOBAL_KEYS + kind * 64
-            logits[:, start : start + R] = per_region[:, :, kind]
+        hg = torch.cat([h, g[:, None].expand(B, R, -1)], -1)
+
+        def policy(node_pol, glob_pol1, glob_pol2):
+            logits = torch.full((B, KEYS), -1e9, device=node.device)
+            logits[:, :GLOBAL_KEYS] = glob_pol2(F.relu(glob_pol1(g)))
+            per_region = node_pol(hg)  # (B, R, 5)
+            for kind in range(REGION_KINDS):
+                start = GLOBAL_KEYS + kind * 64
+                logits[:, start : start + R] = per_region[:, :, kind]
+            return logits
+
+        logits = policy(self.node_pol, self.glob_pol1, self.glob_pol2)
+        beh = policy(self.beh_node, self.beh_glob1, self.beh_glob2) if self.behaviour else None
         mean = h.sum(1) / count
         value = self.val2(F.relu(self.val1(torch.cat([g, mean], -1))))
-        return logits, value
+        return logits, value, beh
 
 
 def widen(weights):
-    """Les poids d'un réseau de la version 1 (GLOBAL_V1 entrées de la partie) pour l'encodage
-    d'aujourd'hui : les nouvelles entrées ont des poids nuls, les valeurs ne changent pas. Seules les
-    sorties des clés de paix des Diplomates changent de sens (place absolue → relative), à réapprendre."""
+    """Les poids d'un réseau d'une version plus ancienne pour l'encodage et les têtes d'aujourd'hui :
+    les nouvelles entrées ont des poids nuls, les sorties ne changent pas ; la tête « coup réel »
+    absente part de la politique (les autres jouent comme le réseau), à réapprendre. Pour un réseau
+    de la version 1, les sorties des clés de paix des Diplomates changent de sens (place absolue →
+    relative), à réapprendre aussi."""
     w = weights["glob_in.weight"]
-    if w.shape[1] == GLOBAL:
-        return weights
-    assert w.shape[1] == GLOBAL_V1, f"réseau à {w.shape[1]} entrées de la partie"
-    return {**weights, "glob_in.weight": torch.cat([w, w.new_zeros(w.shape[0], GLOBAL - GLOBAL_V1)], 1)}
+    assert w.shape[1] in (GLOBAL_V1, GLOBAL_V2, GLOBAL), f"réseau à {w.shape[1]} entrées de la partie"
+    out = {**weights, "glob_in.weight": torch.cat([w, w.new_zeros(w.shape[0], GLOBAL - w.shape[1])], 1)}
+    for beh, pol in (("beh_node", "node_pol"), ("beh_glob1", "glob_pol1"), ("beh_glob2", "glob_pol2")):
+        for part in ("weight", "bias"):
+            out.setdefault(f"{beh}.{part}", weights[f"{pol}.{part}"].clone())
+    return out
 
 
 def unpack_adj(bits, R=REGIONS):

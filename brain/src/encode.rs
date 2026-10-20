@@ -9,15 +9,18 @@
 //!   conquiert peut y faire ;
 //! - une ligne pour la partie (`GLOBAL` entrées) : manche, phase, tour en cours, chaque joueur
 //!   (pièces, peuples, revenus), le marché ; puis (version 2) l'âge des peuples, le contenu des
-//!   pioches, les prochains peuples connus et toutes les paix.
+//!   pioches, les prochains peuples connus et toutes les paix ; puis (version 3) l'histoire de
+//!   chaque joueur depuis le début de la partie (`know::History`) : de quoi deviner son style.
 //!
-//! Les entrées de la version 2 suivent les `GLOBAL_V1` premières : un réseau de la version 1 lit
-//! le début de la ligne et ignore le reste.
+//! Les entrées de chaque version suivent celles de la précédente : un réseau d'une version plus
+//! ancienne lit le début de la ligne et ignore le reste.
 
 use smallmobile_kernel::ids::{MAX_PLAYERS, Power, Race};
 use smallmobile_kernel::rules::TargetKind;
 use smallmobile_kernel::state::{Occupant, Stage};
 use smallmobile_kernel::{Game, Phase};
+
+use crate::know::{Knowledge, habit};
 
 /// Plus grand nombre de régions des cartes générées (5 joueurs).
 pub const REGIONS: usize = 48;
@@ -130,7 +133,16 @@ const NEXT_KNOWN: usize = 3;
 const G_DECK_POWERS: usize = G_NEXT_RACES + NEXT_KNOWN * Race::COUNT; // 20
 /// Toutes les paix des Diplomates : `diplomate relatif × 5 + cible relative`.
 const G_PEACE: usize = G_DECK_POWERS + Power::COUNT; // 25
-pub const GLOBAL: usize = G_PEACE + MAX_PLAYERS * MAX_PLAYERS;
+/// Les entrées de la partie de la version 2 (réseaux de gen11).
+pub const GLOBAL_V2: usize = G_PEACE + MAX_PLAYERS * MAX_PLAYERS;
+// --- version 3 : l'histoire de chaque joueur (`know::History`), d'après ses coups publics ----------
+/// Les habitudes de chaque joueur relatif (`know::habit`).
+const G_HABITS: usize = GLOBAL_V2; // 5 × habit::COUNT
+/// Régions prises par chaque joueur relatif à chaque joueur relatif (`attaquant × 5 + victime`) :
+/// depuis le début de la partie, puis pendant le dernier tour de chacun.
+const G_ATTACKS: usize = G_HABITS + MAX_PLAYERS * habit::COUNT; // 25
+const G_RECENT: usize = G_ATTACKS + MAX_PLAYERS * MAX_PLAYERS; // 25
+pub const GLOBAL: usize = G_RECENT + MAX_PLAYERS * MAX_PLAYERS;
 
 /// Une position encodée.
 #[derive(Clone)]
@@ -153,9 +165,10 @@ pub fn relative(q: usize, me: usize, n: usize) -> usize {
     (q + n - me) % n
 }
 
-/// Encode la position du point de vue du joueur qui doit agir. `known_tail` : cartes connues au fond
-/// de la pioche des peuples (voir `know::Knowledge`).
-pub fn encode(g: &Game, known_tail: usize) -> Encoded {
+/// Encode la position du point de vue du joueur qui doit agir, avec ce qu'il sait (`Knowledge` :
+/// cartes connues au fond de la pioche des peuples, histoire des joueurs).
+pub fn encode(g: &Game, k: &Knowledge) -> Encoded {
+    let known_tail = k.race_tail;
     let s = &g.state;
     let n = s.player_count();
     let me = s.actor().unwrap_or(s.current);
@@ -310,13 +323,25 @@ pub fn encode(g: &Game, known_tail: usize) -> Encoded {
     for z in s.peace.iter() {
         x[G_PEACE + rel(z.diplomat) * MAX_PLAYERS + rel(z.target)] = 1;
     }
+
+    let h = &k.history;
+    for q in 0..n {
+        for (i, &v) in h.habits[q].iter().enumerate() {
+            put(&mut x[G_HABITS + rel(q) * habit::COUNT + i], v as i32);
+        }
+        for t in 0..n {
+            let at = rel(q) * MAX_PLAYERS + rel(t);
+            put(&mut x[G_ATTACKS + at], h.attacks[q][t] as i32);
+            x[G_RECENT + at] = h.recent[q][t];
+        }
+    }
     e
 }
 
 // garde-fous : les tailles des blocs one-hot suivent le jeu
 const _: () = assert!(Race::COUNT == 14 && Power::COUNT == 20 && MAX_PLAYERS == 5);
 const _: () = assert!(N_POWER + 20 == N_TOKENS && P_POWER + 20 == P_HAND && M_POWER + 20 == M_COINS);
-const _: () = assert!(GLOBAL_V1 == 700 && GLOBAL == 806);
+const _: () = assert!(GLOBAL_V1 == 700 && GLOBAL_V2 == 806 && GLOBAL == 926);
 
 #[cfg(test)]
 mod tests {
@@ -324,7 +349,7 @@ mod tests {
     use smallmobile_kernel::{Level, NoJournal, mapgen};
 
     use super::*;
-    use crate::know::{Knowledge, Returns};
+    use crate::know::Knowledge;
     use crate::moves;
     use crate::rand::Rng;
 
@@ -345,7 +370,7 @@ mod tests {
             let mut k = Knowledge::default();
             while g.state.phase != Phase::GameOver {
                 let s = &g.state;
-                let x = encode(&g, k.race_tail).global;
+                let x = encode(&g, &k).global;
                 let me = s.actor().unwrap();
                 let rel = |q: usize| relative(q, me, n);
                 for q in 0..n {
@@ -374,11 +399,100 @@ mod tests {
                 }
                 let legal = moves::legal(&g);
                 let m = legal[rng.below(legal.len())].mv;
-                let mut ret = Returns::default();
-                moves::play(&mut g, &m, &mut ret).unwrap();
-                k.observe(ret.0, &g.state);
+                k.play(&mut g, &m).unwrap();
             }
         }
         assert!(known > 0 && peaces > 0, "{known} positions avec des peuples connus, {peaces} paix");
+    }
+
+    /// Les entrées de la version 3 disent l'histoire des joueurs, comptée d'après le journal des
+    /// événements de la partie ; et la même histoire se refait action par action (comme en rejouant
+    /// une partie enregistrée) que coup par coup (comme la recherche).
+    #[test]
+    fn version_3_inputs_tell_the_history() {
+        use smallmobile_kernel::action::{Event, Journal, Logged};
+        /// Le journal d'un coup, gardé aussi en entier.
+        struct Both<'a>(&'a mut crate::know::Returns, &'a mut Vec<Logged>);
+        impl Journal for Both<'_> {
+            fn record(&mut self, entry: Logged) {
+                self.0.record(entry);
+                self.1.push(entry);
+            }
+        }
+        let mut rng = Rng::new(5);
+        let (mut attacks, mut picks) = (0, 0);
+        for game in 0..40u64 {
+            let n = 2 + game as usize % 4;
+            let generated = mapgen::generate(n, 900 + game).unwrap();
+            let map = generated.to_map().unwrap();
+            let lost: RegionSet =
+                generated.regions.iter().enumerate().filter(|(_, r)| r.lost_tribe).map(|(i, _)| i).collect();
+            let levels = vec![Level::Normal; n];
+            let mut g = Game::create(&map, lost, &levels, generated.rounds, game as u32, &mut NoJournal);
+            let (mut k, mut by_action) = (Knowledge::default(), Knowledge::default());
+            let mut events: Vec<Logged> = Vec::new();
+            while g.state.phase != Phase::GameOver {
+                let legal = moves::legal(&g);
+                let m = legal[rng.below(legal.len())].mv;
+                // action par action, avec un journal neuf pour chacune
+                let mut w = g;
+                for a in moves::actions(&g, &m).unwrap() {
+                    let mut ret = by_action.journal(&w.state);
+                    w.apply(&a, &mut ret).unwrap();
+                    by_action.observe(ret, &w.state);
+                }
+                let mut ret = k.journal(&g.state);
+                moves::play(&mut g, &m, &mut Both(&mut ret, &mut events)).unwrap();
+                k.observe(ret, &g.state);
+                assert_eq!(g.state, w.state);
+                assert_eq!(k, by_action, "même histoire coup par coup et action par action");
+            }
+            let h = &k.history;
+            for q in 0..n {
+                let taken = |p: Option<usize>| {
+                    events
+                        .iter()
+                        .filter(|e| matches!(e.event, Event::Conquered { player, victim, .. } if player == q && victim == p))
+                        .count()
+                };
+                for t in 0..n {
+                    assert_eq!(h.attacks[q][t] as usize, taken(Some(t)));
+                    attacks += taken(Some(t));
+                }
+                let x = &h.habits[q];
+                assert_eq!((x[habit::EMPTY] + x[habit::LOST_TRIBES]) as usize, taken(None));
+                let others: usize = (0..n).filter(|&t| t != q).map(|t| taken(Some(t))).sum();
+                assert_eq!((x[habit::ACTIVE] + x[habit::DECLINED]) as usize, others);
+                assert!(x[habit::LEADER] as usize <= others);
+                let count = |f: &dyn Fn(&Event) -> bool| events.iter().filter(|e| f(&e.event)).count();
+                assert_eq!(
+                    x[habit::PICKS] as usize,
+                    count(&|e| matches!(e, Event::Picked { player, .. } if *player == q))
+                );
+                assert_eq!(
+                    x[habit::DECLINES] as usize,
+                    count(&|e| matches!(e, Event::Declined { player, .. } if *player == q))
+                );
+                picks += x[habit::PICKS] as usize;
+            }
+            // vu par chaque joueur : ses comptes en tête, les autres dans l'ordre du jeu
+            for me in 0..n {
+                let mut seen = g;
+                seen.state.current = me;
+                let x = encode(&seen, &k).global;
+                for q in 0..n {
+                    let r = relative(q, me, n);
+                    for i in 0..habit::COUNT {
+                        assert_eq!(x[G_HABITS + r * habit::COUNT + i] as u16, h.habits[q][i].min(255));
+                    }
+                    for t in 0..n {
+                        let at = r * MAX_PLAYERS + relative(t, me, n);
+                        assert_eq!(x[G_ATTACKS + at] as u16, h.attacks[q][t].min(255));
+                        assert_eq!(x[G_RECENT + at], h.recent[q][t]);
+                    }
+                }
+            }
+        }
+        assert!(attacks > 0 && picks > 0, "{attacks} attaques, {picks} peuples choisis");
     }
 }

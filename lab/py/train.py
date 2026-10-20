@@ -6,7 +6,9 @@
 politique (sa valeur n'est pas apprise) ; `dossier:value` : seulement pour la valeur.
 
 Cibles : la politique (visites de la recherche à la racine), la victoire (part de chaque joueur à la
-fin) et, en appoint, les pièces gagnées d'ici la fin. Les positions sont vues du joueur qui agit.
+fin) et, en appoint, les pièces gagnées d'ici la fin ; la tête « coup réel », le coup joué ensuite
+dans la partie (fichiers *.v5.bin). Les positions sont vues du joueur qui agit. Les coups observés
+d'autres joueurs que l'IA qui apprend (tables variées) n'apprennent que la tête « coup réel ».
 """
 
 import argparse
@@ -18,11 +20,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from data import GLOBAL_V1, ILLEGAL, in_validation, load
+from data import GLOBAL_V1, GLOBAL_V2, ILLEGAL, OBSERVED, in_validation, load
 from model import GAIN_SCALE, Net, export, unpack_adj, widen
 
 
-def batches(recs, idx, size, device, temp, value_mask, policy_mask, old_inputs=False):
+def batches(recs, idx, size, device, temp, value_mask, policy_mask, inputs=None):
+    """`inputs` : les entrées de la partie gardées (les suivantes à zéro : témoin d'un encodage)."""
     for start in range(0, len(idx), size):
         sel = np.sort(idx[start : start + size])
         recs_sel = recs[sel]
@@ -35,8 +38,12 @@ def batches(recs, idx, size, device, temp, value_mask, policy_mask, old_inputs=F
             # cibles aiguisées : visites^(1/T), le coup le plus visité pèse davantage
             visits = (visits / visits.amax(1, keepdim=True).clamp(min=1)) ** (1.0 / temp)
         glob = torch.from_numpy(r["glob"])
-        if old_inputs:
-            glob[:, GLOBAL_V1:] = 0
+        if inputs:
+            glob[:, inputs:] = 0
+        observed = torch.from_numpy((r["flags"] & OBSERVED) != 0).to(device)
+        played = torch.from_numpy(r["played"].astype(np.int64)).to(device)
+        known = played != ILLEGAL
+        played = torch.where(known, played, 0)
         yield dict(
             node=torch.from_numpy(r["node"]).to(device),
             glob=glob.to(device),
@@ -48,13 +55,17 @@ def batches(recs, idx, size, device, temp, value_mask, policy_mask, old_inputs=F
             win=torch.from_numpy(r["win"]).to(device),
             gain=torch.from_numpy(r["gain"]).to(device) / GAIN_SCALE,
             qgain=torch.from_numpy(r["qgain"]).to(device) / GAIN_SCALE,
-            has_value=torch.from_numpy(value_mask[sel]).to(device),
-            has_policy=legal.any(1) & (visits.sum(1) > 0) & torch.from_numpy(policy_mask[sel]).to(device),
+            has_value=torch.from_numpy(value_mask[sel]).to(device) & ~observed,
+            has_policy=legal.any(1) & (visits.sum(1) > 0) & torch.from_numpy(policy_mask[sel]).to(device) & ~observed,
+            played=played,
+            has_played=known & legal.gather(1, played[:, None])[:, 0],
         )
 
 
 def losses(net, b, q_weight=0.0):
-    logits, value = net(b["node"], b["glob"], b["adj"], b["regions"])
+    """Pertes et mesures : politique, valeur, pièces, précision de la politique, brier, puis tête
+    « coup réel » (perte et précision)."""
+    logits, value, beh = net(b["node"], b["glob"], b["adj"], b["regions"])
     logits = logits.masked_fill(~b["legal"], -1e9)
     hp, hv = b["has_policy"].float(), b["has_value"].float()
     pol = (-(b["policy"] * F.log_softmax(logits, 1)).sum(1) * hp).sum() / hp.sum().clamp(min=1)
@@ -71,7 +82,14 @@ def losses(net, b, q_weight=0.0):
     acc = ((logits.argmax(1) == b["policy"].argmax(1)).float() * hp).sum() / hp.sum().clamp(min=1)
     # la victoire prédite, comparée à la cible (erreur quadratique, « Brier »)
     brier = (((torch.softmax(vlog, 1) - b["win"]) ** 2).sum(1) * hv).sum() / hv.sum().clamp(min=1)
-    return pol, val, gain, acc, brier
+    hb = b["has_played"].float()
+    if beh is None:
+        zero = logits.new_zeros(())
+        return pol, val, gain, acc, brier, zero, zero
+    beh = beh.masked_fill(~b["legal"], -1e9)
+    bce = (F.cross_entropy(beh, b["played"], reduction="none") * hb).sum() / hb.sum().clamp(min=1)
+    bacc = ((beh.argmax(1) == b["played"]).float() * hb).sum() / hb.sum().clamp(min=1)
+    return pol, val, gain, acc, brier, bce, bacc
 
 
 def main():
@@ -88,15 +106,20 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--wd", type=float, default=1e-4)
     ap.add_argument("--gain-weight", type=float, default=0.25)
+    ap.add_argument("--beh-weight", type=float, default=1.0, help="poids de la tête « coup réel »")
     ap.add_argument("--val-share", type=float, default=0.05)
     ap.add_argument("--q-weight", type=float, default=0.5, help="part des pièces attendues par la recherche")
     ap.add_argument("--lazy", action="store_true", help="lire les données à la demande (plus grosses que la mémoire)")
     ap.add_argument("--policy-temp", type=float, default=1.0, help="cible de politique : visites^(1/T)")
     ap.add_argument("--seed", type=int, default=0, help="tirage des parties gardées (`@part`) et ordre des lots")
     ap.add_argument(
-        "--old-inputs", action="store_true", help="entrées de la version 2 mises à zéro (témoin de l'encodage)"
+        "--old-inputs", action="store_true", help="entrées des versions 2 et 3 mises à zéro (témoin de l'encodage)"
+    )
+    ap.add_argument(
+        "--no-history", action="store_true", help="entrées de la version 3 (histoire) à zéro (témoin de l'histoire)"
     )
     args = ap.parse_args()
+    inputs = GLOBAL_V1 if args.old_inputs else GLOBAL_V2 if args.no_history else None
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if args.threads:
@@ -128,36 +151,38 @@ def main():
     for epoch in range(epochs):
         net.train()
         start = time.time()
-        sums = np.zeros(5)
+        sums = np.zeros(7)
         count = 0
         train = rng.permutation(train_idx)
-        for b in batches(recs, train, args.batch, device, args.policy_temp, value_mask, policy_mask, args.old_inputs):
+        for b in batches(recs, train, args.batch, device, args.policy_temp, value_mask, policy_mask, inputs):
             if done == steps:
                 break
             done += 1
-            pol, val, gain, acc, brier = losses(net, b, args.q_weight)
-            loss = pol + val + args.gain_weight * gain
+            pol, val, gain, acc, brier, bce, bacc = losses(net, b, args.q_weight)
+            loss = pol + val + args.gain_weight * gain + args.beh_weight * bce
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), 5.0)
             opt.step()
             sched.step()
-            sums += [pol.item(), val.item(), gain.item(), acc.item(), brier.item()]
+            sums += [x.item() for x in (pol, val, gain, acc, brier, bce, bacc)]
             count += 1
         net.eval()
-        # moyennes pondérées par le nombre de positions qui ont chaque cible (politique, valeur)
-        vs = np.zeros(5)
-        vc = np.zeros(5)
+        # moyennes pondérées par le nombre de positions qui ont chaque cible (politique, valeur, coup joué)
+        vs = np.zeros(7)
+        vc = np.zeros(7)
         with torch.no_grad():
-            for b in batches(recs, val_idx, 2048, device, args.policy_temp, value_mask, policy_mask, args.old_inputs):
-                w = np.array([b["has_policy"].sum().item(), b["has_value"].sum().item()])[[0, 1, 1, 0, 1]]
+            for b in batches(recs, val_idx, 2048, device, args.policy_temp, value_mask, policy_mask, inputs):
+                n = [b[k].sum().item() for k in ("has_policy", "has_value", "has_played")]
+                w = np.array(n)[[0, 1, 1, 0, 1, 2, 2]]
                 vs += [x.item() for x in losses(net, b, args.q_weight)] * w
                 vc += w
         t, v = sums / max(count, 1), vs / np.maximum(vc, 1)
         print(
             f"époque {epoch + 1}/{epochs} ({time.time() - start:.0f} s, {done}/{steps} mises à jour) | entraînement : politique {t[0]:.3f} "
-            f"valeur {t[1]:.3f} pièces {t[2]:.3f} précision {t[3]:.1%} | validation : politique {v[0]:.3f} "
-            f"valeur {v[1]:.3f} pièces {v[2]:.3f} précision {v[3]:.1%} brier {v[4]:.3f}",
+            f"valeur {t[1]:.3f} pièces {t[2]:.3f} précision {t[3]:.1%} coup réel {t[5]:.3f} ({t[6]:.1%}) | validation : "
+            f"politique {v[0]:.3f} valeur {v[1]:.3f} pièces {v[2]:.3f} précision {v[3]:.1%} brier {v[4]:.3f} "
+            f"coup réel {v[5]:.3f} ({v[6]:.1%})",
             flush=True,
         )
 

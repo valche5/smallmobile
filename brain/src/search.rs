@@ -14,7 +14,7 @@ use smallmobile_kernel::ids::MAX_PLAYERS;
 use smallmobile_kernel::{Ai, Game, Level, Map, Phase, Restrictions, Tuning};
 
 use crate::encode::{Encoded, NODE, encode};
-use crate::know::{Knowledge, Returns, determinize};
+use crate::know::{Knowledge, determinize};
 use crate::moves::{self, Key, Move};
 use crate::net::{Eval, Net};
 use crate::opponents::{Beliefs, Model};
@@ -49,6 +49,13 @@ pub struct Config {
     pub net_rollouts: u8,
     /// Fins jouées par le réseau : température du tirage des coups (0 : toujours le préféré).
     pub rollout_temp: f32,
+    /// Les adversaires joués par le réseau jouent le coup qu'il leur prévoit d'après ce qu'ils ont
+    /// fait dans la partie (sa tête « coup réel », qui a appris des joueurs de tous styles), plutôt
+    /// que le meilleur selon lui : 0, jamais ; 1, dans les fins simulées ; 2, aussi comme a priori
+    /// de leurs coups dans l'arbre. Sans cette tête, le réseau leur donne le meilleur coup.
+    pub behaviour: u8,
+    /// Température du tirage des coups prévus des adversaires (0 : toujours le plus probable).
+    pub behaviour_temp: f32,
     /// Valeurs des coups ramenées entre 0 et 1 dans chaque nœud (comme MuZero) : les petits écarts
     /// de valeur comptent autant que l'a priori.
     pub normalize: bool,
@@ -69,6 +76,8 @@ impl Default for Config {
             rollouts: 1,
             net_rollouts: 0,
             rollout_temp: 0.0,
+            behaviour: 0,
+            behaviour_temp: 1.0,
             normalize: true,
         }
     }
@@ -94,6 +103,8 @@ impl Config {
                 "rolls" => cfg.rollouts = v.parse::<usize>().ok()?.max(1),
                 "rp" => cfg.net_rollouts = v.parse().ok()?,
                 "rt" => cfg.rollout_temp = v.parse().ok()?,
+                "bh" => cfg.behaviour = v.parse().ok()?,
+                "bt" => cfg.behaviour_temp = v.parse().ok()?,
                 _ => return None,
             }
         }
@@ -257,6 +268,9 @@ impl Az {
         if c.net_rollouts > 0 {
             depth += &format!(", rp={}, rt={}", c.net_rollouts, c.rollout_temp);
         }
+        if c.behaviour > 0 {
+            depth += &format!(", bh={}, bt={}", c.behaviour, c.behaviour_temp);
+        }
         format!("az({}, n={}, c={}, w={}, roll={}{depth})", self.label, c.iterations, c.c_puct, c.win_weight, c.rollout)
     }
 
@@ -274,9 +288,11 @@ impl Az {
         beliefs: &Beliefs,
         rng: &mut Rng,
     ) -> Value {
-        let eval = evals.get(&self.net, &encode(w, k.race_tail), w.map);
-        let top = legal.iter().map(|c| eval.logits[c.key as usize]).fold(f32::NEG_INFINITY, f32::max);
-        let exps: Vec<f32> = legal.iter().map(|c| (eval.logits[c.key as usize] - top).exp()).collect();
+        let eval = evals.get(&self.net, &encode(w, k), w.map);
+        let actor = w.state.actor().expect("un joueur doit agir");
+        let logits = if self.cfg.behaviour >= 2 { self.guess(&eval, actor != me).0 } else { &eval.logits[..] };
+        let top = legal.iter().map(|c| logits[c.key as usize]).fold(f32::NEG_INFINITY, f32::max);
+        let exps: Vec<f32> = legal.iter().map(|c| (logits[c.key as usize] - top).exp()).collect();
         let sum: f32 = exps.iter().sum();
         node.edges = legal
             .iter()
@@ -307,6 +323,15 @@ impl Az {
         out
     }
 
+    /// Les logits qui choisissent le coup du joueur qui agit, et leur température : la politique du
+    /// réseau (son meilleur coup), ou pour un adversaire, avec `behaviour`, le coup qu'il lui prévoit.
+    fn guess<'e>(&self, eval: &'e Eval, opponent: bool) -> (&'e [f32], f32) {
+        match &eval.behaviour {
+            Some(b) if opponent && self.cfg.behaviour > 0 => (b, self.cfg.behaviour_temp),
+            _ => (&eval.logits, self.cfg.rollout_temp),
+        }
+    }
+
     /// La valeur que le réseau donne à une position (joueurs réels).
     fn judge(&self, w: &Game, eval: &Eval) -> Value {
         let s = &w.state;
@@ -328,15 +353,16 @@ impl Az {
             p.level = Level::Normal;
         }
         let ai = Ai::new(&self.tuning);
+        let mut kw = *k;
         let mut turns = 0;
         let mut current = end.state.current;
         while end.state.phase != Phase::GameOver {
             if self.cfg.depth > 0 && turns >= self.cfg.depth {
-                let eval = evals.get(&self.net, &encode(&end, k.race_tail), end.map);
+                let eval = evals.get(&self.net, &encode(&end, &kw), end.map);
                 return self.judge(&end, &eval);
             }
             let a = ai.decide(&end, Restrictions::default()).expect("l'IA du jeu trouve un coup");
-            end.apply(&a, &mut smallmobile_kernel::NoJournal).expect("coup de l'IA du jeu");
+            kw.play(&mut end, &Move::Act(a)).expect("coup de l'IA du jeu");
             if end.state.current != current {
                 current = end.state.current;
                 turns += 1;
@@ -377,9 +403,7 @@ impl Az {
             let actor = end.state.actor().expect("un joueur doit agir");
             if !reached && who[actor] == Model::Normal {
                 let a = ai.decide(&end, Restrictions::default()).expect("l'IA du jeu trouve un coup");
-                let mut ret = Returns::default();
-                moves::play(&mut end, &Move::Act(a), &mut ret).expect("coup de l'IA du jeu");
-                kw.observe(ret.0, &end.state);
+                kw.play(&mut end, &Move::Act(a)).expect("coup de l'IA du jeu");
                 if end.state.current != current {
                     current = end.state.current;
                     turns += 1;
@@ -390,15 +414,14 @@ impl Az {
             let mv = if legal.len() == 1 && !reached {
                 legal[0].mv
             } else {
-                let eval = evals.get(&self.net, &encode(&end, kw.race_tail), end.map);
+                let eval = evals.get(&self.net, &encode(&end, &kw), end.map);
                 if reached {
                     return self.judge(&end, &eval);
                 }
-                pick(&legal, &eval.logits, self.cfg.rollout_temp, rng)
+                let (logits, temp) = self.guess(&eval, actor != me);
+                pick(&legal, logits, temp, rng)
             };
-            let mut ret = Returns::default();
-            moves::play(&mut end, &mv, &mut ret).expect("coup de la fin simulée");
-            kw.observe(ret.0, &end.state);
+            kw.play(&mut end, &mv).expect("coup de la fin simulée");
             if end.state.current != current {
                 current = end.state.current;
                 turns += 1;
@@ -420,12 +443,10 @@ impl Az {
             let mv = if legal.len() == 1 {
                 legal[0].mv
             } else {
-                let eval = evals.get(&self.net, &encode(&end, kw.race_tail), end.map);
+                let eval = evals.get(&self.net, &encode(&end, &kw), end.map);
                 pick(&legal, &eval.logits, self.cfg.rollout_temp, rng)
             };
-            let mut ret = Returns::default();
-            moves::play(&mut end, &mv, &mut ret).expect("coup de la fin de partie");
-            kw.observe(ret.0, &end.state);
+            kw.play(&mut end, &mv).expect("coup de la fin de partie");
         }
         end
     }
@@ -515,9 +536,7 @@ impl Az {
                 }
                 let legal = moves::legal(&w);
                 if legal.len() == 1 {
-                    let mut ret = Returns::default();
-                    moves::play(&mut w, &legal[0].mv, &mut ret).expect("coup forcé");
-                    kw.observe(ret.0, &w.state);
+                    kw.play(&mut w, &legal[0].mv).expect("coup forcé");
                     continue;
                 }
                 let n = &mut nodes[node as usize];
@@ -571,9 +590,7 @@ impl Az {
                     }
                 }
                 let (li, ei) = seen[best];
-                let mut ret = Returns::default();
-                moves::play(&mut w, &legal[li].mv, &mut ret).expect("coup possible");
-                kw.observe(ret.0, &w.state);
+                kw.play(&mut w, &legal[li].mv).expect("coup possible");
                 path.push((node, ei));
                 let child = n.edges[ei].child;
                 node = if child == NO_CHILD {

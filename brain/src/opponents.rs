@@ -74,7 +74,7 @@ impl Beliefs {
         w.state.players[pid].level = Level::Normal;
         let tuning = Tuning::default();
         let normal = Ai::new(&tuning).decide(&w, Restrictions::default()).ok();
-        let eval = net.eval(&encode(g, k.race_tail), g.map);
+        let eval = net.eval(&encode(g, &k), g.map);
         let best = legal.iter().max_by(|x, y| eval.logits[x.key as usize].total_cmp(&eval.logits[y.key as usize]));
         let preferred = best.map(|c| c.mv);
         self.seen[pid] += 1;
