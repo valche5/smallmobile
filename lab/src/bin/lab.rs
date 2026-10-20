@@ -612,7 +612,7 @@ fn audit_cmd(opts: &HashMap<String, String>) {
     }
     println!("\npositions différentes, même entrée que la précédente (dans une partie) : {same_input}");
     let mut kinds: Vec<_> = kinds.into_iter().collect();
-    kinds.sort_by(|a, b| b.1.cmp(&a.1));
+    kinds.sort_by_key(|k| std::cmp::Reverse(k.1));
     for (what, count) in kinds.iter().take(15) {
         println!("{count:>8}  {what}");
     }
