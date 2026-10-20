@@ -106,6 +106,54 @@ fn the_network_sees_only_what_the_player_knows() {
 }
 
 #[test]
+fn varied_tables_record_only_the_learner() {
+    use smallmobile_kernel::Level;
+    use smallmobile_lab::agent::{Agent, KernelAi};
+    use smallmobile_lab::selfplay::{self, Field, GameLog, RECORD};
+    let dir = std::env::temp_dir().join(format!("smallmobile-field-{}", std::process::id()));
+    let (easy, hard) = (KernelAi::new(Level::Easy), KernelAi::new(Level::Hard));
+    let field = Field { agents: vec![&easy as &dyn Agent, &hard], share: 0.5 };
+    let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1 };
+    let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 16, threads: 2, seed: 12, opts };
+    selfplay::run_with(&cfg, &KernelAi::new(Level::Normal), &field, &dir).unwrap();
+    let (mut mixed, mut plain) = (0, 0);
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if !path.to_string_lossy().ends_with(selfplay::SUFFIX) {
+            continue;
+        }
+        let logs: Vec<GameLog> = std::fs::read_to_string(selfplay::moves_file(&path))
+            .unwrap()
+            .lines()
+            .map(|l| GameLog::parse(l).unwrap())
+            .collect();
+        let bytes = std::fs::read(&path).unwrap();
+        let mut records = bytes.chunks(RECORD);
+        for log in &logs {
+            // une position par décision de l'IA qui apprend, marquée « table variée » s'il y a lieu
+            let table = log.table();
+            log.replay(&table, |g, _| {
+                let me = g.state.actor().unwrap();
+                if moves::legal(g).len() > 1 && log.seats.get(me).is_none_or(|&s| s < 0) {
+                    assert_eq!(records.next().unwrap()[3], !log.seats.is_empty() as u8);
+                }
+            })
+            .unwrap();
+            if log.seats.is_empty() {
+                plain += 1;
+            } else {
+                assert!(log.seats.contains(&-1) && log.seats.iter().any(|&s| s >= 0));
+                mixed += 1;
+            }
+            assert_eq!(GameLog::parse(&log.line()).unwrap(), *log);
+        }
+        assert!(records.next().is_none());
+    }
+    assert!(mixed > 0 && plain > 0, "{mixed} tables variées, {plain} autres");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn old_positions_can_be_reencoded() {
     use smallmobile_kernel::Level;
     use smallmobile_lab::agent::KernelAi;

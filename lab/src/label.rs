@@ -100,7 +100,7 @@ fn judged(g: &Game, k: &Knowledge, count: usize, by: &Judge, rng: &mut Rng) -> V
         qgain[r] = gain[r];
     }
     let enc = encode(g, k.race_tail);
-    Record { enc: &enc, map: g.map, win: w, gain, visits: &visits, qgain, qwin: w }.bytes()
+    Record { enc: &enc, mixed: false, map: g.map, win: w, gain, visits: &visits, qgain, qwin: w }.bytes()
 }
 
 /// Une partie qui fournit des positions : `random` de coups au hasard, le reste par `agent`.

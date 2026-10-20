@@ -7,6 +7,7 @@
 //! lab bench --agent random [--players 2] [--games 20]
 //! lab speed --agent az:net=poids.bin,n=200 [--positions 12] [--seed 1]   (temps et empreinte des recherches)
 //! lab selfplay --agent mcts:n=200 --games 1000 --out lab/data/gen0 [--players 2,3,4,5] [--sample-rounds 2]
+//!     [--field 'easy|hard|az:net=gen9.bin,rp=2' --mixed 0.5]   (tables variées)
 //! lab check-net --net poids.bin --data parties.bin [--count 5]   (comparaison avec lab/py/check.py)
 //! lab label --games 20000 --out lab/data/label1 [--share 0.1] [--rollouts 32] [--random 0.1] [--agent az:net=poids.bin,n=50]
 //!     [--judge az:net=poids.bin]   (fins de partie jouées par le réseau plutôt que par l'IA Normal)
@@ -59,6 +60,7 @@ fn usage() -> ! {
     eprintln!("        lab speed --agent az:… [--players 2,3,4,5] [--positions 12] [--seed S]");
     eprintln!("        lab selfplay --agent A --games N --out DIR [--players 2,3,4,5] [--sample-rounds R] [--seed S]");
     eprintln!("            [--full-share 0.25 --fast 50]   (part des recherches complètes, itérations des autres)");
+    eprintln!("            [--field 'easy|hard|az:…' --mixed 0.5]   (tables variées : adversaires, part des parties)");
     eprintln!("        lab analyze --game partie.smk --agent az:net=poids.bin,n=20000");
     std::process::exit(2)
 }
@@ -274,9 +276,15 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
             fast: get(opts, "fast", 50),
         },
     };
+    // tables variées : les adversaires possibles, séparés par « | » (leur numéro dans les .moves)
+    let others: Vec<Box<dyn Agent>> = opts.get("field").map_or(Vec::new(), |f| f.split('|').map(agent_named).collect());
+    for (i, a) in others.iter().enumerate() {
+        eprintln!("adversaire {i} : {}", a.name());
+    }
+    let field = selfplay::Field { agents: others.iter().map(|a| a.as_ref()).collect(), share: get(opts, "mixed", 0.0) };
     let out = opts.get("out").unwrap_or_else(|| usage());
     let start = Instant::now();
-    if let Err(e) = selfplay::run(&cfg, searcher.as_ref(), std::path::Path::new(out)) {
+    if let Err(e) = selfplay::run_with(&cfg, searcher.as_ref(), &field, std::path::Path::new(out)) {
         eprintln!("échec : {e}");
         std::process::exit(1)
     }

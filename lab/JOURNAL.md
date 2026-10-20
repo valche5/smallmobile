@@ -816,7 +816,17 @@ gen9 et gen10w cherchent exactement comme avant (mêmes empreintes `lab speed`).
 (500 parties et leurs positions rejugées en 3 s ; test aller-retour octet pour octet). Python :
 `model.widen` met un réseau de la version 1 aux 806 entrées (poids nuls : mêmes sorties, sauf les
 clés de paix qui changent de sens) ; `train.py --old-inputs` met les nouvelles entrées à zéro, pour
-un témoin entraîné sur les mêmes données. Rust et PyTorch concordent toujours (5·10⁻⁵). Pouvoirs connus et file des défenses : trop rares pour compter. Leur effet ne se
+un témoin entraîné sur les mêmes données. Rust et PyTorch concordent toujours (5·10⁻⁵). Contrôle de bout en bout : des
+parties d'auto-apprentissage de gen10w jouées par le nouveau code sont identiques, octet pour
+octet, aux mêmes parties jouées par l'ancien code puis réencodées.
+
+**Tables variées écrites le 20 octobre** (P6 ; `lab selfplay --field 'A|B|…' --mixed 0.5`, test
+`varied_tables_record_only_the_learner`) : dans une part des parties, l'IA qui apprend n'occupe
+que certaines places (chacune avec une chance sur deux, au moins une), les autres étant tirées
+parmi les adversaires donnés. Seules ses positions sont enregistrées, marquées « table variée »
+(4e octet de l'enregistrement) ; le fichier `.moves` note qui jouait à chaque place (numéro dans
+la liste, -1 pour l'IA qui apprend), pour l'analyse et pour l'historique des coups (P3). Les
+autres parties restent identiques à l'auto-apprentissage pur. Pouvoirs connus et file des défenses : trop rares pour compter. Leur effet ne se
 mesure qu'en entraînant avec et sans, sur les mêmes parties réencodées.
 
 **Recherche :** si davantage d'itérations aide toujours peu après P2/P4, examiner le regroupement
