@@ -38,8 +38,9 @@ pour décider. Voir `brain/src/know.rs` et le correctif P0.
   joueur passe à chaque place. `--out r.tsv` écrit chaque place de chaque partie ;
   `python3 lab/py/score.py` en tire le score du protocole, ses intervalles par donne et les
   différences appariées (deux arènes de même graine, ou `--versus` pour deux rôles d'une table).
-- Archives réelles : `data/games/`, graines, actions et temps de décision ; résumé par
-  `bun lab/tools/games.ts`. Les quelques parties humaines disponibles ne suffisent pas encore
+- Archives réelles : `data/games/`, graines, actions et temps de décision, réseau de l'Expert de
+  chaque décision (`ai.net`, et `expert` en tête du fichier ; ajouté après coup, gen8, aux parties
+  d'avant le 20 octobre) ; résumé par `bun lab/tools/games.ts`. Les quelques parties humaines disponibles ne suffisent pas encore
   à entraîner un modèle des humains. Les 4 parties archivées au 19 octobre réunissent 1 ou
   2 humains et 1 à 3 Expert : l'Expert affronte surtout d'autres Expert, qu'il simule pourtant
   comme Normal (`rp=2`).
