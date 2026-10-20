@@ -270,6 +270,9 @@ le bucket. Réseaux exportés `.bin` : `lab/nets/`.
 | `gen6` | 20 000 parties, 1,42 million de positions ; `rp=2`, n=200, profondeur 3 |
 | `gen7` | 20 000 parties, 1,48 million de positions, environ 8 Go ; même recette |
 | gen8 | Depuis gen7 ; valeur sur `label1` à `label4`, politique sur `gen7:policy` et `gen6@0.5:policy`, 8 passes |
+| `p2`, `p2-judged` | 5 000 parties gen8 `rp=1` (377 000 positions) ; 221 000 positions rejugées par 32 fins de gen8 |
+| `gen9`, `gen9-judged` | 20 000 parties p2c `rp=1` (1,51 million de positions) ; 861 000 positions rejugées par 32 fins de p2c |
+| gen9 | Depuis gen8 ; anciennes sources au quart, plus `p2`, `p2-judged`, `gen9`, `gen9-judged` (valeur et politique), 24 000 lots (P2 étendu) |
 
 Les générations récentes gardent 50 % des décisions cherchées à fond, les autres à 50 itérations,
 avec bruit 0,25 pour les recherches complètes. Générer 20 000 parties prenait environ une heure
@@ -509,6 +512,28 @@ C s'est rapproché des fins du réseau (−0,9 pièce sur l'avance, −2,2 sur l
 sauf à 2 joueurs) en s'éloignant un peu de celles de Normal : il a commencé à apprendre le niveau
 de jeu du réseau. L'erreur reste loin du bruit (8,4 contre 0,9) : de la marge pour gen9.
 
+**gen9 entraîné le 20 octobre** (`lab/runs/gen9-train.sh`, résultats `lab/runs/gen9` sur mini ;
+74 min de c7a.16xlarge, 0,96 $). Depuis gen8, 24 000 lots de 512, lr 5e-4, `q-weight 0`,
+anciennes sources au quart, 4,74 millions de positions de 113 790 parties ; deux entraînements
+en parallèle, 22 min. V : nouvelle valeur seule (recette de C) ; VP : V et la politique des
+nouvelles parties. Réglages livrés (`rp=2`, n=200), 130 à 135 ms par décision comme gen8 :
+
+| Joueur testé | Champ | Donnes | Score | Par taille (2, 3, 4, 5 j.) |
+| --- | --- | --- | --- | --- |
+| V | C | 920 (graine 601) | +4,9 ± 1,5 | +2,9, +5,7, +8,0, +2,9 |
+| **VP** | C | 920 (graine 601) | **+7,9 ± 1,7** | +5,8, +12,0, +9,3, +4,6 |
+| V | gen8 | 184, arrêt anticipé (graine 602) | +13,4 ± 3,9 | +16,3, +17,4, +9,2, +10,7 |
+| **VP** | gen8 | 184, arrêt anticipé (graine 602) | **+11,1 ± 3,8** | +12,0, +13,8, +12,0, +6,7 |
+
+Mêmes donnes : VP − V +3,0 ± 2,2 parmi des C (920 donnes) ; −2,3 ± 5,2 parmi des gen8 (184
+donnes), indécis. Les deux arènes face à gen8 se sont arrêtées au premier regard possible (gain
+de 3 points plutôt que 0) ; un score lu à l'arrêt est un peu optimiste. **Deuxième progrès
+d'affilée : environ +5 à +8 points sur C, plus de +10 sur gen8, à toutes les tailles.** Avec
+quatre fois plus de parties, la politique des nouvelles parties aide nettement face à C ; face à
+gen8, trop peu de donnes pour départager. Retenu : **VP = `lab/nets/gen9.bin`** (V :
+`gen9v.bin`), candidat pour le jeu et enseignant de la génération suivante. Pertes de validation
+finales, V puis VP : politique 1,574 et 1,578, valeur 0,984 et 0,983, Brier 0,325 et 0,324.
+
 **Partie perdue contre la paix des Diplomates** (API LLM, 20 octobre, `gpt-6-astra`, 110 à 65) :
 à 2 joueurs, des Tritons Diplomates ont imposé la paix à l'Expert à chacun des 10 tours, ce que la
 règle officielle permet (elle reste telle quelle). L'Expert le voit : au tour 3, il s'estime à
@@ -703,7 +728,8 @@ ne s'appliquent plus. Dernier relevé du 19 octobre : 8,31 $ consommés sur la p
 et 21,54 $ de réserve. Depuis ce relevé, estimations de `cloud.sh` : P0 0,87 $, essais Spot
 0,02 $, P1 1,11 $, pilote P2 0,86 $, entraînement et arènes P2 1,54 $ (dont 0,10 $ perdus sur un
 script non exécutable, et une reprise par AWS à 20 h 30, sans perte grâce à `--save`),
-confirmation P2 1,19 $, données de gen9 3,31 $, soit 8,90 $. **Montants datés : consulter coûts et crédits du compte de gestion
+confirmation P2 1,19 $, données de gen9 3,31 $, entraînement et arènes de gen9 0,96 $, soit
+9,86 $. **Montants datés : consulter coûts et crédits du compte de gestion
 avant chaque campagne. Les crédits ne se renouvellent pas chaque semaine.**
 
 Pour chaque étape autorisée : mesurer un petit échantillon sur AWS, estimer durée et coût total
