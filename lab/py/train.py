@@ -20,12 +20,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from data import GLOBAL_V1, GLOBAL_V2, ILLEGAL, OBSERVED, in_validation, load
+from data import GLOBAL, GLOBAL_V1, GLOBAL_V2, ILLEGAL, OBSERVED, in_validation, load
 from model import GAIN_SCALE, Net, export, unpack_adj, widen
 
 
-def batches(recs, idx, size, device, temp, value_mask, policy_mask, inputs=None):
-    """`inputs` : les entrées de la partie gardées (les suivantes à zéro : témoin d'un encodage)."""
+def batches(recs, idx, size, device, temp, value_mask, policy_mask, zeroed=()):
+    """`zeroed` : les entrées de la partie mises à zéro, en tranches (début, fin) : témoins d'un encodage."""
     for start in range(0, len(idx), size):
         sel = np.sort(idx[start : start + size])
         recs_sel = recs[sel]
@@ -38,8 +38,8 @@ def batches(recs, idx, size, device, temp, value_mask, policy_mask, inputs=None)
             # cibles aiguisées : visites^(1/T), le coup le plus visité pèse davantage
             visits = (visits / visits.amax(1, keepdim=True).clamp(min=1)) ** (1.0 / temp)
         glob = torch.from_numpy(r["glob"])
-        if inputs:
-            glob[:, inputs:] = 0
+        for a, b in zeroed:
+            glob[:, a:b] = 0
         observed = torch.from_numpy((r["flags"] & OBSERVED) != 0).to(device)
         played = torch.from_numpy(r["played"].astype(np.int64)).to(device)
         known = played != ILLEGAL
@@ -118,8 +118,10 @@ def main():
     ap.add_argument(
         "--no-history", action="store_true", help="entrées de la version 3 (histoire) à zéro (témoin de l'histoire)"
     )
+    ap.add_argument("--no-v2", action="store_true", help="entrées de la version 2 seules à zéro (histoire gardée)")
     args = ap.parse_args()
-    inputs = GLOBAL_V1 if args.old_inputs else GLOBAL_V2 if args.no_history else None
+    zeroed = [(GLOBAL_V1, GLOBAL_V2)] if args.old_inputs or args.no_v2 else []
+    zeroed += [(GLOBAL_V2, GLOBAL)] if args.old_inputs or args.no_history else []
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if args.threads:
@@ -154,7 +156,7 @@ def main():
         sums = np.zeros(7)
         count = 0
         train = rng.permutation(train_idx)
-        for b in batches(recs, train, args.batch, device, args.policy_temp, value_mask, policy_mask, inputs):
+        for b in batches(recs, train, args.batch, device, args.policy_temp, value_mask, policy_mask, zeroed):
             if done == steps:
                 break
             done += 1
@@ -172,7 +174,7 @@ def main():
         vs = np.zeros(7)
         vc = np.zeros(7)
         with torch.no_grad():
-            for b in batches(recs, val_idx, 2048, device, args.policy_temp, value_mask, policy_mask, inputs):
+            for b in batches(recs, val_idx, 2048, device, args.policy_temp, value_mask, policy_mask, zeroed):
                 n = [b[k].sum().item() for k in ("has_policy", "has_value", "has_played")]
                 w = np.array(n)[[0, 1, 1, 0, 1, 2, 2]]
                 vs += [x.item() for x in losses(net, b, args.q_weight)] * w

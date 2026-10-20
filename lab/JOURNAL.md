@@ -730,9 +730,8 @@ pur (tous les joueurs sont le même réseau) : à entraîner sur des parties à 
 réencodées depuis leurs fichiers `.moves`. Côté jeu, le serveur devra transmettre l'historique à
 `expert`. Le plan ci-dessous reste comme mémoire de l'ancienne forme.
 
-**Écrit le 20 octobre au soir** (branche `history`, fusionnée dans main après la campagne gen11,
-dont une relance éventuelle doit partir de l'ancien code ; priorité de l'utilisateur après les
-résultats de gen11) :
+**Écrit le 20 octobre au soir** (branche `history`, passée dans main le 21 octobre ; priorité de
+l'utilisateur après les résultats de gen11) :
 - **Histoire des joueurs** (`know::History`, tenue par le journal de chaque coup,
   `Knowledge::play`) : par joueur, régions vides, tribus oubliées, régions prises à un peuple actif
   ou en déclin d'un adversaire, au plus riche du moment ; déclins et manches tenues par les peuples
@@ -761,14 +760,17 @@ résultats de gen11) :
   `hunter` 35,3, 66 %, 4,8, 2,0 ; `prudent` 21,4, 68 %, 4,3, 2,3 ; `early` 32,3, 58 %, 9,4, 1,4 ;
   `late` 32,6, 60 %, 2,7, 3,0. L'agressivité de Normale sature vite (la prime `foe` au-delà de 1
   ne change presque rien).
-- Python : `train.py --beh-weight` (1 par défaut), `--no-history` (témoin, histoire à zéro) ;
+- Python : `train.py --beh-weight` (1 par défaut), `--no-history` (témoin, histoire à zéro),
+  `--no-v2` (entrées de la version 2 seules à zéro, histoire gardée) ;
   `check.py` compare aussi la tête « coup réel » (5·10⁻⁵ sur des positions v5, vérifié sur mini).
 
-**Essai prévu (gen12, scripts `lab/runs/gen12-data.sh` et `gen12-train.sh`, à lancer après accord) :**
-10 000 parties à tables variées avec observation, le champion de gen11 face à Facile, Normale,
-Difficile, les cinq styles, gen8, gen9, gen10w et lui-même affaibli ; réencodage v5 de gen10, gen11
-et de leurs tables variées ; H0 (histoire à zéro) et H1 (histoire), tous deux avec la tête « coup
-réel », depuis le champion de gen11. Arènes en `rp=1` : H0 et H1 sans modèle des adversaires,
+**Essai gen12, lancé le 21 octobre à 1 h 30** (accord de l'utilisateur ; scripts
+`lab/runs/gen12-data.sh` et `gen12-train.sh`) : 10 000 parties à tables variées avec observation,
+le champion de gen11 (E0) face à Facile, Normale, Difficile, les cinq styles, gen8, gen9, gen10w
+et lui-même affaibli ; réencodage v5 de gen10, gen11 et de leurs tables variées ; H0 (histoire à
+zéro) et H1 (histoire), tous deux avec la tête « coup réel », depuis E0, entrées de la version 2
+à zéro pour les deux (elles semblaient nuire dans gen11) : H0 lit donc ce que lit E0, et H1 la
+même chose plus l'histoire. Arènes en `rp=1` : H0 et H1 sans modèle des adversaires,
 H1 avec `bh=1` et `bh=2`, face au champion de gen11, à Normale, à Difficile et à chaque style.
 **Critère :** H1 avec `bh` mieux que H1 sans, et H1 mieux que H0, face aux styles et aux IA du
 jeu, sans recul face au champion. La validation de la tête « coup réel » (H0 contre H1) dit en
@@ -893,6 +895,19 @@ en pièces du joueur qui agit : face aux fins du réseau, gen10w 4,85 contre 6,6
 aux fins de Normale, 9,95 contre 7,48. gen10w juge mieux le jeu fort et moins bien celui de
 Normale, comme ses arènes (« l'oubli » de W).
 
+**Entraînement de gen11, arrêté le 21 octobre** (`lab/runs/gen11-train.sh`, `lab/runs/gen11`) :
+un premier lancement est parti sans les données réencodées (`cloud.sh --save` recrée vides les
+dossiers gardés absents du bucket, que le script prenait pour finis) : détruit après 13 min
+(0,18 $), script corrigé (fini seulement s'il contient des positions). Relance : réencodage de
+gen9 et gen10 en 3 min, E0 et E1 ensemble en 23 min chacun, P1 en 18 min. Validation identique
+pour E0 et E1 (politique 1,580, valeur 1,018), P1 1,581 et 1,011 sur sa propre fenêtre. Arènes
+parmi des gen10w (graine 801, 920 donnes, 3 220 parties, écart à l'attendu ± 1,6) : E0 +3,7
+points, E1 +0,9, P1 +2,3 ; sur les mêmes parties, **E0 − E1 = +2,7 ± 2,0 points** : les entrées de
+la version 2 n'aident pas, et semblent nuire. Arrêté là (98 min, 1,25 $) à la demande de
+l'utilisateur, pour passer à gen12 : Normale, Difficile, `rp=1` contre `rp=2` dans le jeu et gen7
+non mesurés. E0 devient le champion de gen11 (`lab/nets/gen11.bin`, base de gen12) ; le jeu
+garde gen10w.
+
 **Recherche :** si davantage d'itérations aide toujours peu après P2/P4, examiner le regroupement
 en boucle ouverte. Une même suite d'actions peut mener à des marchés ou dés différents ; tester
 sur un petit cas la séparation des observations publiques avant une refonte de l'arbre.
@@ -984,9 +999,10 @@ l'Expert ne sait pas contre qui il joue).
    pendant les campagnes. Fait (encodage v2).
 2. **gen11, essai de population (P6)** contre la fenêtre pure, à calcul égal. Choisir d'ici là
    le réseau livré et l'enseignant entre gen9, `gen10w` et `gen10f` ; repère manquant : gen9
-   face à Normale et Difficile. En cours (20 octobre au soir).
+   face à Normale et Difficile. Arrêté le 21 octobre après les arènes parmi des gen10w (P5,
+   « Entraînement de gen11 ») : population P1 non départagée.
 3. **Adaptation aux adversaires (P3), en priorité après gen11** (demande de l'utilisateur) :
-   histoire des joueurs, tête « coup réel », essai gen12 (P3).
+   histoire des joueurs, tête « coup réel », essai gen12 (P3), lancé le 21 octobre.
 4. **Cibles territoriales (P7)**, après l'audit.
 5. **Placements** (P5, espace des coups) : variantes locales avant tout générateur appris de
    plans. Le placement des héros, forteresses et campements est fixe, et la défense n'a que deux
@@ -1038,8 +1054,9 @@ et 21,54 $ de réserve. Depuis ce relevé, estimations de `cloud.sh` : P0 0,87 $
 0,02 $, P1 1,11 $, pilote P2 0,86 $, entraînement et arènes P2 1,54 $ (dont 0,10 $ perdus sur un
 script non exécutable, et une reprise par AWS à 20 h 30, sans perte grâce à `--save`),
 confirmation P2 1,19 $, données de gen9 3,31 $, entraînement et arènes de gen9 0,96 $,
-données de gen10 3,46 $, entraînement et arènes de gen10 1,26 $, données de gen11 2,38 $, soit
-16,96 $ (entraînement et arènes de gen11 en cours depuis le 20 octobre, 23 h 32). **Montants datés : consulter coûts et crédits du compte de gestion
+données de gen10 3,46 $, entraînement et arènes de gen10 1,26 $, données de gen11 2,38 $,
+entraînement de gen11 1,43 $ (dont 0,18 $ perdus sur le premier lancement), soit 18,39 $ (gen12 en
+cours depuis le 21 octobre, 1 h 30). **Montants datés : consulter coûts et crédits du compte de gestion
 avant chaque campagne. Les crédits ne se renouvellent pas chaque semaine.**
 
 Pour chaque étape autorisée : mesurer un petit échantillon sur AWS, estimer durée et coût total
