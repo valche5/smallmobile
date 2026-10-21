@@ -328,6 +328,38 @@ fn the_search_sees_only_what_the_player_knows() {
 }
 
 #[test]
+fn a_pick_tells_every_card_that_enters_the_market() {
+    // un marché réduit (pioche des peuples vidée, puis des cartes rendues par des déclins) : un choix
+    // de peuple le remplit de plusieurs cartes, aux pouvoirs cachés ; deux mondes qui en tirent
+    // d'autres doivent donner deux résultats différents (`moves::chance`)
+    let mut rng = Rng::new(37);
+    let mut differing = 0;
+    for game in 0..20u64 {
+        let table = Table::new(3, 3700 + game);
+        let mut g = table.game(game as u32);
+        while g.state.market.len() > 3 {
+            g.state.market.remove(3);
+        }
+        let k = Knowledge::default();
+        let pick = Move::Pick(0);
+        let outcome = |rng: &mut Rng| {
+            let (mut w, mut kw) = (determinize(&g, &k, rng), k);
+            kw.play(&mut w, &pick).unwrap();
+            assert_eq!(w.state.market.len(), 6, "trois cartes tirées");
+            (w.state.market, moves::chance(&w, &pick))
+        };
+        for _ in 0..20 {
+            let (a, b) = (outcome(&mut rng), outcome(&mut rng));
+            if a.0 != b.0 {
+                assert_ne!(a.1, b.1, "deux marchés, un seul résultat");
+                differing += 1;
+            }
+        }
+    }
+    assert!(differing > 100, "{differing}");
+}
+
+#[test]
 fn the_expert_plays_whole_games() {
     use smallmobile_brain2::expert::Expert;
     use smallmobile_kernel::Level;

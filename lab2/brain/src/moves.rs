@@ -292,13 +292,16 @@ pub fn play(g: &mut Game, m: &Move, journal: &mut impl Journal) -> Result<(), Re
 }
 
 /// Le résultat public du hasard d'un coup qui vient d'être joué (`g` : la partie après le coup) :
-/// la carte arrivée au marché après un choix de peuple, la réussite d'une conquête au dé, la valeur
+/// le marché après un choix de peuple (les cartes qui y entrent : une d'habitude, plusieurs quand la
+/// pioche des peuples, vidée, a reçu des cartes rendues), la réussite d'une conquête au dé, la valeur
 /// du dé des Berserks ; 0 pour un coup sans hasard. Deux mondes possibles qui diffèrent sur ce
 /// résultat donnent deux valeurs différentes ; le reste de la partie n'en dépend pas.
 pub fn chance(g: &Game, m: &Move) -> u64 {
     let s = &g.state;
     match m {
-        Move::Pick(_) => s.market.last().map_or(1, |c| 2 + (c.race.index() * Power::COUNT + c.power.index()) as u64),
+        Move::Pick(_) => s.market.iter().fold(1, |h: u64, c| {
+            (h ^ (c.race.index() * Power::COUNT + c.power.index()) as u64).wrapping_mul(0x0100_0000_01b3)
+        }),
         Move::Region(Kind::Reinforce, _) => 1 + s.last_die.and_then(|d| d.success).unwrap_or(false) as u64,
         Move::Berserk => 1 + s.turn.berserk_die.unwrap_or(0) as u64,
         _ => 0,
