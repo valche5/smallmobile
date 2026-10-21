@@ -189,18 +189,24 @@ fn speed_cmd(opts: &HashMap<String, String>) {
         let mut g = table.game(mix(seed, 10 + n as u64) as u32);
         let mut k = Knowledge::default();
         let mut rng = Rng::new(mix(seed, 20 + n as u64));
-        // une position sur 7 parmi celles où le joueur a le choix
+        // une position sur 7 parmi celles où le joueur a le choix ; pour une fin de tour, celle de
+        // son premier choix (pouvoir ou jeton)
         let mut positions = Vec::new();
         let mut choices = 0;
         while g.state.phase != smallmobile_kernel::Phase::GameOver && positions.len() < per {
-            if moves::legal(&g).len() > 1 {
+            let (mut p, mut kp) = (g, k);
+            if moves::legal(&p, &kp).iter().any(|c| c.mv == moves::Move::Lift) {
+                kp.play(&mut p, &moves::Move::Lift).expect("jetons relevés");
+            }
+            if moves::legal(&p, &kp).len() > 1 {
                 if choices % 7 == 3 {
-                    positions.push((g, k));
+                    positions.push((p, kp));
                 }
                 choices += 1;
             }
-            let m = normal.act(&g, &k, &mut rng.fork());
-            k.play(&mut g, &m).expect("coup de l'IA Normale");
+            for a in normal.act(&g, &k, &mut rng.fork()) {
+                k.apply(&mut g, &a).expect("action de l'IA Normale");
+            }
         }
         let start = Instant::now();
         for (i, (g, k)) in positions.iter().enumerate() {
@@ -296,11 +302,16 @@ fn analyze_cmd(opts: &HashMap<String, String>) {
         std::process::exit(2)
     };
     // l'ordre des cartes rendues sous la pioche n'est pas sauvegardé : on le suppose inconnu
-    let k = smallmobile_lab2::know::Knowledge::default();
+    let mut k = smallmobile_lab2::know::Knowledge::default();
+    let mut g = g;
+    // une fin de tour : son premier choix, jetons relevés
+    if moves::legal(&g, &k).iter().any(|c| c.mv == moves::Move::Lift) {
+        k.play(&mut g, &moves::Move::Lift).expect("jetons relevés");
+    }
     let mut rng = smallmobile_lab2::rand::Rng::new(get(opts, "seed", 1));
     let start = Instant::now();
     let s = az.search(&g, &k, &mut rng, false);
-    let legal = moves::legal(&g);
+    let legal = moves::legal(&g, &k);
     println!(
         "Joueur {} à jouer, manche {}/{} ({:.0} s de recherche)",
         me + 1,

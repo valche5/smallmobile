@@ -12,3 +12,5 @@ path = "src/bin/lab.rs"
 [dependencies]
 smallmobile-kernel = { path = "../kernel" }
 smallmobile-brain2 = { path = "brain" }
+# l'Expert de lab1, adversaire témoin de l'arène (`lab1:net=…`)
+smallmobile-brain1 = { path = "../lab1/brain" }

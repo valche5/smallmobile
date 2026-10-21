@@ -28,8 +28,8 @@ use crate::table::{Outcome, Table};
 /// Garde-fou : aucune vraie partie n'approche ce nombre de coups.
 const MAX_MOVES: usize = 20_000;
 
-/// Une partie jouée : le résultat, le nombre de coups, et pour chaque place la durée (s) de chacune
-/// de ses décisions où il y avait plus d'un coup possible.
+/// Une partie jouée : le résultat, le nombre de décisions, et pour chaque place la durée (s) de
+/// chacune de ses décisions où il y avait un choix (toute fin de tour ou défense comprise).
 pub struct Played {
     pub outcome: Outcome,
     pub moves: usize,
@@ -46,14 +46,17 @@ pub fn play_game(table: &Table, seed: u32, seats: &[&dyn Agent], rng_seed: u64) 
     while g.state.phase != Phase::GameOver {
         assert!(count < MAX_MOVES, "partie sans fin");
         let pid = g.state.actor().expect("un joueur doit agir");
-        let choice = moves::legal(&g).len() > 1;
+        let unit = matches!(g.state.phase, Phase::Redeploy | Phase::Defend);
+        let choice = unit || moves::legal(&g, &k).len() > 1;
         let start = Instant::now();
-        let m = seats[pid].act(&g, &k, &mut rng.fork());
+        let actions = seats[pid].act(&g, &k, &mut rng.fork());
         if choice {
             times[pid].push(start.elapsed().as_secs_f32());
         }
-        if let Err(e) = k.play(&mut g, &m) {
-            panic!("coup refusé ({}) : {m:?} → {e:?}", seats[pid].name());
+        for a in &actions {
+            if let Err(e) = k.apply(&mut g, a) {
+                panic!("action refusée ({}) : {a:?} → {e:?}", seats[pid].name());
+            }
         }
         count += 1;
     }

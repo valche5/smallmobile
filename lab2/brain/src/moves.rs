@@ -1,58 +1,108 @@
-//! Les coups d'un joueur, tels que la recherche les voit.
+//! Les coups d'un joueur, tels que la recherche les voit : une décision à la fois.
 //!
-//! Le noyau accepte des actions très fines (un jeton de plus ici, un de moins là) : trop de façons
-//! d'arriver au même résultat. Un coup regroupe donc les actions d'une même décision :
-//! - choix du peuple, déclin, chaque conquête, dé, abandon, fin des conquêtes : une action chacun ;
-//! - fin de tour : héros, forteresse et campements (placés selon la menace), placement complet des
-//!   jetons parmi quelques plans, paix des Diplomates, déclin des Robustes, en un seul coup ;
-//! - défense : un plan pour les jetons rendus, puis la fin de la défense.
+//! - choix du peuple, déclin, chaque conquête, dé, abandon, fin des conquêtes : une action du noyau
+//!   chacun ;
+//! - fin de tour (redéploiement), découpée en décisions, dans l'ordre :
+//!   1. `Lift` (forcé) : chaque région du peuple garde un jeton, les autres vont en main ; héros et
+//!      campements sont relevés ;
+//!   2. les pouvoirs, un à la fois et facultatifs : un héros, la forteresse, un campement sur une
+//!      région ; jouer le coup suivant (un jeton, ou la fin du tour) met fin à leur pose ;
+//!   3. les jetons, un à la fois, chacun sur une région ;
+//!   4. la fin du tour : la paix des Diplomates (aucune, ou un adversaire) ou le déclin des
+//!      Robustes, sinon forcée ;
+//! - défense : les jetons rendus, un à la fois, puis la fin de la défense (forcée).
 //!
-//! Chaque coup porte une clé (`Key`) qui le désigne indépendamment des détails : « le 3e plan de
-//! placement » plutôt que le nombre exact de jetons par région. La recherche s'en sert pour
-//! reconnaître le même choix d'un monde possible à l'autre.
+//! Le noyau ne garde pas où en est une fin de tour : `Redeploy` le suit, dans ce que sait le joueur
+//! (`Knowledge`). Chaque coup porte une clé (`Key`) qui le désigne d'un monde possible à l'autre, et
+//! une sortie du réseau. Une décision entière du jeu (un coup, ou toute une fin de tour ou défense)
+//! se joue en actions groupées (`decision`).
 
 use smallmobile_kernel::action::{Journal, Placement};
-use smallmobile_kernel::collections::ArrayVec;
-use smallmobile_kernel::deploy::Plan;
-use smallmobile_kernel::ids::{MAX_REGIONS, Power, Race};
+use smallmobile_kernel::ids::{Power, Race};
 use smallmobile_kernel::rules::TargetKind;
 use smallmobile_kernel::state::Stage;
 use smallmobile_kernel::{Action, Game, Phase, Reason};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+use crate::know::Knowledge;
+
+/// Les actions sur une région, dans l'ordre des clés (`REGION`) et des sorties du réseau.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Kind {
+    Conquer,
+    Reinforce,
+    Dragon,
+    Sorcery,
+    Abandon,
+    Hero,
+    Fortress,
+    Camp,
+    /// Un jeton posé, au redéploiement ou à la défense.
+    Token,
+}
+
+pub const KINDS: [Kind; 9] = [
+    Kind::Conquer,
+    Kind::Reinforce,
+    Kind::Dragon,
+    Kind::Sorcery,
+    Kind::Abandon,
+    Kind::Hero,
+    Kind::Fortress,
+    Kind::Camp,
+    Kind::Token,
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Move {
-    /// Une seule action du noyau.
-    Act(Action),
-    /// Fin de tour complète.
-    Finish(Finish),
-    /// Jetons rendus replacés (ajouts par région), puis fin de la défense.
-    Defend(Plan),
+    /// Le peuple de cette place du marché.
+    Pick(u8),
+    /// Marché vide : passer.
+    SkipPick,
+    Decline,
+    EndConquest,
+    /// Le dé des Berserks.
+    Berserk,
+    Region(Kind, u8),
+    /// Début de la fin de tour : un jeton par région, le reste en main ; héros et campements relevés.
+    Lift,
+    /// Fin du tour : paix imposée à ce joueur (réel), déclin des Robustes.
+    End {
+        peace: Option<u8>,
+        stout: bool,
+    },
+    EndDefense,
+}
+
+/// Où en est la fin de tour du joueur qui agit, que le noyau ne garde pas. Remis à zéro dès que
+/// la partie quitte le redéploiement (`Knowledge::observe`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Redeploy {
+    /// Jetons, héros et campements relevés (`Lift`).
+    pub lifted: bool,
+    /// La pose des pouvoirs est finie (un jeton a été posé).
+    pub powers_done: bool,
 }
 
 /// Désigne un coup d'un monde possible à l'autre ; moins de `KEYS`.
 pub type Key = u16;
-pub const KEYS: usize = 448;
+/// Clés qui ne désignent pas une région.
+pub const GLOBAL_KEYS: usize = 32;
+pub const KEYS: usize = GLOBAL_KEYS + KINDS.len() * 64;
 
 const PICK: Key = 0;
 const SKIP_PICK: Key = 6;
 const DECLINE: Key = 7;
 const END_CONQUEST: Key = 8;
 const BERSERK: Key = 9;
-/// Plus plan × 12 + paix × 2 + Robustes ; paix : 0 (aucune), ou la cible relativement au joueur
-/// qui finit son tour (1 : le suivant), comme le réseau voit les joueurs.
-pub const FINISH: Key = 16;
-const DEFEND: Key = 96;
-/// + sorte × 64 + région.
-const REGION: Key = 128;
-const CONQUER: Key = 0;
-const REINFORCE: Key = 1;
-const DRAGON: Key = 2;
-const SORCERY: Key = 3;
-const ABANDON: Key = 4;
-
-fn region_key(kind: Key, region: usize) -> Key {
-    REGION + kind * 64 + region as Key
-}
+/// Plus la cible de la paix relativement au joueur qui finit son tour (0 : aucune, 1 : le suivant),
+/// comme le réseau voit les joueurs.
+pub const PEACE: Key = 10;
+/// Plus 1 pour le déclin des Robustes.
+pub const STOUT: Key = 15;
+/// Les coups forcés (`Lift`, fin de tour ou de défense sans choix) : jamais appris.
+const FORCED: Key = 31;
+/// Plus sorte × 64 + région.
+const REGION: Key = GLOBAL_KEYS as Key;
 
 /// Un coup possible et sa clé.
 #[derive(Clone, Copy, Debug)]
@@ -61,57 +111,36 @@ pub struct Choice {
     pub mv: Move,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Finish {
-    /// Héros, forteresse, campements, joués avant le placement.
-    pub specials: Specials,
-    pub placement: Option<Placement>,
-    pub peace: Option<usize>,
-    pub stout: bool,
-}
-
-/// Un héros, une forteresse ou un campement posé sur une région.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Special {
-    #[default]
-    Hero,
-    Fortress,
-    Camp,
-}
-
-pub type Specials = ArrayVec<(Special, u8), 8>;
-
-fn special_action((what, region): (Special, u8)) -> Action {
-    let region = region as usize;
-    match what {
-        Special::Hero => Action::Hero { region },
-        Special::Fortress => Action::Fortress { region },
-        Special::Camp => Action::Camp { region, delta: 1 },
-    }
+fn region(kind: Kind, r: usize) -> Choice {
+    Choice { key: REGION + kind as Key * 64 + r as Key, mv: Move::Region(kind, r as u8) }
 }
 
 pub type Moves = Vec<Choice>;
 
-fn push(out: &mut Moves, key: Key, mv: Move) {
-    out.push(Choice { key, mv });
-}
-
 /// Les coups possibles du joueur qui doit agir (vide en fin de partie).
-pub fn legal(g: &Game) -> Moves {
+pub fn legal(g: &Game, k: &Knowledge) -> Moves {
     let mut out = Vec::new();
     let s = &g.state;
     match s.phase {
         Phase::GameOver => {}
-        Phase::Pick if s.market.is_empty() => push(&mut out, SKIP_PICK, Move::Act(Action::SkipPick)),
+        Phase::Pick if s.market.is_empty() => out.push(Choice { key: SKIP_PICK, mv: Move::SkipPick }),
         Phase::Pick => {
             let coins = s.players[s.current].coins;
             for index in 0..s.market.len().min(coins.max(0) as usize + 1) {
-                push(&mut out, PICK + index as Key, Move::Act(Action::Pick { index }));
+                out.push(Choice { key: PICK + index as Key, mv: Move::Pick(index as u8) });
             }
         }
         Phase::Conquest => conquest(g, &mut out),
-        Phase::Redeploy => finishes(g, &mut out),
-        Phase::Defend => defenses(g, &mut out),
+        Phase::Redeploy => redeploy(g, k.redeploy, &mut out),
+        Phase::Defend => {
+            let race = s.defense[0].race;
+            let own = g.owned(race);
+            if s.races[race.index()].is_some_and(|rs| rs.hand > 0) && !own.is_empty() {
+                out.extend(own.iter().map(|r| region(Kind::Token, r)));
+            } else {
+                out.push(Choice { key: FORCED, mv: Move::EndDefense });
+            }
+        }
     }
     out
 }
@@ -121,173 +150,145 @@ fn conquest(g: &Game, out: &mut Moves) {
     let army = s.turn.army.expect("peuple en action");
     let rs = *s.race(army);
     if g.can_decline().is_ok() {
-        push(out, DECLINE, Move::Act(Action::Decline));
+        out.push(Choice { key: DECLINE, mv: Move::Decline });
     }
     let t = &s.turn;
     if t.conquests == 0 && !t.die_rolled && t.berserk_die.is_none() {
-        for region in g.owned(army).iter() {
-            if g.can_abandon(region).is_ok() {
-                push(out, region_key(ABANDON, region), Move::Act(Action::Abandon { region }));
+        for r in g.owned(army).iter() {
+            if g.can_abandon(r).is_ok() {
+                out.push(region(Kind::Abandon, r));
             }
         }
     }
     if rs.has(Power::Berserk) && t.berserk_die.is_none() && rs.hand >= 1 {
-        push(out, BERSERK, Move::Act(Action::BerserkRoll));
+        out.push(Choice { key: BERSERK, mv: Move::Berserk });
     }
     for x in g.targets().iter().filter(|x| x.reachable()) {
-        let region = x.region;
         if x.sorcery.allowed() {
-            push(out, region_key(SORCERY, region), Move::Act(Action::Sorcery { region }));
+            out.push(region(Kind::Sorcery, x.region));
         }
         if x.dragon.allowed() {
-            push(out, region_key(DRAGON, region), Move::Act(Action::Dragon { region }));
+            out.push(region(Kind::Dragon, x.region));
         }
         if rs.hand >= 1 {
             match x.kind {
-                TargetKind::Normal => push(out, region_key(CONQUER, region), Move::Act(Action::Conquer { region })),
-                TargetKind::Die => push(out, region_key(REINFORCE, region), Move::Act(Action::Reinforce { region })),
+                TargetKind::Normal => out.push(region(Kind::Conquer, x.region)),
+                TargetKind::Die => out.push(region(Kind::Reinforce, x.region)),
                 TargetKind::None => {}
             }
         }
     }
-    push(out, END_CONQUEST, Move::Act(Action::EndConquest));
+    out.push(Choice { key: END_CONQUEST, mv: Move::EndConquest });
 }
 
-/// Héros, forteresse et campements, aux endroits les plus menacés (comme l'IA du jeu).
-fn specials(g: &Game, army: Race) -> Specials {
-    let mut out = ArrayVec::new();
-    let mut w = *g;
-    let s = &g.state;
-    let rs = *s.race(army);
-    if s.turn.stage != Stage::Active || rs.declined {
-        return out;
-    }
-    let best = |w: &Game, ok: &dyn Fn(usize) -> bool| -> Option<usize> {
-        let mut best = None;
-        let mut best_score = f64::NEG_INFINITY;
-        for r in w.owned(army).iter().filter(|&r| !w.state.regions[r].is_immune() && ok(r)) {
-            let score = w.threat(army, r) / w.defense_value(r) as f64;
-            if score > best_score {
-                best_score = score;
-                best = Some(r);
-            }
-        }
-        best
-    };
-    let mut push = |w: &mut Game, what: Special, region: usize| {
-        if w.apply(&special_action((what, region as u8)), &mut smallmobile_kernel::NoJournal).is_ok() {
-            out.push((what, region as u8));
-            true
-        } else {
-            false
-        }
-    };
-    match rs.power {
-        Power::Heroic => {
-            while w.heroes_on_board(army) < 2 {
-                let Some(region) = best(&w, &|_| true) else { break };
-                if !push(&mut w, Special::Hero, region) {
-                    break;
-                }
-            }
-        }
-        Power::Fortified if s.turn.fortress_region.is_none() && w.fortresses_on_board(army) < 6 => {
-            if let Some(region) = best(&w, &|r| !w.state.regions[r].fortress) {
-                push(&mut w, Special::Fortress, region);
-            }
-        }
-        Power::Bivouacking => {
-            while w.camps_on_board(army) < 5 {
-                let Some(region) = best(&w, &|_| true) else { break };
-                if !push(&mut w, Special::Camp, region) {
-                    break;
-                }
-            }
-        }
-        _ => {}
-    }
-    out
+/// Le pouvoir à poser pendant la fin de tour du peuple actif, s'il en a un.
+fn power_kind(rs: &smallmobile_kernel::state::RaceState) -> Option<Kind> {
+    [(Power::Heroic, Kind::Hero), (Power::Fortified, Kind::Fortress), (Power::Bivouacking, Kind::Camp)]
+        .into_iter()
+        .find(|&(p, _)| rs.has(p))
+        .map(|(_, kind)| kind)
 }
 
-fn finishes(g: &Game, out: &mut Moves) {
+fn redeploy(g: &Game, progress: Redeploy, out: &mut Moves) {
     let s = &g.state;
     let army = s.turn.army.expect("peuple en action");
-    let specials = specials(g, army);
-    let mut w = *g;
-    for &x in specials.iter() {
-        w.apply(&special_action(x), &mut smallmobile_kernel::NoJournal).expect("action spéciale déjà vérifiée");
-    }
-    // (numéro du plan, plan) ; un plan identique à un précédent n'est pas repris
-    let mut placements: ArrayVec<(Key, Option<Placement>), 6> = ArrayVec::new();
-    if w.owned(army).is_empty() {
-        placements.push((0, None));
-    } else {
-        for (i, p) in w.placement_candidates(army).into_iter().enumerate() {
-            if !placements.iter().any(|&(_, q)| q == Some(p)) {
-                placements.push((i as Key, Some(p)));
-            }
-        }
-    }
-    let pid = s.current;
-    let active = s.turn.stage == Stage::Active;
     let rs = *s.race(army);
-    let mut peaces: ArrayVec<Option<usize>, 6> = ArrayVec::new();
-    peaces.push(None);
-    if active && rs.has(Power::Diplomat) {
-        for q in (0..s.player_count()).filter(|&q| q != pid && !s.turn.attacked.contains(q)) {
-            peaces.push(Some(q));
-        }
+    let own = g.owned(army);
+    if own.is_empty() {
+        return finish(g, out);
     }
-    let stouts: &[bool] = if active && rs.has(Power::Stout) { &[false, true] } else { &[false] };
-    for &(plan, placement) in placements.iter() {
-        for &peace in peaces.iter() {
-            for &stout in stouts {
-                let target = peace.map_or(0, |q| (q + s.player_count() - pid) % s.player_count());
-                let key = FINISH + plan * 12 + target as Key * 2 + Key::from(stout);
-                push(out, key, Move::Finish(Finish { specials, placement, peace, stout }));
-            }
-        }
-    }
-}
-
-fn defenses(g: &Game, out: &mut Moves) {
-    let race = g.state.defense[0].race;
-    let pending = g.state.races[race.index()].is_some_and(|rs| rs.hand > 0) && !g.owned(race).is_empty();
-    if !pending {
-        push(out, DEFEND, Move::Defend([0; MAX_REGIONS]));
+    if !progress.lifted {
+        out.push(Choice { key: FORCED, mv: Move::Lift });
         return;
     }
-    let a = g.plan_deployment(race, false);
-    let b = g.plan_deployment(race, true);
-    push(out, DEFEND, Move::Defend(a));
-    if b != a {
-        push(out, DEFEND + 1, Move::Defend(b));
+    if !progress.powers_done && s.turn.stage == Stage::Active {
+        match power_kind(&rs) {
+            Some(Kind::Hero) if g.heroes_on_board(army) < 2 => {
+                out.extend(own.iter().filter(|&r| !s.regions[r].hero).map(|r| region(Kind::Hero, r)));
+            }
+            Some(Kind::Fortress) if s.turn.fortress_region.is_none() && g.fortresses_on_board(army) < 6 => {
+                out.extend(own.iter().filter(|&r| !s.regions[r].fortress).map(|r| region(Kind::Fortress, r)));
+            }
+            Some(Kind::Camp) if g.camps_on_board(army) < 5 => out.extend(own.iter().map(|r| region(Kind::Camp, r))),
+            _ => {}
+        }
+    }
+    if rs.hand > 0 {
+        out.extend(own.iter().map(|r| region(Kind::Token, r)));
+    } else {
+        finish(g, out);
     }
 }
 
-/// Joue un coup ; un coup refusé laisse la partie dans un état quelconque (c'est un bogue de l'appelant).
-pub fn play(g: &mut Game, m: &Move, journal: &mut impl Journal) -> Result<(), Reason> {
-    match m {
-        Move::Act(a) => g.apply(a, journal),
-        Move::Finish(f) => {
-            for &x in f.specials.iter() {
-                g.apply(&special_action(x), journal)?;
-            }
-            if let Some(p) = f.placement {
-                g.apply(&Action::Place(p), journal)?;
-            }
-            g.apply(&Action::EndTurn { peace: f.peace, stout: f.stout }, journal)
+/// Les fins de tour possibles : paix des Diplomates, déclin des Robustes, sinon la seule.
+fn finish(g: &Game, out: &mut Moves) {
+    let s = &g.state;
+    let army = s.turn.army.expect("peuple en action");
+    let rs = *s.race(army);
+    let (pid, n) = (s.current, s.player_count());
+    let active = s.turn.stage == Stage::Active;
+    if active && rs.has(Power::Diplomat) {
+        out.push(Choice { key: PEACE, mv: Move::End { peace: None, stout: false } });
+        for q in (0..n).filter(|&q| q != pid && !s.turn.attacked.contains(q)) {
+            let target = ((q + n - pid) % n) as Key;
+            out.push(Choice { key: PEACE + target, mv: Move::End { peace: Some(q as u8), stout: false } });
         }
-        Move::Defend(plan) => {
-            let race = g.state.defense[0].race;
-            for r in g.owned(race).iter() {
-                if plan[r] > 0 {
-                    g.apply(&Action::Deploy { region: r, delta: plan[r] }, journal)?;
-                }
-            }
-            g.apply(&Action::EndDefense, journal)
+    } else if active && rs.has(Power::Stout) {
+        for stout in [false, true] {
+            out.push(Choice { key: STOUT + Key::from(stout), mv: Move::End { peace: None, stout } });
         }
+    } else {
+        out.push(Choice { key: FORCED, mv: Move::End { peace: None, stout: false } });
     }
+}
+
+/// Les actions du noyau qui jouent ce coup, dans l'ordre.
+pub fn actions(g: &Game, m: &Move) -> Vec<Action> {
+    let s = &g.state;
+    match *m {
+        Move::Pick(index) => vec![Action::Pick { index: index as usize }],
+        Move::SkipPick => vec![Action::SkipPick],
+        Move::Decline => vec![Action::Decline],
+        Move::EndConquest => vec![Action::EndConquest],
+        Move::Berserk => vec![Action::BerserkRoll],
+        Move::Region(kind, r) => {
+            let region = r as usize;
+            vec![match kind {
+                Kind::Conquer => Action::Conquer { region },
+                Kind::Reinforce => Action::Reinforce { region },
+                Kind::Dragon => Action::Dragon { region },
+                Kind::Sorcery => Action::Sorcery { region },
+                Kind::Abandon => Action::Abandon { region },
+                Kind::Hero => Action::Hero { region },
+                Kind::Fortress => Action::Fortress { region },
+                Kind::Camp => Action::Camp { region, delta: 1 },
+                Kind::Token => Action::Deploy { region, delta: 1 },
+            }]
+        }
+        Move::Lift => {
+            let army = s.turn.army.expect("peuple en action");
+            let own = g.owned(army);
+            let mut out = vec![Action::Place(Placement::default())];
+            for r in own.iter() {
+                if s.regions[r].hero {
+                    out.push(Action::Hero { region: r });
+                }
+                out.extend((0..s.regions[r].camps).map(|_| Action::Camp { region: r, delta: -1 }));
+            }
+            out
+        }
+        Move::End { peace, stout } => vec![Action::EndTurn { peace: peace.map(usize::from), stout }],
+        Move::EndDefense => vec![Action::EndDefense],
+    }
+}
+
+/// Joue un coup ; un coup refusé laisse la partie dans un état quelconque (c'est un bogue de
+/// l'appelant). Le suivi de la fin de tour est l'affaire de `Knowledge::play`.
+pub fn play(g: &mut Game, m: &Move, journal: &mut impl Journal) -> Result<(), Reason> {
+    for a in actions(g, m) {
+        g.apply(&a, journal)?;
+    }
+    Ok(())
 }
 
 /// Le résultat public du hasard d'un coup qui vient d'être joué (`g` : la partie après le coup) :
@@ -297,84 +298,121 @@ pub fn play(g: &mut Game, m: &Move, journal: &mut impl Journal) -> Result<(), Re
 pub fn chance(g: &Game, m: &Move) -> u64 {
     let s = &g.state;
     match m {
-        Move::Act(Action::Pick { .. }) => {
-            s.market.last().map_or(1, |c| 2 + (c.race.index() * Power::COUNT + c.power.index()) as u64)
-        }
-        Move::Act(Action::Reinforce { .. }) => 1 + s.last_die.and_then(|d| d.success).unwrap_or(false) as u64,
-        Move::Act(Action::BerserkRoll) => 1 + s.turn.berserk_die.unwrap_or(0) as u64,
+        Move::Pick(_) => s.market.last().map_or(1, |c| 2 + (c.race.index() * Power::COUNT + c.power.index()) as u64),
+        Move::Region(Kind::Reinforce, _) => 1 + s.last_die.and_then(|d| d.success).unwrap_or(false) as u64,
+        Move::Berserk => 1 + s.turn.berserk_die.unwrap_or(0) as u64,
         _ => 0,
     }
 }
 
-/// Les actions du noyau qui jouent ce coup, dans l'ordre (le jeu les joue une à une). Mêmes actions
-/// que `play`, calculées sur une copie de la partie.
-pub fn actions(g: &Game, m: &Move) -> Result<Vec<Action>, Reason> {
-    let mut out = Vec::new();
-    match m {
-        Move::Act(a) => out.push(*a),
-        Move::Finish(f) => {
-            out.extend(f.specials.iter().map(|&x| special_action(x)));
-            if let Some(p) = f.placement {
-                out.push(Action::Place(p));
-            }
-            out.push(Action::EndTurn { peace: f.peace, stout: f.stout });
-        }
-        Move::Defend(plan) => {
-            let race = g.state.defense[0].race;
-            for r in g.owned(race).iter() {
-                if plan[r] > 0 {
-                    out.push(Action::Deploy { region: r, delta: plan[r] });
-                }
-            }
-            out.push(Action::EndDefense);
+/// Une décision entière du joueur qui agit, en actions du noyau : un coup, ou toute une fin de tour
+/// ou une défense, décidée coup par coup par `choose`, puis groupée (`compact`). `choose` reçoit la
+/// partie et ce que sait le joueur, et rend un coup possible ; `k` est ce que sait le joueur au
+/// début de la décision. Rend aussi les coups joués.
+pub fn decision(
+    g: &Game,
+    k: &Knowledge,
+    mut choose: impl FnMut(&Game, &Knowledge) -> Move,
+) -> Result<(Vec<Action>, Vec<Move>), Reason> {
+    let (actor, phase) = (g.state.actor(), g.state.phase);
+    let (mut w, mut kw) = (*g, *k);
+    let (mut out, mut played) = (Vec::new(), Vec::new());
+    loop {
+        let mv = choose(&w, &kw);
+        out.extend(actions(&w, &mv));
+        kw.play(&mut w, &mv)?;
+        played.push(mv);
+        let unit = matches!(phase, Phase::Redeploy | Phase::Defend);
+        let ended = matches!(mv, Move::End { .. } | Move::EndDefense);
+        if !unit || ended || w.state.phase != phase || w.state.actor() != actor {
+            break;
         }
     }
-    Ok(out)
+    Ok((compact(g, &out), played))
+}
+
+/// Les actions d'une fin de tour ou d'une défense, groupées : les héros et campements relevés puis
+/// reposés au même endroit ne bougent pas, les jetons posés un à un rejoignent le placement (ou,
+/// en défense, un ajout par région). Jouées depuis `g`, elles mènent exactement au même état.
+pub fn compact(g: &Game, actions: &[Action]) -> Vec<Action> {
+    let s = &g.state;
+    let regions = g.map.len();
+    let mut heroes = vec![false; regions];
+    let mut camps = vec![0i32; regions];
+    let mut deploy = vec![0i32; regions];
+    let mut place: Option<Placement> = None;
+    let (mut fortress, mut rest) = (Vec::new(), Vec::new());
+    for a in actions {
+        match *a {
+            Action::Hero { region } => heroes[region] = !heroes[region],
+            Action::Camp { region, delta } => camps[region] += delta,
+            Action::Fortress { .. } => fortress.push(*a),
+            Action::Place(p) => place = Some(p),
+            Action::Deploy { region, delta } => match place.as_mut() {
+                Some(p) => p.0[region] += delta,
+                None => deploy[region] += delta,
+            },
+            _ => rest.push(*a),
+        }
+    }
+    let mut out = Vec::new();
+    // héros enlevés avant d'en poser (au plus 2), campements de même (au plus 5)
+    for take in [true, false] {
+        for r in 0..regions {
+            if heroes[r] && s.regions[r].hero == take {
+                out.push(Action::Hero { region: r });
+            }
+            let delta = camps[r];
+            if (delta < 0) == take && delta != 0 {
+                out.extend((0..delta.abs()).map(|_| Action::Camp { region: r, delta: delta.signum() }));
+            }
+        }
+    }
+    out.extend(fortress);
+    out.extend(place.map(Action::Place));
+    out.extend((0..regions).filter(|&r| deploy[r] != 0).map(|r| Action::Deploy { region: r, delta: deploy[r] }));
+    out.extend(rest);
+    out
 }
 
 /// Le coup en clair, pour l'analyse (régions désignées par leur numéro dans la carte).
 pub fn describe(g: &Game, m: &Move) -> String {
     let s = &g.state;
-    let region = |r: usize| format!("région {r} ({:?})", g.map.regions[r].terrain);
-    match m {
-        Move::Act(a) => match *a {
-            Action::Pick { index } => {
-                let c = s.market[index];
-                format!("prendre {:?} {:?} (place {index}, {} pièces dessus)", c.race, c.power, c.coins)
-            }
-            Action::SkipPick => "passer (marché vide)".into(),
-            Action::Conquer { region: r } => format!("conquérir la {}", region(r)),
-            Action::Reinforce { region: r } => format!("tenter la {} au dé", region(r)),
-            Action::BerserkRoll => "lancer le dé des Berserks".into(),
-            Action::Dragon { region: r } => format!("lâcher le dragon sur la {}", region(r)),
-            Action::Sorcery { region: r } => format!("ensorceler la {}", region(r)),
-            Action::Abandon { region: r } => format!("abandonner la {}", region(r)),
-            Action::Decline => "passer en déclin".into(),
-            Action::EndConquest => "finir les conquêtes".into(),
-            other => format!("{other:?}"),
+    let region = |r: u8| format!("région {r} ({:?})", g.map.regions[r as usize].terrain);
+    match *m {
+        Move::Pick(index) => {
+            let c = s.market[index as usize];
+            format!("prendre {:?} {:?} (place {index}, {} pièces dessus)", c.race, c.power, c.coins)
+        }
+        Move::SkipPick => "passer (marché vide)".into(),
+        Move::Decline => "passer en déclin".into(),
+        Move::EndConquest => "finir les conquêtes".into(),
+        Move::Berserk => "lancer le dé des Berserks".into(),
+        Move::Region(kind, r) => match kind {
+            Kind::Conquer => format!("conquérir la {}", region(r)),
+            Kind::Reinforce => format!("tenter la {} au dé", region(r)),
+            Kind::Dragon => format!("lâcher le dragon sur la {}", region(r)),
+            Kind::Sorcery => format!("ensorceler la {}", region(r)),
+            Kind::Abandon => format!("abandonner la {}", region(r)),
+            Kind::Hero => format!("un héros sur la {}", region(r)),
+            Kind::Fortress => format!("la forteresse sur la {}", region(r)),
+            Kind::Camp => format!("un campement sur la {}", region(r)),
+            Kind::Token => format!("un jeton sur la {}", region(r)),
         },
-        Move::Finish(f) => {
-            let mut out = String::from("fin de tour");
-            if let Some(p) = f.placement {
-                let army = s.turn.army.expect("peuple en action");
-                let tokens: Vec<String> = g.owned(army).iter().map(|r| format!("{r}:{}", p.0[r])).collect();
-                out += &format!(", jetons {}", tokens.join(" "));
-            }
-            for (what, r) in f.specials.iter() {
-                out += &format!(", {what:?} en {r}");
-            }
-            if let Some(q) = f.peace {
+        Move::Lift => "relever jetons, héros et campements".into(),
+        Move::End { peace, stout } => {
+            let mut out = String::from("finir le tour");
+            if let Some(q) = peace {
                 out += &format!(", paix imposée au joueur {}", q + 1);
             }
-            if f.stout {
+            if stout {
                 out += ", déclin (Robustes)";
             }
             out
         }
-        Move::Defend(plan) => {
-            let added: Vec<String> =
-                plan.iter().enumerate().filter(|(_, n)| **n > 0).map(|(r, n)| format!("+{n} en {r}")).collect();
-            format!("défense : {}", if added.is_empty() { "rien".into() } else { added.join(", ") })
-        }
+        Move::EndDefense => "finir la défense".into(),
     }
 }
+
+const _: () = assert!(KEYS == 608 && GLOBAL_KEYS > FORCED as usize && STOUT + 1 < FORCED);
+const _: () = assert!(Race::COUNT == 14);

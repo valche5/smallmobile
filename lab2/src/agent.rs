@@ -1,17 +1,22 @@
 //! Les joueurs. Chacun reçoit la vraie partie et ce que son joueur sait (`Knowledge`) : un joueur
 //! honnête ne lit la partie qu'à travers `know::determinize`.
 
-use smallmobile_kernel::{Ai, Game, Level, Restrictions, Tuning};
+use std::path::Path;
+use std::sync::Arc;
+
+use smallmobile_kernel::{Action, Ai, Game, Level, Restrictions, Tuning};
 
 use crate::know::{Knowledge, determinize};
-use crate::moves::{self, Move};
+use crate::moves;
 use crate::rand::Rng;
 
 pub trait Agent: Sync {
     fn name(&self) -> String;
 
-    /// Le prochain coup du joueur qui doit agir. `rng` est propre à cette décision.
-    fn act(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Move;
+    /// La prochaine décision du joueur qui doit agir, en actions du noyau : une action pour les IA
+    /// du jeu, toute une fin de tour ou une défense pour les autres (`moves::decision`). `rng` est
+    /// propre à cette décision.
+    fn act(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Vec<Action>;
 }
 
 /// L'IA du jeu, à un niveau donné. Elle voit un monde possible, pas la vraie partie : ainsi elle ne
@@ -44,7 +49,7 @@ impl KernelAi {
     }
 }
 
-/// Des styles de jeu de l'IA Normale, pour des tables variées (`lab2/journal.md`, P3) : nom, réglages.
+/// Des styles de jeu de l'IA Normale, pour des tables variées (`lab1/JOURNAL.md`, P3) : nom, réglages.
 /// Les conquêtes au rendement immédiat (`conquest_model=0`) laissent jouer les primes et malus des
 /// régions visées ; le déclin à seuils (`decline_model=0`), ses seuils.
 pub const STYLES: [(&str, &str); 5] = [
@@ -69,16 +74,16 @@ impl Agent for KernelAi {
         name
     }
 
-    fn act(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Move {
+    fn act(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Vec<Action> {
         let mut w = determinize(g, k, rng);
         let pid = w.state.actor().expect("un joueur doit agir");
         w.state.players[pid].level = self.level;
         let ai = Ai::new(&self.tuning);
-        Move::Act(ai.decide(&w, Restrictions::default()).expect("l'IA du jeu trouve toujours un coup"))
+        vec![ai.decide(&w, Restrictions::default()).expect("l'IA du jeu trouve toujours un coup")]
     }
 }
 
-/// Un coup au hasard parmi les coups possibles.
+/// Un coup au hasard parmi les coups possibles, à chaque décision.
 pub struct Random;
 
 impl Agent for Random {
@@ -86,18 +91,40 @@ impl Agent for Random {
         "random".into()
     }
 
-    fn act(&self, g: &Game, _: &Knowledge, rng: &mut Rng) -> Move {
-        let legal = moves::legal(g);
-        legal[rng.below(legal.len())].mv
+    fn act(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Vec<Action> {
+        let choose = |w: &Game, kw: &Knowledge| {
+            let legal = moves::legal(w, kw);
+            legal[rng.below(legal.len())].mv
+        };
+        moves::decision(g, k, choose).expect("coup possible").0
+    }
+}
+
+/// L'Expert de lab1, adversaire témoin (`lab1/brain`), tel qu'il joue dans le jeu.
+pub struct Lab1 {
+    expert: smallmobile_brain1::expert::Expert,
+    label: String,
+}
+
+impl Agent for Lab1 {
+    fn name(&self) -> String {
+        self.label.clone()
+    }
+
+    fn act(&self, g: &Game, _: &Knowledge, rng: &mut Rng) -> Vec<Action> {
+        self.expert.decide(g, rng.next_u64()).expect("décision de l'Expert de lab1").actions
     }
 }
 
 /// Un joueur d'après son nom (`easy`, `normal`, `hard`, `random` ; `normal:aggressive`,
 /// `normal:foe=1` : un autre style, voir `KernelAi::style` ; `az:net=poids.bin,n=400` : l'Expert,
-/// voir `az::Config::parse`).
+/// voir `az::Config::parse` ; `lab1:net=lab1/nets/gen11.bin,n=200` : l'Expert de lab1).
 pub fn by_name(name: &str) -> Option<Box<dyn Agent>> {
     if name.starts_with("az") {
         return Some(Box::new(az_named(name)?));
+    }
+    if let Some(opts) = name.strip_prefix("lab1:") {
+        return Some(Box::new(lab1_named(opts)?));
     }
     if let Some((level, style)) = name.split_once(':') {
         return Some(Box::new(KernelAi::style(level_named(level)?, style)?));
@@ -117,7 +144,26 @@ fn level_named(name: &str) -> Option<Level> {
     })
 }
 
-/// `az:net=chemin,n=400,bh=1`
+/// `net=chemin,n=200`
+fn lab1_named(opts: &str) -> Option<Lab1> {
+    let (mut net, mut n) = (None, 200);
+    for part in opts.split(',') {
+        match part.split_once('=')? {
+            ("net", path) => net = Some(path.to_string()),
+            ("n", v) => n = v.parse().ok()?,
+            _ => return None,
+        }
+    }
+    let net = net?;
+    let loaded = smallmobile_brain1::net::Net::load(Path::new(&net)).unwrap_or_else(|e| {
+        eprintln!("réseau illisible ({net}) : {e}");
+        std::process::exit(2)
+    });
+    let label = format!("lab1({}, n={n})", Path::new(&net).file_stem()?.to_string_lossy());
+    Some(Lab1 { expert: smallmobile_brain1::expert::Expert::new(Arc::new(loaded), n), label })
+}
+
+/// `az:net=chemin,n=400`
 pub fn az_named(name: &str) -> Option<crate::az::Az> {
     let opts = name.strip_prefix("az:")?;
     let mut net = None;
@@ -133,10 +179,10 @@ pub fn az_named(name: &str) -> Option<crate::az::Az> {
         .collect();
     let net = net?;
     let cfg = crate::az::Config::parse(&rest.join(","))?;
-    let loaded = crate::net::Net::load(std::path::Path::new(&net)).unwrap_or_else(|e| {
+    let loaded = crate::net::Net::load(Path::new(&net)).unwrap_or_else(|e| {
         eprintln!("réseau illisible ({net}) : {e}");
         std::process::exit(2)
     });
-    let label = std::path::Path::new(&net).file_stem().map_or(net.clone(), |s| s.to_string_lossy().into_owned());
-    Some(crate::az::Az::new(cfg, std::sync::Arc::new(loaded), label))
+    let label = Path::new(&net).file_stem().map_or(net.clone(), |s| s.to_string_lossy().into_owned());
+    Some(crate::az::Az::new(cfg, Arc::new(loaded), label))
 }

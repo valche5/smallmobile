@@ -159,13 +159,19 @@ pub fn play(
     let mut pending: Vec<Pending> = Vec::new();
     let mut played = Vec::new();
     while g.state.phase != Phase::GameOver {
-        let legal = moves::legal(&g);
         let actor = g.state.actor().expect("un joueur doit agir");
-        let other = usize::try_from(seats[actor]).ok().map(|i| field.agents[i]);
+        if let Some(agent) = usize::try_from(seats[actor]).ok().map(|i| field.agents[i]) {
+            // un adversaire d'une table variée : toute sa décision, en actions du noyau
+            let actions = agent.act(&g, &k, &mut rng.fork());
+            for a in &actions {
+                k.apply(&mut g, a).expect("action d'un adversaire");
+            }
+            played.push(actions);
+            continue;
+        }
+        let legal = moves::legal(&g, &k);
         let mv = if legal.len() == 1 {
             legal[0].mv
-        } else if let Some(agent) = other {
-            agent.act(&g, &k, &mut rng.fork())
         } else if rng.unit() >= opts.full_share {
             az.search_with(&g, &k, rng, opts.fast, true).mv
         } else {
@@ -177,7 +183,7 @@ pub fn play(
             pending.push(Pending { enc: encode(&g, &k), actor, coins: coins(&g), policy });
             s.mv
         };
-        played.push(moves::actions(&g, &mv).expect("coup découpé en actions"));
+        played.push(moves::actions(&g, &mv));
         k.play(&mut g, &mv).expect("coup possible");
     }
     let o = Outcome::of(&g);
@@ -287,8 +293,9 @@ impl GameLog {
         Table::new(self.players, self.map_seed)
     }
 
-    /// Rejoue la partie sur sa table : `visit` voit chaque position avant un coup, avec ce que sait
-    /// le joueur qui agit. Renvoie la partie finie.
+    /// Rejoue la partie sur sa table : `visit` voit chaque position avant un coup (ou une décision
+    /// d'un adversaire d'une table variée), avec ce que sait le joueur qui agit. Renvoie la partie
+    /// finie.
     pub fn replay<'m>(
         &self,
         table: &'m Table,
@@ -298,11 +305,18 @@ impl GameLog {
         let mut k = Knowledge::default();
         for mv in &self.moves {
             visit(&g, &k);
-            let mut ret = k.journal(&g.state);
-            for a in self.actions(mv, table)? {
-                g.apply(&a, &mut ret).map_err(|e| format!("action refusée {a:?} : {e:?}"))?;
+            let actions = self.actions(mv, table)?;
+            // le coup de `moves` qui donne ces actions : la fin de tour reste suivie comme en jouant
+            // (`Knowledge::redeploy`) ; sinon (IA du jeu), les actions telles quelles
+            let known = moves::legal(&g, &k).into_iter().find(|c| moves::actions(&g, &c.mv) == actions);
+            match known {
+                Some(c) => k.play(&mut g, &c.mv).map_err(|e| format!("coup refusé {:?} : {e:?}", c.mv))?,
+                None => {
+                    for a in &actions {
+                        k.apply(&mut g, a).map_err(|e| format!("action refusée {a:?} : {e:?}"))?;
+                    }
+                }
             }
-            k.observe(ret, &g.state);
         }
         Ok(g)
     }

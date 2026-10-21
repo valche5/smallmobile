@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-KEYS = 448
+KEYS = 608
 REGIONS = 48
 NODE = 77
 # entrées de la partie (lab2/brain/src/encode.rs) : les 700 premières décrivent la position, les suivantes

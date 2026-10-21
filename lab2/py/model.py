@@ -9,10 +9,10 @@ import torch.nn.functional as F
 
 from data import GLOBAL, KEYS, NODE, REGIONS
 
-GLOBAL_KEYS = 128
+GLOBAL_KEYS = 32
 # la tête de valeur prédit les pièces gagnées d'ici la fin divisées par ce nombre
 GAIN_SCALE = 50.0
-REGION_KINDS = 5
+REGION_KINDS = 9
 # l'histoire des joueurs (lab2/brain/src/encode.rs) : habitudes de chaque joueur, puis régions prises par
 # chacun à chacun, depuis le début et pendant le dernier tour
 HABITS = 14

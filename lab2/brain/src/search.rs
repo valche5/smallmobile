@@ -328,7 +328,7 @@ impl Az {
         let mut end = *w;
         let mut kw = *k;
         while end.state.phase != Phase::GameOver {
-            let legal = moves::legal(&end);
+            let legal = moves::legal(&end, &kw);
             let mv = if legal.len() == 1 {
                 legal[0].mv
             } else {
@@ -370,7 +370,7 @@ impl Az {
     }
 
     pub fn search_with(&self, root: &Game, k: &Knowledge, rng: &mut Rng, iterations: usize, explore: bool) -> Searched {
-        let legal = moves::legal(root);
+        let legal = moves::legal(root, k);
         if legal.len() == 1 {
             return Searched {
                 mv: legal[0].mv,
@@ -414,7 +414,7 @@ impl Az {
                     if w.state.phase == Phase::GameOver {
                         break None;
                     }
-                    let legal = moves::legal(&w);
+                    let legal = moves::legal(&w, &kw);
                     if legal.len() > 1 {
                         break Some(legal);
                     }

@@ -4,7 +4,8 @@
 //!
 //! - `know` : ce qu'un joueur sait vraiment (pioches et dés cachés, histoire des joueurs) et des
 //!   mondes possibles ;
-//! - `moves` : les coups d'un joueur, regroupés pour que la recherche ait peu de choix à la fois ;
+//! - `moves` : les coups d'un joueur, une décision à la fois (fin de tour : pouvoirs puis jetons un
+//!   par un), et une décision entière du jeu en actions groupées ;
 //! - `encode`, `net` : ce que voit le réseau, le réseau ;
 //! - `search` : la recherche guidée par le réseau (Gumbel AlphaZero, nœuds de hasard) ;
 //! - `outcome` : le résultat d'une partie finie ;

@@ -1,12 +1,13 @@
-//! La recherche guidée par le réseau (`smallmobile_brain2::search`), comme joueur du labo.
+//! La recherche guidée par le réseau (`smallmobile_brain2::search`), comme joueur du labo : une
+//! recherche par coup, une décision entière (fin de tour, défense) en actions groupées.
 
-use smallmobile_kernel::Game;
+use smallmobile_kernel::{Action, Game};
 
 pub use smallmobile_brain2::search::*;
 
 use crate::agent::Agent;
 use crate::know::Knowledge;
-use crate::moves::Move;
+use crate::moves;
 use crate::rand::Rng;
 
 impl Agent for Az {
@@ -14,7 +15,7 @@ impl Agent for Az {
         self.describe()
     }
 
-    fn act(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Move {
-        self.search(g, k, rng, false).mv
+    fn act(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Vec<Action> {
+        moves::decision(g, k, |w, kw| self.search(w, kw, rng, false).mv).expect("coup de la recherche").0
     }
 }

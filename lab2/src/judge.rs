@@ -50,7 +50,7 @@ fn judged(g: &Game, k: &Knowledge, count: usize, az: &Az, rng: &mut Rng) -> Vec<
     let n = s.player_count();
     let me = s.actor().expect("un joueur doit agir");
     let mut policy = [ILLEGAL; KEYS];
-    for c in &moves::legal(g) {
+    for c in &moves::legal(g, k) {
         policy[c.key as usize] = 0;
     }
     let (mut w, mut gain) = ([0.0; MAX_PLAYERS], [0.0; MAX_PLAYERS]);
@@ -133,7 +133,7 @@ pub fn rejudge(
         let mut rng = Rng::new(mix(seed, log.deal));
         let mut count = 0;
         log.replay(&table, |g, k| {
-            if moves::legal(g).len() > 1 && rng.unit() < share {
+            if moves::legal(g, k).len() > 1 && rng.unit() < share {
                 out.extend(judged(g, k, rollouts, az, &mut rng));
                 count += 1;
             }

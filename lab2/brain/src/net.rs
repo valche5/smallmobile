@@ -7,7 +7,7 @@
 //!   a_i = moyenne des h_j voisins
 //!   h_i += n2(relu(n1([h_i, a_i, g])))
 //!   g   += g2(relu(g1([g, moyenne h, max h])))
-//! politique : par région  node_pol([h_i, g]) → 5 sortes de coups ; globale glob_pol2(relu(glob_pol1(g)))
+//! politique : par région  node_pol([h_i, g]) → 9 sortes de coups ; globale glob_pol2(relu(glob_pol1(g)))
 //! valeur    : val2(relu(val1([g, moyenne h]))) → 5 logits de victoire, 5 gains de pièces (÷ 50)
 //! ```
 //!
@@ -24,14 +24,12 @@ use std::path::Path;
 use smallmobile_kernel::Map;
 
 use crate::encode::{Encoded, GLOBAL, NODE, REGIONS};
-use crate::moves::KEYS;
+use crate::moves::{GLOBAL_KEYS, KEYS, KINDS};
 
-/// Sortes de coups par région, dans l'ordre des clés (`moves::REGION`).
-pub const REGION_KINDS: usize = 5;
+/// Sortes de coups par région, dans l'ordre des clés (`moves::Kind`).
+pub const REGION_KINDS: usize = KINDS.len();
 /// La tête de valeur prédit les pièces gagnées d'ici la fin divisées par ce nombre (`model.py`).
 const GAIN_SCALE: f32 = 50.0;
-/// Clés qui ne désignent pas une région.
-pub const GLOBAL_KEYS: usize = 128;
 
 /// Une couche linéaire, poids rangés entrée × sortie pour le calcul.
 struct Linear {
@@ -559,7 +557,14 @@ mod avx2 {
     /// `region_policy` pour 8 régions à la fois : chacune voit ses entrées dans l'ordre, et une entrée
     /// nulle ne change rien à sa somme, comme dans `accumulate_rows`.
     #[target_feature(enable = "avx2,fma")]
-    pub unsafe fn region_policy(w: &[f32], h: &[f32], r: usize, hd: usize, gpol: &[f32; 5], logits: &mut [f32]) {
+    pub unsafe fn region_policy(
+        w: &[f32],
+        h: &[f32],
+        r: usize,
+        hd: usize,
+        gpol: &[f32; super::REGION_KINDS],
+        logits: &mut [f32],
+    ) {
         // les régions côte à côte : entrée par entrée, 8 régions dans un vecteur
         let rp = r.next_multiple_of(8);
         let mut ht = vec![0.0f32; hd * rp];
@@ -569,13 +574,14 @@ mod avx2 {
             }
         }
         for i0 in (0..r).step_by(8) {
-            let mut acc: [__m256; 5] = std::array::from_fn(|kind| _mm256_set1_ps(gpol[kind]));
+            let mut acc: [__m256; super::REGION_KINDS] = std::array::from_fn(|kind| _mm256_set1_ps(gpol[kind]));
             for k in 0..hd {
-                // SAFETY : `k * rp + i0 + 8 <= hd * rp` ; `w` a au moins `hd` lignes de 5 (vérifié par l'appelant)
+                // SAFETY : `k * rp + i0 + 8 <= hd * rp` ; `w` a au moins `hd` lignes de `REGION_KINDS` (vérifié par l'appelant)
                 let x = unsafe { _mm256_loadu_ps(ht.as_ptr().add(k * rp + i0)) };
                 let used = _mm256_cmp_ps::<_CMP_NEQ_UQ>(x, _mm256_setzero_ps());
                 for (kind, acc) in acc.iter_mut().enumerate() {
-                    let sum = _mm256_add_ps(*acc, _mm256_mul_ps(x, _mm256_set1_ps(w[k * 5 + kind])));
+                    let wk = w[k * super::REGION_KINDS + kind];
+                    let sum = _mm256_add_ps(*acc, _mm256_mul_ps(x, _mm256_set1_ps(wk)));
                     *acc = _mm256_blendv_ps(*acc, sum, used);
                 }
             }

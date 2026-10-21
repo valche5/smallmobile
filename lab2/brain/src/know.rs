@@ -16,8 +16,9 @@
 use smallmobile_kernel::action::{Event, Journal, Logged};
 use smallmobile_kernel::ids::MAX_PLAYERS;
 use smallmobile_kernel::state::Occupant;
-use smallmobile_kernel::{Game, State};
+use smallmobile_kernel::{Game, Phase, State};
 
+use crate::moves::{Kind, Move, Redeploy};
 use crate::rand::Rng;
 
 /// Ce qu'un joueur attentif sait : le nombre de cartes connues au fond de chaque pioche, et ce que
@@ -27,6 +28,9 @@ pub struct Knowledge {
     pub race_tail: usize,
     pub power_tail: usize,
     pub history: History,
+    /// Où en est la fin de tour en cours, découpée en coups (`moves::Redeploy`) : rien d'un
+    /// redéploiement joué en actions du noyau.
+    pub redeploy: Redeploy,
 }
 
 /// Les habitudes d'un joueur (`History::habits`) : des comptes depuis le début de la partie.
@@ -171,13 +175,31 @@ impl Knowledge {
         self.race_tail = (self.race_tail + ret.returned).min(after.race_deck.len());
         self.power_tail = (self.power_tail + ret.returned).min(after.power_deck.len());
         self.history = ret.history;
+        if after.phase != Phase::Redeploy {
+            self.redeploy = Redeploy::default();
+        }
+    }
+
+    /// Joue une action du noyau en suivant ce qui est su.
+    pub fn apply(&mut self, g: &mut Game, a: &smallmobile_kernel::Action) -> Result<(), smallmobile_kernel::Reason> {
+        let mut ret = self.journal(&g.state);
+        g.apply(a, &mut ret)?;
+        self.observe(ret, &g.state);
+        Ok(())
     }
 
     /// Joue un coup en suivant ce qui est su.
-    pub fn play(&mut self, g: &mut Game, mv: &crate::moves::Move) -> Result<(), smallmobile_kernel::Reason> {
+    pub fn play(&mut self, g: &mut Game, mv: &Move) -> Result<(), smallmobile_kernel::Reason> {
         let mut ret = self.journal(&g.state);
         crate::moves::play(g, mv, &mut ret)?;
         self.observe(ret, &g.state);
+        if g.state.phase == Phase::Redeploy {
+            match mv {
+                Move::Lift => self.redeploy.lifted = true,
+                Move::Region(Kind::Token, _) => self.redeploy.powers_done = true,
+                _ => {}
+            }
+        }
         Ok(())
     }
 }

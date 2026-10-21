@@ -32,6 +32,7 @@ dependencies = [
 name = "smallmobile-lab2"
 version = "0.1.0"
 dependencies = [
+ "smallmobile-brain1",
  "smallmobile-brain2",
  "smallmobile-kernel",
 ]

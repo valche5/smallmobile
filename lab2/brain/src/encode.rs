@@ -333,14 +333,18 @@ mod tests {
                 generated.regions.iter().enumerate().filter(|(_, r)| r.lost_tribe).map(|(i, _)| i).collect();
             let levels = vec![Level::Normal; n];
             let mut g = Game::create(&map, lost, &levels, generated.rounds, game as u32, &mut NoJournal);
-            let (mut k, mut by_action) = (Knowledge::default(), Knowledge::default());
+            let (mut k, mut by_action, mut by_move) =
+                (Knowledge::default(), Knowledge::default(), Knowledge::default());
             let mut events: Vec<Logged> = Vec::new();
             while g.state.phase != Phase::GameOver {
-                let legal = moves::legal(&g);
+                let legal = moves::legal(&g, &by_move);
                 let m = legal[rng.below(legal.len())].mv;
+                // coup par coup, en suivant la fin de tour
+                let mut played = g;
+                by_move.play(&mut played, &m).unwrap();
                 // action par action, avec un journal neuf pour chacune
                 let mut w = g;
-                for a in moves::actions(&g, &m).unwrap() {
+                for a in moves::actions(&g, &m) {
                     let mut ret = by_action.journal(&w.state);
                     w.apply(&a, &mut ret).unwrap();
                     by_action.observe(ret, &w.state);
@@ -349,7 +353,9 @@ mod tests {
                 moves::play(&mut g, &m, &mut Both(&mut ret, &mut events)).unwrap();
                 k.observe(ret, &g.state);
                 assert_eq!(g.state, w.state);
-                assert_eq!(k, by_action, "même histoire coup par coup et action par action");
+                assert_eq!(g.state, played.state);
+                assert_eq!(k.history, by_action.history, "même histoire coup par coup et action par action");
+                assert_eq!(k.history, by_move.history);
             }
             let h = &k.history;
             for q in 0..n {
