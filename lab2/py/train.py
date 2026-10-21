@@ -8,7 +8,8 @@ Cibles : la politique (politique améliorée de la recherche à la racine, Gumbe
 victoire (part de chaque joueur à la fin de la partie) et, en appoint, les pièces gagnées d'ici la
 fin. Les positions sont vues du joueur qui agit.
 
-Recette fixe, reprise de lab1 : AdamW, taux 5e-4 en un cycle, 24 000 lots de 512 positions.
+Recette fixe, reprise de lab1 : AdamW, taux 5e-4 en un cycle, 24 000 lots de 512 positions, mais
+au plus 4 passages sur les données.
 """
 
 import argparse
@@ -27,6 +28,8 @@ LR = 5e-4
 WEIGHT_DECAY = 1e-4
 BATCH = 512
 STEPS = 24_000
+# au-delà, la valeur apprend les parties par cœur (un seul résultat pour toutes leurs positions)
+PASSES = 4
 # poids des pièces gagnées dans la perte
 GAIN_WEIGHT = 0.25
 # part des parties gardées pour la validation (`in_validation`)
@@ -98,8 +101,9 @@ def main():
     net = (load_net(args.init) if args.init else Net()).to(device)
     opt = torch.optim.AdamW(net.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     per_epoch = math.ceil(len(train_idx) / BATCH)
-    epochs = math.ceil(STEPS / per_epoch)
-    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=LR, total_steps=STEPS, pct_start=0.1)
+    steps = min(STEPS, PASSES * per_epoch)
+    epochs = math.ceil(steps / per_epoch)
+    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=LR, total_steps=steps, pct_start=0.1)
     done = 0
 
     for epoch in range(epochs):
@@ -109,7 +113,7 @@ def main():
         count = 0
         train = rng.permutation(train_idx)
         for b in batches(recs, train, BATCH, device):
-            if done == STEPS:
+            if done == steps:
                 break
             done += 1
             pol, val, gain, acc, brier = losses(net, b)
@@ -130,7 +134,7 @@ def main():
                 vc += len(b["players"])
         t, v = sums / max(count, 1), vs / max(vc, 1)
         print(
-            f"époque {epoch + 1}/{epochs} ({time.time() - start:.0f} s, {done}/{STEPS} mises à jour) | entraînement : "
+            f"époque {epoch + 1}/{epochs} ({time.time() - start:.0f} s, {done}/{steps} mises à jour) | entraînement : "
             f"politique {t[0]:.3f} valeur {t[1]:.3f} pièces {t[2]:.3f} précision {t[3]:.1%} | validation : "
             f"politique {v[0]:.3f} valeur {v[1]:.3f} pièces {v[2]:.3f} précision {v[3]:.1%} brier {v[4]:.3f}",
             flush=True,
