@@ -98,4 +98,48 @@ jetons sur une seule région. Le calcul va plutôt à plus de parties réelles.
 
 ## Résultats
 
-Aucun pour l'instant.
+### gen1 (21 octobre)
+
+Scripts `lab2/runs/gen1-*.sh` (hors Git, aussi dans le bucket), journal `lab2/runs/gen1/log.txt`.
+Machine `c7a.16xlarge` Spot à 0,733 $/h, eu-north-1a, à partir de 03:47.
+
+- **Données** : 20 000 parties de gen0 (`n=200`, bruit de Gumbel, recherches courtes à 50 % à
+  `n=50`), graines 20 000 000 à 20 000 039, 19 s par morceau de 500 parties sur 64 cœurs ;
+  10 000 parties à tables variées (Normale, Difficile, les 5 styles ; l'IA qui apprend à chaque
+  place avec une chance sur deux), graines 22 000 000 à 22 000 019, 11 s par morceau. 16 Go et
+  4,2 Go (`lab2/data/gen1`, `gen1-mixed`, dans le bucket), 3,37 millions de positions de 30 000
+  parties, environ 112 positions par partie.
+- **Incidents** : le rejugement (10 % des positions, 32 fins) a tourné sur 17 morceaux avant
+  d'être supprimé (72 s par morceau, voir plus haut ; données effacées) ; arrêt au morceau c33 sur
+  un coup impossible dans l'arbre (marché rempli de plusieurs cartes, `moves::chance`, corrigé et
+  testé ; les morceaux d'avant gardés, le défaut ne touchait que ces cas rares) ; script
+  d'entraînement arrêté par `SIGPIPE` (`find | sort | head` avec `pipefail`).
+- **Entraînement** depuis gen0, recette fixe (24 000 lots de 512, 4 époques), 18 min. PyTorch et
+  Rust concordent (5·10⁻⁵). Validation sur 1 500 parties, époques 1 → 4 : politique 1,432 →
+  1,426, précision 43,6 % → 44,0 % ; **valeur 1,005 → 1,024 (en hausse) alors qu'elle baisse à
+  l'entraînement (0,984 → 0,911)** : la valeur sur-apprend, chaque partie vue 4 fois avec un seul
+  résultat pour toutes ses positions. Plus de parties par génération (ou moins de passages) à
+  partir de gen2.
+- **Arènes** (920 donnes chacune, 230 par taille ; scores du protocole, tailles à poids égaux,
+  `labtools/score.py` ; résultats `lab2/runs/gen1/arena-*.tsv`) :
+
+  | Joueur testé | Champ (graine) | Score | Par taille (2, 3, 4, 5 j.) |
+  | --- | --- | --- | --- |
+  | gen1, n=200 | gen0, n=200 (1001) | −0,4 ± 1,6 | −2,6, −1,9, +2,1, +0,8 |
+  | gen1, n=200 | Difficile (1002) | +20,6 ± 1,6 | +34,0, +12,6, +17,6, +18,3 |
+  | gen1, n=200 | Normale (1003) | +24,7 ± 1,6 | +44,6, +13,9, +19,3, +21,0 |
+  | gen1, n=800 | lab1/gen11, n=200 (1004) | −15,6 ± 1,3 | −21,4, −13,6, −14,3, −13,2 |
+  | gen0, n=800 | lab1/gen11, n=200 (1004) | −13,3 ± 1,3 | −16,8, −14,6, −11,4, −10,3 |
+
+  Mêmes donnes face à lab1 : gen1 − gen0 = −2,3 ± 1,8. Temps par décision : 20 ms à n=200,
+  71 à 76 ms à n=800 (p95 240 à 260 ms), sur une machine pleine. 122 min de machine, 1,53 $.
+
+**Conclusion de gen1 : aucun progrès sur gen0, et lab2 est nettement plus faible que lab1**
+(environ −14 points face à son Expert dans les conditions du jeu ; face à Difficile, +21 contre
+environ +47 à l'ancien score pour les derniers réseaux de lab1). Il bat très nettement Normale et
+Difficile à 2 joueurs, beaucoup moins à 3, 4 et 5. gen0 reste l'Expert du jeu ; gen1 n'est pas
+gardé dans `lab2/nets/` (`lab2/runs/gen1/gen1.bin` et le bucket). Pistes, à départager avant
+toute nouvelle génération : la valeur seule voit trop peu loin (fins simulées retirées, et un tour
+coûte maintenant 10 à 20 décisions de l'arbre) ; la valeur héritée de gen11 juge mal les fins de
+tour à moitié jouées, et gen1 l'a sur-apprise ; ou les cibles d'une recherche guidée par une
+mauvaise valeur n'apprennent rien.
