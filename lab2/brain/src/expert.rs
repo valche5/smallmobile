@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use smallmobile_kernel::{Action, Game, Reason};
 
-use crate::know::{Knowledge, determinize};
+use crate::know::Knowledge;
 use crate::moves;
 use crate::net::Net;
 use crate::rand::{Rng, mix};
@@ -28,7 +28,7 @@ pub struct Decision {
 
 impl Expert {
     pub fn new(net: Arc<Net>, iterations: usize) -> Expert {
-        Expert { search: Az::new(Config { iterations, ..Config::default() }, net, "expert".into()) }
+        Expert { search: Az::new(Config { iterations }, net, "expert".into()) }
     }
 
     /// Le prochain coup du joueur qui doit agir, découpé en actions du noyau. L'Expert ne voit que ce
@@ -37,8 +37,7 @@ impl Expert {
     pub fn decide(&self, g: &Game, seed: u64) -> Result<Decision, Reason> {
         let k = Knowledge::of(&g.state);
         let mut rng = Rng::new(mix(seed, g.state.seq as u64));
-        let world = determinize(g, &k, &mut rng);
-        let found = self.search.search(&world, &k, &mut rng);
+        let found = self.search.search(g, &k, &mut rng, false);
         let iterations = if found.value.is_nan() { 0 } else { self.search.cfg.iterations };
         Ok(Decision { actions: moves::actions(g, &found.mv)?, value: found.value, iterations })
     }

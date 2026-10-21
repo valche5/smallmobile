@@ -74,10 +74,7 @@ class Layer(nn.Module):
 
 
 class Net(nn.Module):
-    """`behaviour` : la tête « coup réel » (le coup que le joueur qui agit va vraiment jouer, d'après
-    la position et son histoire dans la partie), de même forme que la politique."""
-
-    def __init__(self, hidden=64, layers=4, behaviour=True):
+    def __init__(self, hidden=64, layers=4):
         super().__init__()
         h = self.hidden = hidden
         self.node_in = nn.Linear(NODE, h)
@@ -86,11 +83,6 @@ class Net(nn.Module):
         self.node_pol = nn.Linear(2 * h, REGION_KINDS)
         self.glob_pol1 = nn.Linear(h, h)
         self.glob_pol2 = nn.Linear(h, GLOBAL_KEYS)
-        self.behaviour = behaviour
-        if behaviour:
-            self.beh_node = nn.Linear(2 * h, REGION_KINDS)
-            self.beh_glob1 = nn.Linear(h, h)
-            self.beh_glob2 = nn.Linear(h, GLOBAL_KEYS)
         self.val1 = nn.Linear(2 * h, h)
         self.val2 = nn.Linear(h, 10)
         node, glob = scales()
@@ -100,8 +92,7 @@ class Net(nn.Module):
     def forward(self, node, glob, adj, regions):
         """node (B, R, NODE) u8 ; glob (B, GLOBAL) u8 ; adj (B, R, R) 0/1 ; regions (B,) nombre de régions.
 
-        Renvoie les logits des coups (B, KEYS), la tête de valeur (B, 10) et les logits de la tête
-        « coup réel » (B, KEYS ; None sans elle)."""
+        Renvoie les logits des coups (B, KEYS) et la tête de valeur (B, 10)."""
         B, R, _ = node.shape
         mask = (torch.arange(R, device=node.device)[None, :] < regions[:, None]).float()  # (B, R)
         h = self.node_in(node.float() * self.node_scale) * mask[..., None]
@@ -118,31 +109,15 @@ class Net(nn.Module):
             g = g + layer.g2(F.relu(layer.g1(torch.cat([g, mean, mx], -1))))
         hg = torch.cat([h, g[:, None].expand(B, R, -1)], -1)
 
-        def policy(node_pol, glob_pol1, glob_pol2):
-            logits = torch.full((B, KEYS), -1e9, device=node.device)
-            logits[:, :GLOBAL_KEYS] = glob_pol2(F.relu(glob_pol1(g)))
-            per_region = node_pol(hg)  # (B, R, 5)
-            for kind in range(REGION_KINDS):
-                start = GLOBAL_KEYS + kind * 64
-                logits[:, start : start + R] = per_region[:, :, kind]
-            return logits
-
-        logits = policy(self.node_pol, self.glob_pol1, self.glob_pol2)
-        beh = policy(self.beh_node, self.beh_glob1, self.beh_glob2) if self.behaviour else None
+        logits = torch.full((B, KEYS), -1e9, device=node.device)
+        logits[:, :GLOBAL_KEYS] = self.glob_pol2(F.relu(self.glob_pol1(g)))
+        per_region = self.node_pol(hg)  # (B, R, REGION_KINDS)
+        for kind in range(REGION_KINDS):
+            start = GLOBAL_KEYS + kind * 64
+            logits[:, start : start + R] = per_region[:, :, kind]
         mean = h.sum(1) / count
         value = self.val2(F.relu(self.val1(torch.cat([g, mean], -1))))
-        return logits, value, beh
-
-
-def with_behaviour(weights):
-    """Les poids d'un réseau, avec la tête « coup réel » : absente, elle part de la politique (les
-    autres jouent comme le réseau), à apprendre."""
-    assert weights["glob_in.weight"].shape[1] == GLOBAL, "réseau d'un autre encodage"
-    out = dict(weights)
-    for beh, pol in (("beh_node", "node_pol"), ("beh_glob1", "glob_pol1"), ("beh_glob2", "glob_pol2")):
-        for part in ("weight", "bias"):
-            out.setdefault(f"{beh}.{part}", weights[f"{pol}.{part}"].clone())
-    return out
+        return logits, value
 
 
 def unpack_adj(bits, R=REGIONS):
@@ -150,6 +125,28 @@ def unpack_adj(bits, R=REGIONS):
     b = bits.view(torch.int64)
     shifts = torch.arange(R, device=bits.device, dtype=torch.int64)
     return ((b[..., None] >> shifts) & 1).float()
+
+
+def load(path) -> Net:
+    """Un réseau écrit par `export` (format SMNN1) ; largeur et nombre de couches lus dans le fichier."""
+    tensors = {}
+    with open(path, "rb") as f:
+        assert f.read(5) == b"SMNN1", f"{path} : pas un fichier de poids SMNN1"
+        (count,) = struct.unpack("<I", f.read(4))
+        for _ in range(count):
+            (size,) = struct.unpack("<I", f.read(4))
+            name = f.read(size).decode()
+            (ndim,) = struct.unpack("<I", f.read(4))
+            shape = struct.unpack(f"<{ndim}I", f.read(4 * ndim))
+            data = np.frombuffer(f.read(4 * int(np.prod(shape))), dtype="<f4").reshape(shape)
+            tensors[name] = torch.from_numpy(data.copy())
+    layers = sum(1 for k in tensors if k.endswith(".n1.weight"))
+    net = Net(tensors["node_in.weight"].shape[0], layers)
+    # les échelles des entrées viennent de `scales` : celles du fichier doivent être les mêmes
+    for name, scale in (("node_scale", net.node_scale), ("global_scale", net.global_scale)):
+        assert torch.equal(tensors.pop(name), scale), f"{path} : échelles des entrées différentes ({name})"
+    net.load_state_dict(tensors)
+    return net
 
 
 def export(net: Net, path):

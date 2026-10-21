@@ -5,7 +5,6 @@
 //! - choix du peuple, déclin, chaque conquête, dé, abandon, fin des conquêtes : une action chacun ;
 //! - fin de tour : héros, forteresse et campements (placés selon la menace), placement complet des
 //!   jetons parmi quelques plans, paix des Diplomates, déclin des Robustes, en un seul coup ;
-//!   La fin de tour de l'IA Normal du jeu (placement appris) est proposée en plus ;
 //! - défense : un plan pour les jetons rendus, puis la fin de la défense.
 //!
 //! Chaque coup porte une clé (`Key`) qui le désigne indépendamment des détails : « le 3e plan de
@@ -18,7 +17,7 @@ use smallmobile_kernel::deploy::Plan;
 use smallmobile_kernel::ids::{MAX_REGIONS, Power, Race};
 use smallmobile_kernel::rules::TargetKind;
 use smallmobile_kernel::state::Stage;
-use smallmobile_kernel::{Action, Ai, Game, Level, Phase, Reason, Restrictions, Tuning};
+use smallmobile_kernel::{Action, Game, Phase, Reason};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Move {
@@ -28,8 +27,6 @@ pub enum Move {
     Finish(Finish),
     /// Jetons rendus replacés (ajouts par région), puis fin de la défense.
     Defend(Plan),
-    /// Fin de tour jouée par l'IA Normal du jeu.
-    Auto,
 }
 
 /// Désigne un coup d'un monde possible à l'autre ; moins de `KEYS`.
@@ -41,7 +38,6 @@ const SKIP_PICK: Key = 6;
 const DECLINE: Key = 7;
 const END_CONQUEST: Key = 8;
 const BERSERK: Key = 9;
-const AUTO: Key = 10;
 /// Plus plan × 12 + paix × 2 + Robustes ; paix : 0 (aucune), ou la cible relativement au joueur
 /// qui finit son tour (1 : le suivant), comme le réseau voit les joueurs.
 pub const FINISH: Key = 16;
@@ -252,7 +248,6 @@ fn finishes(g: &Game, out: &mut Moves) {
             }
         }
     }
-    push(out, AUTO, Move::Auto);
 }
 
 fn defenses(g: &Game, out: &mut Moves) {
@@ -292,19 +287,22 @@ pub fn play(g: &mut Game, m: &Move, journal: &mut impl Journal) -> Result<(), Re
             }
             g.apply(&Action::EndDefense, journal)
         }
-        Move::Auto => {
-            let tuning = Tuning::default();
-            let ai = Ai::new(&tuning);
-            let pid = g.state.current;
-            let level = g.state.players[pid].level;
-            g.state.players[pid].level = Level::Normal;
-            let mut result = Ok(());
-            while result.is_ok() && g.state.phase == Phase::Redeploy {
-                result = ai.decide(g, Restrictions::default()).and_then(|a| g.apply(&a, journal));
-            }
-            g.state.players[pid].level = level;
-            result
+    }
+}
+
+/// Le résultat public du hasard d'un coup qui vient d'être joué (`g` : la partie après le coup) :
+/// la carte arrivée au marché après un choix de peuple, la réussite d'une conquête au dé, la valeur
+/// du dé des Berserks ; 0 pour un coup sans hasard. Deux mondes possibles qui diffèrent sur ce
+/// résultat donnent deux valeurs différentes ; le reste de la partie n'en dépend pas.
+pub fn chance(g: &Game, m: &Move) -> u64 {
+    let s = &g.state;
+    match m {
+        Move::Act(Action::Pick { .. }) => {
+            s.market.last().map_or(1, |c| 2 + (c.race.index() * Power::COUNT + c.power.index()) as u64)
         }
+        Move::Act(Action::Reinforce { .. }) => 1 + s.last_die.and_then(|d| d.success).unwrap_or(false) as u64,
+        Move::Act(Action::BerserkRoll) => 1 + s.turn.berserk_die.unwrap_or(0) as u64,
+        _ => 0,
     }
 }
 
@@ -329,17 +327,6 @@ pub fn actions(g: &Game, m: &Move) -> Result<Vec<Action>, Reason> {
                 }
             }
             out.push(Action::EndDefense);
-        }
-        Move::Auto => {
-            let tuning = Tuning::default();
-            let ai = Ai::new(&tuning);
-            let mut w = *g;
-            w.state.players[w.state.current].level = Level::Normal;
-            while w.state.phase == Phase::Redeploy {
-                let a = ai.decide(&w, Restrictions::default())?;
-                w.apply(&a, &mut smallmobile_kernel::NoJournal)?;
-                out.push(a);
-            }
         }
     }
     Ok(out)
@@ -389,6 +376,5 @@ pub fn describe(g: &Game, m: &Move) -> String {
                 plan.iter().enumerate().filter(|(_, n)| **n > 0).map(|(r, n)| format!("+{n} en {r}")).collect();
             format!("défense : {}", if added.is_empty() { "rien".into() } else { added.join(", ") })
         }
-        Move::Auto => "fin de tour à la manière de l'IA Normal".into(),
     }
 }

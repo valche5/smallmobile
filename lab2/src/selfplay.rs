@@ -1,23 +1,23 @@
-//! Parties d'entraînement : une IA qui cherche joue contre elle-même, et chaque position cherchée
-//! devient un exemple pour le réseau (ce qu'elle voyait, les visites de chaque coup, puis le résultat
-//! final).
+//! Parties d'entraînement : une IA qui cherche joue contre elle-même, et chaque position cherchée à
+//! fond devient un exemple pour le réseau (ce qu'elle voyait, la politique améliorée de la
+//! recherche, puis le résultat final).
 //!
 //! Format des fichiers : des enregistrements de taille fixe (`RECORD` octets), lus en Python par
 //! `numpy.fromfile` avec le type décrit dans `lab2/py/data.py` :
 //!
 //! ```text
-//! u8 joueurs, u8 régions, u8 pleine recherche
-//! u8 drapeaux : 1, table variée (d'autres joueurs que l'IA qui apprend) ; 2, coup observé (`Record::observed`)
+//! u8 joueurs, u8 régions
+//! u8 drapeaux : 1, table variée (d'autres joueurs que l'IA qui apprend)
 //! f32 × 5  victoire de chaque joueur relatif (part, 0 à 1)
 //! f32 × 5  pièces gagnées d'ici la fin par chaque joueur relatif
-//! u16 × KEYS  visites de chaque coup (65535 : coup impossible)
+//! u16 × KEYS  politique améliorée de chaque coup, × `PROBABILITY` (65535 : coup impossible ; que
+//!             des 0 : pas de cible de politique, position rejugée)
 //! u8 × REGIONS × 8  voisines (un bit par région, 64 bits par région)
 //! u8 × REGIONS × NODE  entrées par région
 //! u8 × GLOBAL  entrées de la partie
-//! u16      clé du coup joué (65535 : inconnu)
 //! ```
 //!
-//! Fichiers `*.v6.bin` (`SUFFIX`). À côté de chacun : `games_file` (positions de chaque partie) et
+//! Fichiers `*.pos` (`SUFFIX`). À côté de chacun : `games_file` (positions de chaque partie) et
 //! `moves_file` (de quoi rejouer chaque partie, `GameLog`).
 
 use std::fs::File;
@@ -38,36 +38,32 @@ use crate::moves::{self, KEYS};
 use crate::rand::{Rng, mix};
 use crate::table::{Outcome, Table};
 
-pub const RECORD: usize = 4 + 20 + 20 + KEYS * 2 + REGIONS * 8 + REGIONS * NODE + GLOBAL + 2;
+pub const RECORD: usize = 3 + 20 + 20 + KEYS * 2 + REGIONS * 8 + REGIONS * NODE + GLOBAL;
 /// Le suffixe des fichiers de positions.
-pub const SUFFIX: &str = ".v6.bin";
+pub const SUFFIX: &str = ".pos";
 pub const ILLEGAL: u16 = u16::MAX;
+/// Une probabilité de la politique améliorée est enregistrée multipliée par ce nombre.
+pub const PROBABILITY: f32 = 60_000.0;
 
 /// Un exemple pour le réseau, cibles en joueurs relatifs (0 : celui qui agit).
 pub struct Record<'a> {
     pub enc: &'a Encoded,
     /// La partie se joue à une table variée (`Field`).
     pub mixed: bool,
-    /// Le coup d'un autre joueur que l'IA qui apprend, sans recherche : seule la cible « coup réel »
-    /// (`played`) compte ; la valeur n'en apprend rien.
-    pub observed: bool,
-    /// La clé du coup joué (`ILLEGAL` : inconnu).
-    pub played: u16,
     pub map: &'a smallmobile_kernel::Map,
     pub win: [f32; MAX_PLAYERS],
     pub gain: [f32; MAX_PLAYERS],
-    pub visits: &'a [u16; KEYS],
+    pub policy: &'a [u16; KEYS],
 }
 
 impl Record<'_> {
     pub fn bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(RECORD);
-        let flags = self.mixed as u8 | (self.observed as u8) << 1;
-        buf.extend_from_slice(&[self.enc.players as u8, self.enc.regions as u8, 1, flags]);
+        buf.extend_from_slice(&[self.enc.players as u8, self.enc.regions as u8, self.mixed as u8]);
         for x in self.win.iter().chain(&self.gain) {
             buf.extend_from_slice(&x.to_le_bytes());
         }
-        for v in self.visits {
+        for v in self.policy {
             buf.extend_from_slice(&v.to_le_bytes());
         }
         for i in 0..REGIONS {
@@ -83,7 +79,6 @@ impl Record<'_> {
             buf.extend_from_slice(row);
         }
         buf.extend_from_slice(&self.enc.global);
-        buf.extend_from_slice(&self.played.to_le_bytes());
         debug_assert_eq!(buf.len(), RECORD);
         buf
     }
@@ -93,21 +88,16 @@ struct Pending {
     enc: Encoded,
     actor: usize,
     coins: [i32; MAX_PLAYERS],
-    visits: [u16; KEYS],
-    observed: bool,
-    played: u16,
+    policy: [u16; KEYS],
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
-    /// Les coups sont tirés au sort selon les visites jusqu'à cette manche comprise (exploration).
-    pub sample_rounds: i32,
     /// Part des coups cherchés à fond (et enregistrés) ; les autres le sont en `fast` itérations
-    /// (« playout cap randomization » de KataGo : plus de parties pour le même calcul).
+    /// (« playout cap randomization » de KataGo : plus de parties pour le même calcul). Toutes les
+    /// recherches de l'auto-apprentissage tirent leurs coups de racine avec le bruit de Gumbel.
     pub full_share: f64,
     pub fast: usize,
-    /// Aux tables variées, enregistrer aussi les coups des autres joueurs (`Record::observed`).
-    pub observe: bool,
 }
 
 /// Une partie jouée : son résultat, le nombre de positions écrites, les actions du noyau de chaque
@@ -150,10 +140,8 @@ impl Field<'_> {
     }
 }
 
-/// Joue une partie ; écrit un enregistrement par position cherchée (plus d'un coup possible) de
-/// l'IA qui apprend, et avec `opts.observe` par coup des autres joueurs qui est l'un de ses coups
-/// possibles (l'IA du jeu, coup par coup, ne finit pas son tour ni ne défend comme un coup groupé
-/// de `moves`). `seats` : `Field::seats`.
+/// Joue une partie ; écrit un enregistrement par position cherchée à fond (plus d'un coup
+/// possible) de l'IA qui apprend. `seats` : `Field::seats`.
 #[allow(clippy::too_many_arguments)]
 pub fn play(
     table: &Table,
@@ -174,63 +162,20 @@ pub fn play(
         let legal = moves::legal(&g);
         let actor = g.state.actor().expect("un joueur doit agir");
         let other = usize::try_from(seats[actor]).ok().map(|i| field.agents[i]);
-        let full = rng.unit() < opts.full_share;
         let mv = if legal.len() == 1 {
             legal[0].mv
         } else if let Some(agent) = other {
-            let mv = agent.act(&g, &k, &mut rng.fork());
-            let played = if opts.observe {
-                played_key(&g, &legal, &moves::actions(&g, &mv).expect("coup découpé en actions"))
-            } else {
-                ILLEGAL
-            };
-            if played != ILLEGAL {
-                let mut visits = [ILLEGAL; KEYS];
-                for c in &legal {
-                    visits[c.key as usize] = 0;
-                }
-                pending.push(Pending { enc: encode(&g, &k), actor, coins: coins(&g), visits, observed: true, played });
-            }
-            mv
-        } else if !full {
-            az.search_with(&g, &k, rng, opts.fast, 0.0).mv
+            agent.act(&g, &k, &mut rng.fork())
+        } else if rng.unit() >= opts.full_share {
+            az.search_with(&g, &k, rng, opts.fast, true).mv
         } else {
-            let s = az.search(&g, &k, rng);
-            let mut visits = [ILLEGAL; KEYS];
-            for c in &legal {
-                visits[c.key as usize] = 0;
+            let s = az.search(&g, &k, rng, true);
+            let mut policy = [ILLEGAL; KEYS];
+            for &(key, p) in &s.policy {
+                policy[key as usize] = (p * PROBABILITY).round() as u16;
             }
-            for &(key, n) in &s.visits {
-                if visits[key as usize] != ILLEGAL {
-                    visits[key as usize] = n.min(60_000) as u16;
-                }
-            }
-            pending.push(Pending {
-                enc: encode(&g, &k),
-                actor,
-                coins: coins(&g),
-                visits,
-                observed: false,
-                played: ILLEGAL,
-            });
-            let chosen = if g.state.round <= opts.sample_rounds {
-                let total: u32 = s.visits.iter().map(|v| v.1).sum();
-                let mut pick = rng.below(total.max(1) as usize) as u32;
-                let mut chosen = s.mv;
-                for &(key, n) in &s.visits {
-                    if pick < n {
-                        chosen = legal.iter().find(|c| c.key == key).map_or(s.mv, |c| c.mv);
-                        break;
-                    }
-                    pick -= n;
-                }
-                chosen
-            } else {
-                s.mv
-            };
-            let last = pending.last_mut().expect("position enregistrée");
-            last.played = played_key(&g, &legal, &moves::actions(&g, &chosen).expect("coup découpé en actions"));
-            chosen
+            pending.push(Pending { enc: encode(&g, &k), actor, coins: coins(&g), policy });
+            s.mv
         };
         played.push(moves::actions(&g, &mv).expect("coup découpé en actions"));
         k.play(&mut g, &mv).expect("coup possible");
@@ -245,27 +190,10 @@ pub fn play(
             win[r] = o.win[q] as f32;
             gain[r] = (o.coins[q] - p.coins[q]) as f32;
         }
-        let rec = Record {
-            enc: &p.enc,
-            mixed,
-            observed: p.observed,
-            played: p.played,
-            map: &table.map,
-            win,
-            gain,
-            visits: &p.visits,
-        };
+        let rec = Record { enc: &p.enc, mixed, map: &table.map, win, gain, policy: &p.policy };
         out.write_all(&rec.bytes())?;
     }
     Ok(Played { outcome: o, positions: pending.len(), moves: played, seats: seats.to_vec() })
-}
-
-/// La clé d'un coup qui donne ces actions, pour la cible « coup réel » : le premier des coups
-/// possibles `legal` qui les donne (deux coups peuvent revenir au même, comme un plan de placement
-/// et la fin de tour de l'IA du jeu) ; `ILLEGAL` si aucun. Ainsi la cible se retrouve à l'identique
-/// en rejouant la partie (`GameLog::played`).
-pub fn played_key(g: &Game, legal: &[moves::Choice], actions: &[Action]) -> u16 {
-    legal.iter().find(|c| moves::actions(g, &c.mv).is_ok_and(|a| a == actions)).map_or(ILLEGAL, |c| c.key)
 }
 
 /// Les pièces de chaque joueur.
@@ -379,16 +307,6 @@ impl GameLog {
         Ok(g)
     }
 
-    /// La clé du coup joué au coup numéro `step`, dans la position `g` où les coups possibles sont
-    /// `legal` : le coup possible qui donne les mêmes actions ; `ILLEGAL` s'il n'y en a pas (l'IA du
-    /// jeu, qui joue action par action, ne finit pas son tour ni ne défend comme un coup de `moves`).
-    pub fn played(&self, step: usize, g: &Game, legal: &[moves::Choice], table: &Table) -> u16 {
-        match self.moves.get(step).map(|mv| self.actions(mv, table)) {
-            Some(Ok(actions)) => played_key(g, legal, &actions),
-            _ => ILLEGAL,
-        }
-    }
-
     /// Les actions d'un coup (`moves`) de cette partie.
     pub fn actions(&self, mv: &[Vec<u32>], table: &Table) -> Result<Vec<Action>, String> {
         mv.iter()
@@ -477,7 +395,7 @@ pub fn read_record(rec: &[u8]) -> (Encoded, Vec<Vec<u8>>) {
     assert_eq!(rec.len(), RECORD);
     let players = rec[0] as usize;
     let regions = rec[1] as usize;
-    let mut at = 4 + 20 + 20 + KEYS * 2;
+    let mut at = 3 + 20 + 20 + KEYS * 2;
     let mut adj = Vec::with_capacity(regions);
     for i in 0..REGIONS {
         let bits = u64::from_le_bytes(rec[at..at + 8].try_into().expect("8 octets"));

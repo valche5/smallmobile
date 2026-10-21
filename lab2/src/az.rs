@@ -15,6 +15,6 @@ impl Agent for Az {
     }
 
     fn act(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Move {
-        self.search(g, k, rng).mv
+        self.search(g, k, rng, false).mv
     }
 }

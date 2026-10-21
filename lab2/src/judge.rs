@@ -33,7 +33,7 @@ pub fn judge(
     let mut evals = crate::az::Evals::default();
     for _ in 0..count {
         let w = determinize(g, k, rng);
-        let end = az.play_out(&mut evals, &w, k, rng);
+        let end = az.play_out(&mut evals, &w, k);
         let o = Outcome::of(&end);
         for q in 0..o.players {
             win[q] += o.win[q] as f32 / count as f32;
@@ -43,16 +43,15 @@ pub fn judge(
     (win, coins)
 }
 
-/// L'enregistrement d'une position jugée : cibles de valeur (aucun coup visité), et le coup joué
-/// ensuite dans la partie s'il est connu (`ILLEGAL` sinon).
-fn judged(g: &Game, k: &Knowledge, count: usize, az: &Az, played: u16, rng: &mut Rng) -> Vec<u8> {
+/// L'enregistrement d'une position jugée : cibles de valeur seulement (politique toute nulle).
+fn judged(g: &Game, k: &Knowledge, count: usize, az: &Az, rng: &mut Rng) -> Vec<u8> {
     let (win, finals) = judge(g, k, count, az, rng);
     let s = &g.state;
     let n = s.player_count();
     let me = s.actor().expect("un joueur doit agir");
-    let mut visits = [ILLEGAL; KEYS];
+    let mut policy = [ILLEGAL; KEYS];
     for c in &moves::legal(g) {
-        visits[c.key as usize] = 0;
+        policy[c.key as usize] = 0;
     }
     let (mut w, mut gain) = ([0.0; MAX_PLAYERS], [0.0; MAX_PLAYERS]);
     for r in 0..n {
@@ -61,7 +60,7 @@ fn judged(g: &Game, k: &Knowledge, count: usize, az: &Az, played: u16, rng: &mut
         gain[r] = finals[q] - s.players[q].coins as f32;
     }
     let enc = encode(g, k);
-    Record { enc: &enc, mixed: false, observed: false, played, map: g.map, win: w, gain, visits: &visits }.bytes()
+    Record { enc: &enc, mixed: false, map: g.map, win: w, gain, policy: &policy }.bytes()
 }
 
 /// Écrit des positions jugées en parallèle, un fichier par fil dans `dir` (et son `games_file`) :
@@ -133,15 +132,11 @@ pub fn rejudge(
         let table = log.table();
         let mut rng = Rng::new(mix(seed, log.deal));
         let mut count = 0;
-        let mut step = 0;
         log.replay(&table, |g, k| {
-            let legal = moves::legal(g);
-            if legal.len() > 1 && rng.unit() < share {
-                let played = log.played(step, g, &legal, &table);
-                out.extend(judged(g, k, rollouts, az, played, &mut rng));
+            if moves::legal(g).len() > 1 && rng.unit() < share {
+                out.extend(judged(g, k, rollouts, az, &mut rng));
                 count += 1;
             }
-            step += 1;
         })
         .map_err(std::io::Error::other)?;
         Ok(count)

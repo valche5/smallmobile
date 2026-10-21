@@ -5,12 +5,11 @@
 //!     [--stop 3]   (arrêt dès que le score du joueur testé est clairement 0 ou 3 points : test séquentiel)
 //! lab2 arena --table 'az:net=poids.bin|hard|normal' [--deals 100] [--out r.tsv]   (table fixe)
 //! lab2 speed --agent az:net=poids.bin,n=200 [--positions 12] [--seed 1]   (temps et empreinte des recherches)
-//! lab2 selfplay --agent az:net=poids.bin,noise=0.25 --games 1000 --out lab2/data/gen13 [--players 2,3,4,5]
-//!     [--sample-rounds 2] [--full-share 0.5 --fast 50]
-//!     [--field 'easy|normal:aggressive|az:net=gen11.bin,n=20' --mixed 0.5 [--observe 1]]   (tables variées ;
-//!     --observe : coups des autres joueurs enregistrés aussi, pour la tête « coup réel »)
-//! lab2 check-net --net poids.bin --data parties.v6.bin [--count 5]   (comparaison avec lab2/py/check.py)
-//! lab2 judge --games lab2/data/gen13 --out lab2/data/gen13-judged --judge az:net=poids.bin [--share 0.1] [--rollouts 32]
+//! lab2 selfplay --agent az:net=poids.bin --games 1000 --out lab2/data/gen1 [--players 2,3,4,5]
+//!     [--full-share 0.5 --fast 50]   (recherches avec bruit de Gumbel ; part des recherches complètes)
+//!     [--field 'easy|normal:aggressive|az:net=gen0.bin,n=20' --mixed 0.5]   (tables variées)
+//! lab2 check-net --net poids.bin --data parties.pos [--count 5]   (comparaison avec lab2/py/check.py)
+//! lab2 judge --games lab2/data/gen1 --out lab2/data/gen1-judged --judge az:net=poids.bin [--share 0.1] [--rollouts 32]
 //!     (positions de parties déjà jouées, fichiers .moves de lab2 selfplay, rejugées par le réseau)
 //! lab2 analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par labtools/export-room.ts)
 //! ```
@@ -45,12 +44,10 @@ fn usage() -> ! {
     );
     eprintln!("        lab2 arena --table 'A|B|B' [--deals N] [--threads N] [--seed S] [--out F]");
     eprintln!("        lab2 speed --agent az:… [--players 2,3,4,5] [--positions 12] [--seed S]");
-    eprintln!(
-        "        lab2 selfplay --agent az:… --games N --out DIR [--players 2,3,4,5] [--sample-rounds R] [--seed S]"
-    );
+    eprintln!("        lab2 selfplay --agent az:… --games N --out DIR [--players 2,3,4,5] [--seed S]");
     eprintln!("            [--full-share 0.25 --fast 50]   (part des recherches complètes, itérations des autres)");
     eprintln!("            [--field 'easy|hard|az:…' --mixed 0.5]   (tables variées : adversaires, part des parties)");
-    eprintln!("        lab2 check-net --net poids.bin --data parties.v6.bin [--count N]");
+    eprintln!("        lab2 check-net --net poids.bin --data parties.pos [--count N]");
     eprintln!("        lab2 judge --games DIR --out DIR --judge az:… [--share 0.1] [--rollouts 32] [--seed S]");
     eprintln!("        lab2 analyze --game partie.smk --agent az:net=poids.bin,n=20000");
     std::process::exit(2)
@@ -207,7 +204,7 @@ fn speed_cmd(opts: &HashMap<String, String>) {
         }
         let start = Instant::now();
         for (i, (g, k)) in positions.iter().enumerate() {
-            let s = az.search(g, k, &mut Rng::new(mix(seed, (100 * n + i) as u64)));
+            let s = az.search(g, k, &mut Rng::new(mix(seed, (100 * n + i) as u64)), false);
             decisions = fnv(decisions, format!("{:?}{:?}", s.mv, s.visits).as_bytes());
             for v in [s.value].iter().chain(&s.finals).chain(&s.wins) {
                 values = fnv(values, &v.to_bits().to_le_bytes());
@@ -237,12 +234,7 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
         games: get(opts, "games", 100),
         threads: get(opts, "threads", threads()),
         seed: get(opts, "seed", 1),
-        opts: selfplay::Options {
-            sample_rounds: get(opts, "sample-rounds", 2),
-            full_share: get(opts, "full-share", 1.0),
-            fast: get(opts, "fast", 50),
-            observe: get(opts, "observe", 0) == 1,
-        },
+        opts: selfplay::Options { full_share: get(opts, "full-share", 1.0), fast: get(opts, "fast", 50) },
     };
     // tables variées : les adversaires possibles, séparés par « | » (leur numéro dans les .moves)
     let others: Vec<Box<dyn Agent>> = opts.get("field").map_or(Vec::new(), |f| f.split('|').map(agent_named).collect());
@@ -276,11 +268,7 @@ fn check_net_cmd(opts: &HashMap<String, String>) {
             .take(8)
             .map(|k| format!("{k}:{:.4}", ev.logits[k]))
             .collect();
-        let behaviour = ev.behaviour.as_ref().map_or(String::new(), |b| {
-            let keys = (0..smallmobile_lab2::moves::KEYS).filter(|&k| b[k].is_finite()).take(8);
-            format!(" behaviour {}", keys.map(|k| format!("{k}:{:.4}", b[k])).collect::<Vec<_>>().join(" "))
-        });
-        println!("win {:?} gain {:?} logits {}{behaviour}", ev.win, ev.gain, legal.join(" "));
+        println!("win {:?} gain {:?} logits {}", ev.win, ev.gain, legal.join(" "));
     }
     eprintln!("{:.1} µs par évaluation", 1e6 * start.elapsed().as_secs_f64() / evals.max(1) as f64);
 }
@@ -311,7 +299,7 @@ fn analyze_cmd(opts: &HashMap<String, String>) {
     let k = smallmobile_lab2::know::Knowledge::default();
     let mut rng = smallmobile_lab2::rand::Rng::new(get(opts, "seed", 1));
     let start = Instant::now();
-    let s = az.search(&g, &k, &mut rng);
+    let s = az.search(&g, &k, &mut rng, false);
     let legal = moves::legal(&g);
     println!(
         "Joueur {} à jouer, manche {}/{} ({:.0} s de recherche)",
@@ -320,14 +308,19 @@ fn analyze_cmd(opts: &HashMap<String, String>) {
         g.state.max_rounds,
         start.elapsed().as_secs_f64()
     );
-    println!("Chance de victoire estimée : {:.1} %", 100.0 * s.value);
-    let mut rows: Vec<_> =
-        s.details.iter().zip(&s.visits).map(|(&(key, prior, q), &(_, n))| (n, key, prior, q)).collect();
+    println!("Chance de victoire estimée : {:.1} % ; coup choisi : {}", 100.0 * s.value, moves::describe(&g, &s.mv));
+    let mut rows: Vec<_> = s
+        .details
+        .iter()
+        .zip(&s.visits)
+        .zip(&s.policy)
+        .map(|((&(key, prior, q), &(_, n)), &(_, p))| (n, key, prior, q, p))
+        .collect();
     rows.sort_by_key(|r| std::cmp::Reverse(r.0));
-    println!("{:>8}  {:>7}  {:>8}  coup", "visites", "victoire", "a priori");
-    for (n, key, prior, q) in rows.iter().take(get(opts, "top", 12)) {
+    println!("{:>8}  {:>7}  {:>8}  {:>8}  coup", "visites", "valeur", "a priori", "amélioré");
+    for (n, key, prior, q, p) in rows.iter().take(get(opts, "top", 12)) {
         let mv = legal.iter().find(|c| c.key == *key).map(|c| moves::describe(&g, &c.mv)).unwrap_or_default();
-        println!("{n:>8}  {:>7.1} %  {:>7.1} %  {mv}", 100.0 * q, 100.0 * prior);
+        println!("{n:>8}  {:>7.1} %  {:>7.1} %  {:>7.1} %  {mv}", 100.0 * q, 100.0 * prior, 100.0 * p);
     }
 }
 

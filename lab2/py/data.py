@@ -12,29 +12,27 @@ NODE = 77
 # l'histoire des joueurs
 GLOBAL = 820
 ILLEGAL = 65535
-# drapeaux d'un enregistrement (champ `flags`) : table variée ; coup observé d'un autre joueur que
-# l'IA qui apprend, qui n'apprend que la tête « coup réel »
-MIXED, OBSERVED = 1, 2
+# drapeau d'un enregistrement (champ `flags`) : table variée
+MIXED = 1
 
 RECORD = np.dtype(
     [
         ("players", "u1"),
         ("regions", "u1"),
-        ("full", "u1"),
         ("flags", "u1"),
         ("win", "<f4", 5),
         ("gain", "<f4", 5),
-        ("visits", "<u2", KEYS),
+        # politique améliorée de la recherche, à une constante près (ILLEGAL : coup impossible ;
+        # que des 0 : pas de cible de politique, position rejugée)
+        ("policy", "<u2", KEYS),
         ("adj", "<u8", REGIONS),
         ("node", "u1", (REGIONS, NODE)),
         ("glob", "u1", GLOBAL),
-        # la clé du coup joué (ILLEGAL : inconnu)
-        ("played", "<u2"),
     ]
 )
-SUFFIX = ".v6.bin"
-# fichier `x.v6.bin.games` à côté de `x.v6.bin` : le nombre de positions de chaque partie, dans
-# l'ordre (u32 petit-boutiste)
+SUFFIX = ".pos"
+# fichier `x.pos.games` à côté de `x.pos` : le nombre de positions de chaque partie, dans l'ordre
+# (u32 petit-boutiste)
 GAMES = ".games"
 
 

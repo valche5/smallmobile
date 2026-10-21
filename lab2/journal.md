@@ -39,9 +39,27 @@ régions, 4 couches de 64), l'auto-apprentissage avec recherches courtes, les ta
 positions rejugées par des fins jouées par le réseau. La taille du réseau pourra augmenter si les
 mesures le demandent (accord de l'utilisateur, 21 octobre).
 
+## Système actuel
+
+- **Recherche** (`lab2/brain/src/search.rs`) : Gumbel AlphaZero. Racine : 16 coups au plus, tirés
+  selon logits + bruit de Gumbel (auto-apprentissage ; sans bruit ailleurs), halving séquentiel
+  (calendrier de mctx). Hors racine : sélection déterministe vers la politique améliorée
+  `softmax(logits + σ(q complétées))`, `σ = (50 + visites max) × 0,1 × q ramenée entre 0 et 1`,
+  valeur mêlée pour les coups jamais essayés (constantes de mctx). Nœuds = positions publiques,
+  suite d'un coup rangée par résultat de son hasard (`moves::chance` : carte arrivée au marché,
+  réussite du dé de renfort, dé des Berserks) ; un monde possible tiré par itération ; coups
+  forcés sans nœud. Feuille : valeur du réseau. Seul réglage : `n` (itérations).
+- **Vitesse** : 200 itérations en 18 ms en moyenne sur mini avec gen11 (lab1 : 231 ms), sur 24
+  positions de `lab2 speed --positions 6 --seed 3` (21 octobre).
+- **Auto-apprentissage** : bruit de Gumbel dans toutes les recherches ; le coup joué est celui de
+  la recherche ; recherches courtes (`--full-share`, `--fast`) gardées. Positions `*.pos` : cible
+  de politique = politique améliorée de la racine.
+- **Entraînement** (`lab2/py/train.py`) : politique, victoire, pièces ; poids lus et écrits en
+  SMNN1 (`.bin`), plus de `.pt`.
+
 ## Plan
 
-1. Recherche : Gumbel AlphaZero et nœuds de hasard.
+1. ~~Recherche : Gumbel AlphaZero et nœuds de hasard.~~ Fait le 21 octobre.
 2. Coups : pouvoirs et jetons un par un, paix et déclin à part ; l'Expert du jeu renvoie sa fin
    de tour en actions groupées.
 3. Réseau (clés des nouveaux coups), format des positions, entraînement ; réseau de départ gen0

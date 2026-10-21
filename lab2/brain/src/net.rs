@@ -9,13 +9,9 @@
 //!   g   += g2(relu(g1([g, moyenne h, max h])))
 //! politique : par région  node_pol([h_i, g]) → 5 sortes de coups ; globale glob_pol2(relu(glob_pol1(g)))
 //! valeur    : val2(relu(val1([g, moyenne h]))) → 5 logits de victoire, 5 gains de pièces (÷ 50)
-//! coup réel : comme la politique (beh_node, beh_glob1, beh_glob2), facultative
 //! ```
 //!
-//! La politique dit le meilleur coup (appris des visites de la recherche) ; la tête « coup réel »
-//! prévoit le coup que le joueur qui agit va vraiment jouer,
-//! d'après la position et ce qu'il a fait jusque-là dans la partie (`know::History`) : elle a appris
-//! des coups joués par des joueurs de tous styles, et sert à simuler les adversaires.
+//! La politique dit le meilleur coup (appris de la politique améliorée de la recherche).
 //!
 //! Format des poids : « SMNN1 », nombre de tenseurs, puis pour chacun nom, dimensions et `f32`
 //! (petit-boutiste). Les poids des couches linéaires sont rangés comme dans PyTorch (sortie × entrée).
@@ -126,8 +122,6 @@ pub struct Net {
     glob_in: Linear,
     layers: Vec<Layer>,
     policy: Policy,
-    /// La tête « coup réel », si le réseau en a une.
-    behaviour: Option<Policy>,
     val1: Linear,
     val2: Linear,
     node_scale: [f32; NODE],
@@ -143,9 +137,6 @@ pub struct Eval {
     pub gain: [f32; 5],
     /// Logit de chaque clé de coup (`moves::Key`) : le meilleur coup selon le réseau.
     pub logits: Vec<f32>,
-    /// Logit de chaque clé pour le coup que le joueur qui agit va vraiment jouer, si le réseau a
-    /// cette tête.
-    pub behaviour: Option<Vec<f32>>,
 }
 
 fn read_u32(r: &mut impl Read) -> io::Result<u32> {
@@ -202,10 +193,6 @@ impl Net {
             glob_in,
             layers,
             policy: Policy::load(t, ["node_pol", "glob_pol1", "glob_pol2"])?,
-            behaviour: match t.contains_key("beh_node.weight") {
-                true => Some(Policy::load(t, ["beh_node", "beh_glob1", "beh_glob2"])?),
-                false => None,
-            },
             val1: Linear::load(t, "val1")?,
             val2: Linear::load(t, "val2")?,
             node_scale: scale(t, "node_scale")?,
@@ -215,7 +202,6 @@ impl Net {
             || net.glob_in.inp != GLOBAL
             || net.global_scale.len() != GLOBAL
             || net.policy.glob2.out != GLOBAL_KEYS
-            || net.behaviour.as_ref().is_some_and(|b| b.glob2.out != GLOBAL_KEYS)
         {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "réseau d'une autre version des entrées"));
         }
@@ -311,7 +297,6 @@ impl Net {
         let mut mid = gmid;
 
         let logits = self.policy.logits::<AVX2>(&g, &h, r, hd);
-        let behaviour = self.behaviour.as_ref().map(|b| b.logits::<AVX2>(&g, &h, r, hd));
 
         cat[..hd].copy_from_slice(&g);
         let (mean, max) = cat[hd..].split_at_mut(hd);
@@ -332,7 +317,7 @@ impl Net {
         for q in 0..e.players {
             gain[q] = v[5 + q] * GAIN_SCALE;
         }
-        Eval { win, gain, logits, behaviour }
+        Eval { win, gain, logits }
     }
 }
 
