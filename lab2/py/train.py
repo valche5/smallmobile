@@ -44,8 +44,11 @@ OWN_WEIGHT = 1.5
 # part des parties gardées pour la validation (`in_validation`)
 VAL_SHARE = 0.05
 # fenêtre (en positions) quand `total` positions ont été jouées : tout jusqu'à WINDOW_MIN, puis
-# WINDOW_MIN × (1 + WINDOW_GROWTH × ((total / WINDOW_MIN)^WINDOW_POWER − 1) / WINDOW_POWER)
-WINDOW_MIN = 250_000
+# WINDOW_MIN × (1 + WINDOW_GROWTH × ((total / WINDOW_MIN)^WINDOW_POWER − 1) / WINDOW_POWER) ; la
+# forme de KataGo, le minimum ajusté à nos cycles (800 000 positions) : plus de parties aident la valeur
+# (c020 continué sur 10 cycles fait mieux que sur 2), et un réseau plus large profite de plus de
+# parties (lab2/journal.md, taille du réseau)
+WINDOW_MIN = 1_000_000
 WINDOW_GROWTH = 0.4
 WINDOW_POWER = 0.75
 
