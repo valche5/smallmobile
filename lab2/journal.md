@@ -126,9 +126,10 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
 5. ~~Première boucle sur AWS depuis gen0 : 20 pas, arènes à chaque pas ; lab2 revient dans le jeu
    avec son meilleur réseau.~~ Faite le 21 octobre (voir Résultats).
 6. ~~Comparaison avec lab1 dans les conditions du jeu.~~ Faite le 21 octobre : −12,6.
-7. ~~Taille du réseau.~~ Mesurée le 21 octobre : la taille ne limite pas la valeur (voir Résultats).
-8. Sortir du plateau (+19 face à Difficile depuis c015, −12,6 face à lab1) : la valeur manque de
-   parties ; levier à choisir avec l'utilisateur.
+7. ~~Taille du réseau.~~ Mesurée le 21 octobre : avec assez de parties, plus large aide la valeur,
+   la possession et la politique (voir Résultats).
+8. Sortir du plateau (+19 face à Difficile depuis c015, −12,6 face à lab1) : réseau plus large et
+   fenêtre plus large ; taille et recette à choisir avec l'utilisateur.
 
 ## Résultats
 
@@ -193,11 +194,24 @@ mêmes parties réservées. Coût d'une évaluation Rust en bf16 sur un cœur (c
 c020 (la boucle, 64x4) sur la même validation : 1,039, 0,547, 1,379 ; continué 4 passages sur ces
 parties : 1,046, 0,546, 1,381.
 
-- **La taille ne limite pas la valeur** : entraînées jusqu'au bout, les trois largeurs finissent à
-  1,07-1,08. Plus large aide un peu la politique et la possession (−0,02 à −0,03) ; la largeur
-  rapporte plus que la profondeur à coût égal.
-- **La valeur dépend du nombre de parties** : c020, qui a vu les 500 000 parties de la boucle, fait
-  1,039 contre 1,07 pour n'importe quelle taille sur 50 000 parties, et ne gagne rien à repasser
-  sur ces 50 000.
-- 64x4 reste la taille de lab2. 14 + 33 min de machine, 0,18 + 0,49 $.
+- À 50 000 parties, entraînées jusqu'au bout, les trois largeurs finissent à la même valeur
+  (1,07-1,08) : la valeur bute sur le nombre de parties, quelle que soit la taille (c020, qui a vu
+  les 500 000 parties de la boucle, fait 1,039 et ne gagne rien à repasser sur ces 50 000). Plus
+  large aide un peu la politique et la possession (−0,02 à −0,03) ; la largeur rapporte plus que
+  la profondeur à coût égal. 14 + 33 min de machine, 0,18 + 0,49 $.
+- **Objection de l'utilisateur, juste** : 50 000 parties ne suffisent pas à montrer ce qu'apporte
+  la taille. Même mesure sur les cycles 11 à 20 (250 000 parties, une position sur trois, la même
+  pour tous : 2,5 millions de positions d'entraînement, 132 000 de validation ; 5 passages, autant
+  de positions vues qu'avant ; `lab2/runs/size3.sh`) :
+
+  | Taille | Valeur | Possession | Politique | Écart de valeur à c020 (50 000 → 250 000 parties) |
+  | --- | --- | --- | --- | --- |
+  | 64x4 | 1,040 | 0,545 | 1,468 | +0,035 → +0,029 |
+  | 96x4 | 1,026 | 0,531 | 1,448 | +0,032 → +0,015 |
+  | 128x4 | 1,018 | 0,520 | 1,433 | +0,039 → +0,007 |
+
+  c020 sur cette validation : 1,011, 0,530, 1,441 ; continué 2 passages sur ces 250 000 parties :
+  1,003, 0,520, 1,418 (une fenêtre plus large aide un peu). **Avec plus de parties, les réseaux
+  plus larges prennent l'avantage sur la valeur aussi** : 128x4, entraîné une fois depuis zéro sur
+  la moitié des parties, rejoint presque c020. 35 min de machine, 0,51 $.
 
