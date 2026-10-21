@@ -460,7 +460,8 @@ de refaire un essai et les prochaines actions concrètes.
 ## Archives : plan jusqu'au 20 octobre (fermé le 21 octobre)
 
 Gardé pour ses résultats et ses raisons. Les réglages, commandes et formats qu'il cite (`rp`,
-`roll`, `label`, `reencode`, `*.v3.bin`…) n'existent plus dans le code depuis le 21 octobre.
+`roll`, `label`, `reencode`, `*.v3.bin`…) n'existent plus dans le code depuis le 21 octobre. Les scripts
+`lab/runs/*.sh` cités ont été supprimés le même jour ; leurs résultats restent dans `lab/runs/`.
 
 ### P0 — Fiabiliser la recherche et les mesures
 
