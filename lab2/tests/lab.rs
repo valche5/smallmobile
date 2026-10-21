@@ -513,12 +513,23 @@ fn a_clear_arena_stops_early_and_keeps_its_first_deals() {
 }
 
 #[test]
-fn each_choice_records_the_improved_policy() {
-    use smallmobile_lab2::selfplay::{self, GameLog, ILLEGAL, PROBABILITY, RECORD};
+fn each_choice_records_the_improved_policy_and_the_next_owners() {
+    use smallmobile_kernel::state::Occupant;
+    use smallmobile_lab2::selfplay::{self, GameLog, ILLEGAL, NOBODY, OFF_MAP, PROBABILITY, RECORD};
     let dir = std::env::temp_dir().join(format!("smallmobile-policy-{}", std::process::id()));
     let opts = selfplay::Options { full_share: 1.0, fast: 1 };
     let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 8, threads: 2, seed: 12, opts };
     selfplay::run(&cfg, &expert(2), &dir).unwrap();
+    // le propriétaire de chaque région (joueur absolu)
+    let owners = |g: &smallmobile_kernel::Game| -> Vec<Option<usize>> {
+        (0..g.map.len())
+            .map(|i| match g.state.regions[i].occupant {
+                Occupant::Race(race) => Some(g.state.race(race).owner),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut checked = 0;
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
         if !path.to_string_lossy().ends_with(selfplay::SUFFIX) {
@@ -535,27 +546,54 @@ fn each_choice_records_the_improved_policy() {
             // une position par décision où il y avait le choix, avec la politique améliorée sur
             // ses coups possibles
             let table = log.table();
-            log.replay(&table, |g, k| {
-                let legal = moves::legal(g, k);
-                if legal.len() > 1 {
-                    let rec = records.next().unwrap();
-                    assert_eq!((rec[0] as usize, rec[1] as usize), (log.players, table.map.len()));
-                    let policy: Vec<u16> =
-                        rec[42..42 + 2 * moves::KEYS].chunks(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
-                    let legal_keys: Vec<usize> = legal.iter().map(|c| c.key as usize).collect();
-                    let mut sum = 0.0;
-                    for (key, &p) in policy.iter().enumerate() {
-                        assert_eq!(p == ILLEGAL, !legal_keys.contains(&key), "coup {key}");
-                        if p != ILLEGAL {
-                            sum += p as f32;
+            let mut visits = Vec::new(); // (joueur dont c'est le tour, joueur qui agit, enregistré, propriétaires)
+            let end = log
+                .replay(&table, |g, k| {
+                    let legal = moves::legal(g, k);
+                    let me = g.state.actor().unwrap();
+                    visits.push((g.state.current, me, legal.len() > 1, owners(g)));
+                    if legal.len() > 1 {
+                        let rec = records.next().unwrap();
+                        assert_eq!((rec[0] as usize, rec[1] as usize), (log.players, table.map.len()));
+                        let policy: Vec<u16> =
+                            rec[94..94 + 2 * moves::KEYS].chunks(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+                        let legal_keys: Vec<usize> = legal.iter().map(|c| c.key as usize).collect();
+                        let mut sum = 0.0;
+                        for (key, &p) in policy.iter().enumerate() {
+                            assert_eq!(p == ILLEGAL, !legal_keys.contains(&key), "coup {key}");
+                            if p != ILLEGAL {
+                                sum += p as f32;
+                            }
                         }
+                        assert!((sum - PROBABILITY).abs() < legal.len() as f32, "probabilités : {sum}");
                     }
-                    assert!((sum - PROBABILITY).abs() < legal.len() as f32, "probabilités : {sum}");
+                })
+                .unwrap();
+            // les propriétaires enregistrés : ceux du début du prochain tour du joueur qui agit
+            // (quand le tour passe à lui), sinon ceux de la fin
+            let last = owners(&end);
+            let mut recs = bytes.chunks(RECORD).skip(checked);
+            for (v, (_, me, recorded, _)) in visits.iter().enumerate() {
+                if !*recorded {
+                    continue;
                 }
-            })
-            .unwrap();
+                let next = (v + 1..visits.len())
+                    .find(|&w| visits[w].0 != visits[w - 1].0 && visits[w].0 == *me)
+                    .map_or(&last, |w| &visits[w].3);
+                let n = log.players;
+                let want: Vec<u8> = (0..48)
+                    .map(|i| match next.get(i) {
+                        None => OFF_MAP,
+                        Some(None) => NOBODY,
+                        Some(Some(q)) => 1 + ((q + n - me) % n) as u8,
+                    })
+                    .collect();
+                assert_eq!(&recs.next().unwrap()[46..94], &want[..]);
+                checked += 1;
+            }
         }
         assert!(records.next().is_none());
+        checked = 0;
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -626,4 +664,14 @@ fn self_play_games_can_be_replayed() {
     }
     assert_eq!(games, 4);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn surprise_weights_average_one_and_follow_the_surprise() {
+    use smallmobile_lab2::selfplay::weights;
+    let w = weights(&[0.0, 1.0, 3.0]);
+    assert_eq!(w, vec![0.5, 0.5 + 0.5 / (4.0 / 3.0), 0.5 + 0.5 * 3.0 / (4.0 / 3.0)]);
+    assert!((w.iter().sum::<f32>() - 3.0).abs() < 1e-5);
+    // aucune surprise (réseau neuf) : toutes les positions comptent autant
+    assert_eq!(weights(&[0.0, 0.0]), vec![1.0, 1.0]);
 }

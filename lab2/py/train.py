@@ -1,15 +1,20 @@
-"""Entraîne le réseau sur des parties d'entraînement (`lab2 selfplay`), puis l'exporte pour Rust.
+"""Entraîne le réseau sur les parties de la boucle (`lab2/loop.sh`), puis l'exporte pour Rust.
 
-    python train.py --data ../data/gen2 --init ../nets/gen1.bin --out ../nets/gen2.bin
+    python train.py --cycles ../data/loop --init ../runs/loop/c004.bin --out ../runs/loop/c005.bin
 
-Sans `--init`, un réseau neuf (`model.Net`).
+Un pas de la boucle : le plus récent des cycles de `--cycles` (un sous-dossier par cycle) vient
+d'être joué par le réseau `--init`. L'entraînement repart de ce réseau, sur une fenêtre des derniers
+cycles qui grandit moins vite que le total des parties (comme KataGo : les données anciennes en
+sortent), et chaque nouvelle position y sert en moyenne `USES` fois. Les positions sont tirées en
+proportion de leur poids (surprise de la recherche, comme KataGo).
 
 Cibles : la politique (politique améliorée de la recherche à la racine, Gumbel AlphaZero), la
 victoire (part de chaque joueur à la fin de la partie) et, en appoint, les pièces gagnées d'ici la
-fin. Les positions sont vues du joueur qui agit.
+fin et à qui appartient chaque région au début du prochain tour du joueur (comme la propriété des
+cases de KataGo : des dizaines d'étiquettes réelles par position, là où la victoire n'en donne
+qu'une par partie). Les positions sont vues du joueur qui agit.
 
-Recette fixe, reprise de lab1 : AdamW, taux 5e-4 en un cycle, 24 000 lots de 512 positions, mais
-au plus 4 passages sur les données.
+AdamW, taux 5e-4 en un cycle (montée puis descente) à chaque pas de la boucle, lots de 512.
 """
 
 import argparse
@@ -21,19 +26,51 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from data import ILLEGAL, in_validation, load as load_data
-from model import GAIN_SCALE, Net, export, load as load_net, unpack_adj
+from data import ILLEGAL, OFF_MAP, OWNERS, RECORD, SUFFIX, in_validation, load as load_data
+from model import GAIN_SCALE, export, load as load_net, unpack_adj
 
 LR = 5e-4
 WEIGHT_DECAY = 1e-4
 BATCH = 512
-STEPS = 24_000
-# au-delà, la valeur apprend les parties par cœur (un seul résultat pour toutes leurs positions)
-PASSES = 4
-# poids des pièces gagnées dans la perte
+# passages moyens sur chaque nouvelle position
+USES = 4
+# poids des pièces gagnées et des propriétaires dans la perte (KataGo : 1,5 pour la propriété)
 GAIN_WEIGHT = 0.25
+OWN_WEIGHT = 1.5
 # part des parties gardées pour la validation (`in_validation`)
 VAL_SHARE = 0.05
+# fenêtre (en positions) quand `total` positions ont été jouées : tout jusqu'à WINDOW_MIN, puis
+# WINDOW_MIN × (1 + WINDOW_GROWTH × ((total / WINDOW_MIN)^WINDOW_POWER − 1) / WINDOW_POWER)
+WINDOW_MIN = 250_000
+WINDOW_GROWTH = 0.4
+WINDOW_POWER = 0.75
+
+
+def window(total):
+    """Le nombre de positions de la fenêtre quand `total` positions ont été jouées."""
+    if total <= WINDOW_MIN:
+        return total
+    x = (total / WINDOW_MIN) ** WINDOW_POWER
+    return WINDOW_MIN * (1 + WINDOW_GROWTH * (x - 1) / WINDOW_POWER)
+
+
+def positions(d):
+    return sum(f.stat().st_size for f in d.glob("*" + SUFFIX)) // RECORD.itemsize
+
+
+def chosen(cycles):
+    """Les cycles de la fenêtre, du plus ancien au plus récent (les derniers qui y tiennent, au moins
+    le plus récent), et le nombre de positions du plus récent."""
+    dirs = sorted(p for p in Path(cycles).iterdir() if p.is_dir())
+    sizes = [positions(d) for d in dirs]
+    room = window(sum(sizes))
+    keep, count = [], 0
+    for d, n in zip(reversed(dirs), reversed(sizes)):
+        if keep and count + n > room:
+            break
+        keep.append(d)
+        count += n
+    return keep[::-1], sizes[-1]
 
 
 def batches(recs, idx, size, device):
@@ -55,90 +92,94 @@ def batches(recs, idx, size, device):
             policy=policy / policy.sum(1, keepdim=True).clamp(min=1),
             win=torch.from_numpy(r["win"]).to(device),
             gain=torch.from_numpy(r["gain"]).to(device) / GAIN_SCALE,
+            owner=torch.from_numpy(r["owner"].astype(np.int64)).to(device),
         )
 
 
+METRICS = ("politique", "valeur", "pièces", "propriétaires", "précision", "brier")
+
+
 def losses(net, b):
-    """Pertes et mesures : politique, valeur, pièces, précision de la politique, brier."""
-    logits, value = net(b["node"], b["glob"], b["adj"], b["regions"])
+    """Pertes et mesures (`METRICS`) : politique, valeur, pièces, propriétaires, précision de la
+    politique, brier."""
+    logits, value, own = net(b["node"], b["glob"], b["adj"], b["regions"])
     logits = logits.masked_fill(~b["legal"], -1e9)
     pol = -(b["policy"] * F.log_softmax(logits, 1)).sum(1).mean()
     present = torch.arange(5, device=value.device)[None] < b["players"][:, None]
     vlog = value[:, :5].masked_fill(~present, -1e9)
     val = -(b["win"] * F.log_softmax(vlog, 1)).sum(1).mean()
     gain = (((value[:, 5:] - b["gain"]) ** 2) * present).sum(1).mean()
+    owners = F.cross_entropy(own.reshape(-1, OWNERS), b["owner"].reshape(-1), ignore_index=OFF_MAP)
     # précision : le coup préféré de la recherche est-il le préféré du réseau ?
     acc = (logits.argmax(1) == b["policy"].argmax(1)).float().mean()
     # la victoire prédite, comparée à la cible (erreur quadratique, « Brier »)
     brier = ((torch.softmax(vlog, 1) - b["win"]) ** 2).sum(1).mean()
-    return pol, val, gain, acc, brier
+    return pol, val, gain, owners, acc, brier
+
+
+def show(values):
+    return " ".join(f"{name} {v:.1%}" if name == "précision" else f"{name} {v:.3f}" for name, v in zip(METRICS, values))
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", nargs="+", required=True)
-    ap.add_argument("--init", help="le réseau de départ (.bin) ; sans lui, un réseau neuf")
+    ap.add_argument("--cycles", required=True, help="les cycles de la boucle, un sous-dossier chacun")
+    ap.add_argument("--init", required=True, help="le réseau qui a joué le dernier cycle (.bin)")
     ap.add_argument("--out", required=True)
-    ap.add_argument("--threads", type=int, help="cœurs de PyTorch (plusieurs entraînements à la fois)")
-    ap.add_argument("--seed", type=int, default=0, help="ordre des lots, poids d'un réseau neuf")
+    ap.add_argument("--threads", type=int, help="cœurs de PyTorch")
+    ap.add_argument("--seed", type=int, default=0, help="ordre des lots")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     if args.threads:
         torch.set_num_threads(args.threads)
-    recs, keys = load_data(args.data)
+    start = time.time()
+    dirs, new = chosen(args.cycles)
+    recs, keys = load_data(dirs)
     rng = np.random.default_rng(args.seed)
-    torch.manual_seed(args.seed)
     # validation sur des parties entières, choisies par une règle fixe (`in_validation`) : aucune
-    # position d'une partie vue à l'entraînement, ni par cette génération ni par les suivantes
+    # position d'une partie vue à l'entraînement, ni par ce réseau ni par les suivants
     is_val = in_validation(keys, VAL_SHARE)
     val_idx, train_idx = np.flatnonzero(is_val), np.flatnonzero(~is_val)
+    steps = max(1, math.ceil(USES * new / BATCH))
     print(
-        f"{len(recs)} positions de {len(np.unique(keys))} parties "
-        f"({len(val_idx)} positions de {len(np.unique(keys[is_val]))} parties pour la validation)"
+        f"fenêtre {dirs[0].name}…{dirs[-1].name} : {len(recs)} positions de {len(np.unique(keys))} parties "
+        f"({len(val_idx)} positions pour la validation) ; {new} nouvelles, {steps} lots ; "
+        f"chargement {time.time() - start:.0f} s",
+        flush=True,
     )
 
-    net = (load_net(args.init) if args.init else Net()).to(device)
+    net = load_net(args.init).to(device)
     opt = torch.optim.AdamW(net.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    per_epoch = math.ceil(len(train_idx) / BATCH)
-    steps = min(STEPS, PASSES * per_epoch)
-    epochs = math.ceil(steps / per_epoch)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=LR, total_steps=steps, pct_start=0.1)
-    done = 0
+    # tirage avec remise, en proportion des poids
+    weight = recs["weight"][train_idx].astype(np.float64)
+    order = rng.choice(train_idx, size=steps * BATCH, p=weight / weight.sum())
+    start = time.time()
+    net.train()
+    sums = np.zeros(len(METRICS))
+    for b in batches(recs, order, BATCH, device):
+        out = losses(net, b)
+        pol, val, gain, owners = out[:4]
+        loss = pol + val + GAIN_WEIGHT * gain + OWN_WEIGHT * owners
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(net.parameters(), 5.0)
+        opt.step()
+        sched.step()
+        sums += [x.item() for x in out]
+    train_secs = time.time() - start
 
-    for epoch in range(epochs):
-        net.train()
-        start = time.time()
-        sums = np.zeros(5)
-        count = 0
-        train = rng.permutation(train_idx)
-        for b in batches(recs, train, BATCH, device):
-            if done == steps:
-                break
-            done += 1
-            pol, val, gain, acc, brier = losses(net, b)
-            loss = pol + val + GAIN_WEIGHT * gain
-            opt.zero_grad(set_to_none=True)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(net.parameters(), 5.0)
-            opt.step()
-            sched.step()
-            sums += [x.item() for x in (pol, val, gain, acc, brier)]
-            count += 1
-        net.eval()
-        # moyennes pondérées par le nombre de positions de chaque lot
-        vs, vc = np.zeros(5), 0
-        with torch.no_grad():
-            for b in batches(recs, val_idx, 2048, device):
-                vs += np.array([x.item() for x in losses(net, b)]) * len(b["players"])
-                vc += len(b["players"])
-        t, v = sums / max(count, 1), vs / max(vc, 1)
-        print(
-            f"époque {epoch + 1}/{epochs} ({time.time() - start:.0f} s, {done}/{steps} mises à jour) | entraînement : "
-            f"politique {t[0]:.3f} valeur {t[1]:.3f} pièces {t[2]:.3f} précision {t[3]:.1%} | validation : "
-            f"politique {v[0]:.3f} valeur {v[1]:.3f} pièces {v[2]:.3f} précision {v[3]:.1%} brier {v[4]:.3f}",
-            flush=True,
-        )
+    start = time.time()
+    net.eval()
+    # moyennes pondérées par le nombre de positions de chaque lot
+    vs, vc = np.zeros(len(METRICS)), 0
+    with torch.no_grad():
+        for b in batches(recs, val_idx, 2048, device):
+            vs += np.array([x.item() for x in losses(net, b)]) * len(b["players"])
+            vc += len(b["players"])
+    print(f"entraînement ({train_secs:.0f} s) : {show(sums / steps)}")
+    print(f"validation ({time.time() - start:.0f} s) : {show(vs / max(vc, 1))}", flush=True)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -10,7 +10,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from data import GLOBAL, KEYS, NODE, REGIONS
+from data import GLOBAL, KEYS, NODE, OWNERS, REGIONS
 
 GLOBAL_KEYS = 32
 # la tête de valeur prédit les pièces gagnées d'ici la fin divisées par ce nombre
@@ -88,9 +88,12 @@ class Net(nn.Module):
         self.glob_pol2 = nn.Linear(h, GLOBAL_KEYS)
         self.val1 = nn.Linear(2 * h, h)
         self.val2 = nn.Linear(h, 10)
+        # à l'entraînement seulement (Rust ne la calcule pas) : à qui appartiendra chaque région au
+        # prochain tour du joueur, comme la propriété des cases de KataGo
+        self.own = nn.Linear(2 * h, OWNERS)
         # les sorties partent de zéro : un réseau neuf joue au hasard (politique uniforme, mêmes
         # chances pour tous les joueurs)
-        for lin in (self.node_pol, self.glob_pol2, self.val2):
+        for lin in (self.node_pol, self.glob_pol2, self.val2, self.own):
             nn.init.zeros_(lin.weight)
             nn.init.zeros_(lin.bias)
         node, glob = scales()
@@ -100,7 +103,8 @@ class Net(nn.Module):
     def forward(self, node, glob, adj, regions):
         """node (B, R, NODE) u8 ; glob (B, GLOBAL) u8 ; adj (B, R, R) 0/1 ; regions (B,) nombre de régions.
 
-        Renvoie les logits des coups (B, KEYS) et la tête de valeur (B, 10)."""
+        Renvoie les logits des coups (B, KEYS), la tête de valeur (B, 10) et les logits des
+        propriétaires de chaque région (B, R, OWNERS)."""
         B, R, _ = node.shape
         mask = (torch.arange(R, device=node.device)[None, :] < regions[:, None]).float()  # (B, R)
         h = self.node_in(node.float() * self.node_scale) * mask[..., None]
@@ -125,7 +129,7 @@ class Net(nn.Module):
             logits[:, start : start + R] = per_region[:, :, kind]
         mean = h.sum(1) / count
         value = self.val2(F.relu(self.val1(torch.cat([g, mean], -1))))
-        return logits, value
+        return logits, value, self.own(hg)
 
 
 def unpack_adj(bits, R=REGIONS):

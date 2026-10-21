@@ -172,6 +172,7 @@ impl Net {
             let data = bytes.as_chunks::<4>().0.iter().map(|&c| f32::from_le_bytes(c)).collect();
             tensors.insert(String::from_utf8_lossy(&name).into_owned(), (dims, data));
         }
+        // les têtes qui ne servent qu'à l'entraînement (possession des régions) restent dans `t`
         let t = &mut tensors;
         let node_in = Linear::load(t, "node_in")?;
         let glob_in = Linear::load(t, "glob_in")?;

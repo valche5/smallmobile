@@ -30,7 +30,7 @@ glob = torch.from_numpy(recs["glob"].copy())
 adj = unpack_adj(torch.from_numpy(recs["adj"].astype(np.int64)))
 regions = torch.from_numpy(recs["regions"].astype(np.int64))
 with torch.no_grad():
-    logits, value = net(node, glob, adj, regions)
+    logits, value, _ = net(node, glob, adj, regions)
 
 out = subprocess.run(
     [os.environ.get("LAB", "../../target/release/lab2"), "check-net", "--net", "/tmp/smallmobile-check.bin", "--data", sys.argv[1]],

@@ -7,8 +7,11 @@
 //!
 //! ```text
 //! u8 joueurs, u8 régions
+//! f32      poids de la position (`weights` : surprise de la recherche)
 //! f32 × 5  victoire de chaque joueur relatif (part, 0 à 1)
 //! f32 × 5  pièces gagnées d'ici la fin par chaque joueur relatif
+//! u8 × REGIONS  à qui appartient chaque région au début du prochain tour du joueur qui agit (à la
+//!          fin de la partie si elle finit avant) : `NOBODY`, 1 + joueur relatif, `OFF_MAP`
 //! u16 × KEYS  politique améliorée de chaque coup, × `PROBABILITY` (65535 : coup impossible)
 //! u8 × REGIONS × 8  voisines (un bit par région, 64 bits par région)
 //! u8 × REGIONS × NODE  entrées par région
@@ -25,29 +28,37 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use smallmobile_kernel::ids::MAX_PLAYERS;
+use smallmobile_kernel::state::Occupant;
 use smallmobile_kernel::wire::{self, Writer};
 use smallmobile_kernel::{Action, Game, Phase};
 
-use crate::az::Az;
-use crate::encode::{Encoded, GLOBAL, NODE, REGIONS, encode};
+use crate::az::{Az, Searched};
+use crate::encode::{Encoded, GLOBAL, NODE, REGIONS, encode, relative};
 use crate::know::Knowledge;
 use crate::moves::{self, KEYS};
 use crate::rand::{Rng, mix};
 use crate::table::{Outcome, Table};
 
-pub const RECORD: usize = 2 + 20 + 20 + KEYS * 2 + REGIONS * 8 + REGIONS * NODE + GLOBAL;
+pub const RECORD: usize = 2 + 4 + 20 + 20 + REGIONS + KEYS * 2 + REGIONS * 8 + REGIONS * NODE + GLOBAL;
 /// Le suffixe des fichiers de positions.
 pub const SUFFIX: &str = ".pos";
 pub const ILLEGAL: u16 = u16::MAX;
 /// Une probabilité de la politique améliorée est enregistrée multipliée par ce nombre.
 pub const PROBABILITY: f32 = 60_000.0;
+/// Propriétaire d'une région : personne (vide ou peuple oublié) ; sinon 1 + joueur relatif.
+pub const NOBODY: u8 = 0;
+/// Propriétaire d'une région hors de la carte.
+pub const OFF_MAP: u8 = u8::MAX;
 
 /// Un exemple pour le réseau, cibles en joueurs relatifs (0 : celui qui agit).
 pub struct Record<'a> {
     pub enc: &'a Encoded,
     pub map: &'a smallmobile_kernel::Map,
+    pub weight: f32,
     pub win: [f32; MAX_PLAYERS],
     pub gain: [f32; MAX_PLAYERS],
+    /// `owners`, au début du prochain tour du joueur qui agit.
+    pub owners: [u8; REGIONS],
     pub policy: &'a [u16; KEYS],
 }
 
@@ -55,9 +66,11 @@ impl Record<'_> {
     pub fn bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(RECORD);
         buf.extend_from_slice(&[self.enc.players as u8, self.enc.regions as u8]);
+        buf.extend_from_slice(&self.weight.to_le_bytes());
         for x in self.win.iter().chain(&self.gain) {
             buf.extend_from_slice(&x.to_le_bytes());
         }
+        buf.extend_from_slice(&self.owners);
         for v in self.policy {
             buf.extend_from_slice(&v.to_le_bytes());
         }
@@ -84,6 +97,9 @@ struct Pending {
     actor: usize,
     coins: [i32; MAX_PLAYERS],
     policy: [u16; KEYS],
+    owners: Option<[u8; REGIONS]>,
+    /// Écart de la politique améliorée à l'a priori du réseau (`surprise`).
+    surprise: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -136,15 +152,28 @@ pub fn play(
             for &(key, p) in &s.policy {
                 policy[key as usize] = (p * PROBABILITY).round() as u16;
             }
-            pending.push(Pending { enc: encode(&g, &k), actor, coins: coins(&g), policy });
+            let surprise = surprise(&s);
+            pending.push(Pending { enc: encode(&g, &k), actor, coins: coins(&g), policy, owners: None, surprise });
             s.mv
         };
         played.push(moves::actions(&g, &mv));
+        let current = g.state.current;
         k.play(&mut g, &mv).expect("coup possible");
+        // le tour passe : les positions de ce joueur qui attendaient son prochain tour l'ont
+        if g.state.current != current {
+            let c = g.state.current;
+            for p in pending.iter_mut().filter(|p| p.actor == c && p.owners.is_none()) {
+                p.owners = Some(owners(&g, c));
+            }
+        }
+    }
+    for p in pending.iter_mut().filter(|p| p.owners.is_none()) {
+        p.owners = Some(owners(&g, p.actor));
     }
     let o = Outcome::of(&g);
     let n = o.players;
-    for p in &pending {
+    let weights = weights(&pending.iter().map(|p| p.surprise).collect::<Vec<_>>());
+    for (p, &weight) in pending.iter().zip(&weights) {
         let mut win = [0.0; MAX_PLAYERS];
         let mut gain = [0.0; MAX_PLAYERS];
         for r in 0..n {
@@ -152,10 +181,48 @@ pub fn play(
             win[r] = o.win[q] as f32;
             gain[r] = (o.coins[q] - p.coins[q]) as f32;
         }
-        let rec = Record { enc: &p.enc, map: &table.map, win, gain, policy: &p.policy };
+        let owners = p.owners.expect("propriétaires");
+        let rec = Record { enc: &p.enc, map: &table.map, weight, win, gain, owners, policy: &p.policy };
         out.write_all(&rec.bytes())?;
     }
     Ok(Played { outcome: o, positions: pending.len(), moves: played })
+}
+
+/// La surprise d'une recherche : divergence de Kullback-Leibler de sa politique améliorée (la
+/// cible) à l'a priori du réseau.
+fn surprise(s: &Searched) -> f32 {
+    s.policy
+        .iter()
+        .filter(|&&(_, t)| t > 0.0)
+        .map(|&(key, t)| {
+            let prior = s.details.iter().find(|d| d.0 == key).map_or(0.0, |d| d.1);
+            t * (t / prior.max(1e-9)).ln()
+        })
+        .sum::<f32>()
+        .max(0.0)
+}
+
+/// Les poids des positions d'une partie, d'après leurs surprises (« policy surprise weighting » de
+/// KataGo) : la moitié du poids total réparti également, l'autre moitié en proportion de la
+/// surprise ; en moyenne 1 par position. L'entraînement tire les positions en proportion de leur
+/// poids : celles où la recherche a appris quelque chose au réseau reviennent plus souvent.
+pub fn weights(surprises: &[f32]) -> Vec<f32> {
+    let mean = surprises.iter().sum::<f32>() / surprises.len().max(1) as f32;
+    surprises.iter().map(|&x| if mean > 1e-6 { 0.5 + 0.5 * x / mean } else { 1.0 }).collect()
+}
+
+/// À qui appartient chaque région, vu du joueur `me` (`NOBODY`, 1 + joueur relatif, `OFF_MAP`).
+pub fn owners(g: &Game, me: usize) -> [u8; REGIONS] {
+    let s = &g.state;
+    let n = s.player_count();
+    let mut out = [OFF_MAP; REGIONS];
+    for (o, r) in out.iter_mut().zip(&s.regions[..g.map.len()]) {
+        *o = match r.occupant {
+            Occupant::Race(race) => 1 + relative(s.race(race).owner, me, n) as u8,
+            Occupant::Empty | Occupant::Lost => NOBODY,
+        };
+    }
+    out
 }
 
 /// Les pièces de chaque joueur.
@@ -346,7 +413,7 @@ pub fn read_record(rec: &[u8]) -> (Encoded, Vec<Vec<u8>>) {
     assert_eq!(rec.len(), RECORD);
     let players = rec[0] as usize;
     let regions = rec[1] as usize;
-    let mut at = 2 + 20 + 20 + KEYS * 2;
+    let mut at = 2 + 4 + 20 + 20 + REGIONS + KEYS * 2;
     let mut adj = Vec::with_capacity(regions);
     for i in 0..REGIONS {
         let bits = u64::from_le_bytes(rec[at..at + 8].try_into().expect("8 octets"));

@@ -51,7 +51,7 @@ def evaluate(net, recs, device):
     agit, perte et justesse de la politique."""
     out = {k: [] for k in ("val", "brier", "pred", "real", "pol", "acc")}
     for b in batches(recs, np.arange(len(recs)), 2048, device):
-        logits, value = net(b["node"], b["glob"], b["adj"], b["regions"])
+        logits, value, _ = net(b["node"], b["glob"], b["adj"], b["regions"])
         logits = logits.masked_fill(~b["legal"], -1e9)
         present = torch.arange(5, device=value.device)[None] < b["players"][:, None]
         vlog = value[:, :5].masked_fill(~present, -1e9)

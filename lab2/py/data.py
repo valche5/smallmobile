@@ -11,13 +11,21 @@ NODE = 77
 # l'histoire des joueurs
 GLOBAL = 820
 ILLEGAL = 65535
+OFF_MAP = 255
+# propriétaires possibles d'une région : personne, puis chaque joueur relatif
+OWNERS = 6
 
 RECORD = np.dtype(
     [
         ("players", "u1"),
         ("regions", "u1"),
+        # poids de la position, 1 en moyenne : surprise de la recherche (lab2/src/selfplay.rs, `weights`)
+        ("weight", "<f4"),
         ("win", "<f4", 5),
         ("gain", "<f4", 5),
+        # à qui appartient chaque région au début du prochain tour du joueur qui agit : 0 personne,
+        # 1 + joueur relatif, OFF_MAP hors de la carte
+        ("owner", "u1", REGIONS),
         # politique améliorée de la recherche, à une constante près (ILLEGAL : coup impossible)
         ("policy", "<u2", KEYS),
         ("adj", "<u8", REGIONS),
