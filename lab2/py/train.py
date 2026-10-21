@@ -122,6 +122,32 @@ def losses(net, b):
     return pol, val, gain, owners, acc, brier
 
 
+def learn(net, opt, sched, b):
+    """Un lot d'entraînement (en bf16) ; renvoie ses mesures (`METRICS`)."""
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        out = losses(net, b)
+        pol, val, gain, owners = out[:4]
+        loss = pol + val + GAIN_WEIGHT * gain + OWN_WEIGHT * owners
+    opt.zero_grad(set_to_none=True)
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(net.parameters(), 5.0)
+    opt.step()
+    sched.step()
+    return [x.item() for x in out]
+
+
+def validate(net, recs, idx, device):
+    """Les mesures (`METRICS`) sur les positions `idx`, en 32 bits, pondérées par position."""
+    net.eval()
+    vs, vc = np.zeros(len(METRICS)), 0
+    with torch.no_grad():
+        for b in batches(recs, idx, 2048, device):
+            vs += np.array([x.item() for x in losses(net, b)]) * len(b["players"])
+            vc += len(b["players"])
+    net.train()
+    return vs / max(vc, 1)
+
+
 def show(values):
     return " ".join(f"{name} {v:.1%}" if name == "précision" else f"{name} {v:.3f}" for name, v in zip(METRICS, values))
 
@@ -147,7 +173,8 @@ def main():
     # position d'une partie vue à l'entraînement, ni par ce réseau ni par les suivants
     is_val = in_validation(keys, VAL_SHARE)
     val_idx, train_idx = np.flatnonzero(is_val), np.flatnonzero(~is_val)
-    steps = max(1, math.ceil(USES * new / BATCH))
+    # au moins 20 lots : le taux en un cycle (OneCycleLR) demande une montée d'au moins un lot
+    steps = max(20, math.ceil(USES * new / BATCH))
     print(
         f"fenêtre {dirs[0].name}…{dirs[-1].name} : {len(recs)} positions de {len(np.unique(keys))} parties "
         f"({len(val_idx)} positions pour la validation) ; {new} nouvelles, {steps} lots ; "
@@ -165,28 +192,13 @@ def main():
     net.train()
     sums = np.zeros(len(METRICS))
     for b in batches(recs, order, BATCH, device):
-        with torch.autocast("cpu", dtype=torch.bfloat16):
-            out = losses(net, b)
-            pol, val, gain, owners = out[:4]
-            loss = pol + val + GAIN_WEIGHT * gain + OWN_WEIGHT * owners
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(net.parameters(), 5.0)
-        opt.step()
-        sched.step()
-        sums += [x.item() for x in out]
+        sums += learn(net, opt, sched, b)
     train_secs = time.time() - start
 
     start = time.time()
-    net.eval()
-    # moyennes pondérées par le nombre de positions de chaque lot
-    vs, vc = np.zeros(len(METRICS)), 0
-    with torch.no_grad():
-        for b in batches(recs, val_idx, 2048, device):
-            vs += np.array([x.item() for x in losses(net, b)]) * len(b["players"])
-            vc += len(b["players"])
+    val = validate(net, recs, val_idx, device)
     print(f"entraînement ({train_secs:.0f} s) : {show(sums / steps)}")
-    print(f"validation ({time.time() - start:.0f} s) : {show(vs / max(vc, 1))}", flush=True)
+    print(f"validation ({time.time() - start:.0f} s) : {show(val)}", flush=True)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
