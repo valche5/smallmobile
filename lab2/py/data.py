@@ -64,22 +64,33 @@ def in_validation(keys, share):
     return keys % np.uint64(10_000) < np.uint64(round(share * 10_000))
 
 
-def load(paths):
+def load(paths, keep=None):
     """Les enregistrements des fichiers (ou dossiers) donnés, en un seul tableau, et la clé de la
-    partie de chacun (`map_keys`, pour séparer la validation)."""
+    partie de chacun (`map_keys`, pour séparer la validation). `keep` : ne garder que certaines
+    parties (fonction des clés qui rend un masque, comme `in_validation`)."""
     files = []
     for path in paths:
         p = Path(path)
         files += sorted(p.rglob("*" + SUFFIX)) if p.is_dir() else [p]
-    sizes = [f.stat().st_size // RECORD.itemsize for f in files]
-    recs = np.empty(sum(sizes), dtype=RECORD)
-    keys = np.empty(sum(sizes), dtype=np.uint64)
-    at = 0
-    for f, count in zip(files, sizes):
+    plan = []
+    for f in files:
+        count = f.stat().st_size // RECORD.itemsize
         counts = games(f, count)
         m = np.memmap(f, dtype=RECORD, mode="r", shape=(count,)) if count else np.zeros(0, dtype=RECORD)
-        recs[at : at + count] = m
-        keys[at : at + count] = np.repeat(map_keys(m[np.cumsum(counts) - counts]), counts)
-        at += count
+        keys = np.repeat(map_keys(m[np.cumsum(counts) - counts]), counts)
         del m
-    return recs, keys
+        plan.append((f, count, keys, None if keep is None else keep(keys)))
+    total = sum(len(keys) if sel is None else int(sel.sum()) for _, _, keys, sel in plan)
+    recs = np.empty(total, dtype=RECORD)
+    out = np.empty(total, dtype=np.uint64)
+    at = 0
+    for f, count, keys, sel in plan:
+        if sel is not None:
+            keys = keys[sel]
+        if len(keys):
+            m = np.memmap(f, dtype=RECORD, mode="r", shape=(count,))
+            recs[at : at + len(keys)] = m if sel is None else m[sel]
+            out[at : at + len(keys)] = keys
+            at += len(keys)
+            del m
+    return recs, out
