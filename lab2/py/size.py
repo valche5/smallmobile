@@ -4,7 +4,8 @@ erreurs de validation à celles d'autres tailles sur les mêmes parties.
 
     python size.py --data ../data/loop/c019 ../data/loop/c020 --size 96x6 --passes 2 --out ../runs/size/96x6.bin
 
-`--size LARGEURxCOUCHES`. Après chaque passage sur les données : temps par lot et mesures de
+`--size LARGEURxCOUCHES` : un réseau neuf ; ou `--init réseau.bin` pour continuer un réseau déjà
+entraîné (sa taille vient du fichier). Après chaque passage sur les données : temps par lot et mesures de
 validation. Une taille par processus : lab2/runs/size.sh en lance plusieurs en même temps.
 """
 
@@ -16,27 +17,32 @@ import numpy as np
 import torch
 
 from data import in_validation, load as load_data
-from model import Net, export
+from model import Net, export, load as load_net
 from train import BATCH, LR, VAL_SHARE, WEIGHT_DECAY, batches, learn, show, validate
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", nargs="+", required=True)
-    ap.add_argument("--size", required=True, help="LARGEURxCOUCHES, par exemple 96x6")
+    size = ap.add_mutually_exclusive_group(required=True)
+    size.add_argument("--size", help="LARGEURxCOUCHES, par exemple 96x6 : un réseau neuf")
+    size.add_argument("--init", help="un réseau déjà entraîné (.bin), à continuer")
     ap.add_argument("--passes", type=int, default=2)
     ap.add_argument("--out", required=True)
     ap.add_argument("--threads", type=int)
     args = ap.parse_args()
 
-    hidden, layers = (int(x) for x in args.size.split("x"))
     torch.manual_seed(0)
     if args.threads:
         torch.set_num_threads(args.threads)
     recs, keys = load_data(args.data)
     is_val = in_validation(keys, VAL_SHARE)
     val_idx, train_idx = np.flatnonzero(is_val), np.flatnonzero(~is_val)
-    net = Net(hidden, layers)
+    if args.init:
+        net = load_net(args.init)
+        args.size = f"{net.hidden}x{len(net.layers)} (suite de {args.init})"
+    else:
+        net = Net(*(int(x) for x in args.size.split("x")))
     params = sum(p.numel() for p in net.parameters())
     per_pass = math.ceil(len(train_idx) / BATCH)
     opt = torch.optim.AdamW(net.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
