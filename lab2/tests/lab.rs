@@ -545,41 +545,30 @@ fn varied_tables_record_only_the_learner() {
 
 #[test]
 fn position_files_say_how_many_positions_each_game_has() {
-    use smallmobile_lab2::selfplay::{self, Field, GameLog};
+    use smallmobile_lab2::selfplay::{self, Field};
     let dir = std::env::temp_dir().join(format!("smallmobile-games-{}", std::process::id()));
     let opts = selfplay::Options { full_share: 1.0, fast: 1 };
     let cfg = selfplay::Config { players: vec![2, 3], games: 5, threads: 2, seed: 3, opts };
-    let az = expert(2);
-    selfplay::run(&cfg, &az, &Field::none(), &dir.join("play")).unwrap();
-    let mut logs = Vec::new();
-    for entry in std::fs::read_dir(dir.join("play")).unwrap() {
+    selfplay::run(&cfg, &expert(2), &Field::none(), &dir).unwrap();
+    let (mut total, mut positions) = (0, 0);
+    for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
-        if path.to_string_lossy().ends_with(".moves") {
-            logs.extend(std::fs::read_to_string(&path).unwrap().lines().map(|l| GameLog::parse(l).unwrap()));
+        if path.to_string_lossy().ends_with(selfplay::SUFFIX) {
+            let counts: Vec<u32> = std::fs::read(selfplay::games_file(&path))
+                .unwrap()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| u32::from_le_bytes(*c))
+                .collect();
+            let size = std::fs::metadata(&path).unwrap().len() as usize;
+            assert_eq!(counts.iter().sum::<u32>() as usize * selfplay::RECORD, size, "{}", path.display());
+            total += counts.len();
+            positions += size / selfplay::RECORD;
         }
     }
-    smallmobile_lab2::judge::rejudge(&logs, 0.2, 2, &az, 1, 2, &dir.join("judged")).unwrap();
-    for sub in ["play", "judged"] {
-        let (mut total, mut positions) = (0, 0);
-        for entry in std::fs::read_dir(dir.join(sub)).unwrap() {
-            let path = entry.unwrap().path();
-            if path.to_string_lossy().ends_with(selfplay::SUFFIX) {
-                let counts: Vec<u32> = std::fs::read(selfplay::games_file(&path))
-                    .unwrap()
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|c| u32::from_le_bytes(*c))
-                    .collect();
-                let size = std::fs::metadata(&path).unwrap().len() as usize;
-                assert_eq!(counts.iter().sum::<u32>() as usize * selfplay::RECORD, size, "{}", path.display());
-                total += counts.len();
-                positions += size / selfplay::RECORD;
-            }
-        }
-        assert_eq!(total, 5, "{sub} : une ligne par partie");
-        assert!(positions > 0);
-    }
+    assert_eq!(total, 5, "une ligne par partie");
+    assert!(positions > 0);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -619,39 +608,5 @@ fn self_play_games_can_be_replayed() {
         }
     }
     assert_eq!(games, 4);
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn played_games_can_be_judged_again_by_the_network() {
-    use smallmobile_lab2::selfplay::{self, Field, GameLog};
-    let dir = std::env::temp_dir().join(format!("smallmobile-judge-{}", std::process::id()));
-    let opts = selfplay::Options { full_share: 1.0, fast: 1 };
-    let cfg = selfplay::Config { players: vec![3, 5], games: 2, threads: 1, seed: 8, opts };
-    let az = expert(2);
-    selfplay::run(&cfg, &az, &Field::none(), &dir.join("play")).unwrap();
-    let mut logs = Vec::new();
-    for entry in std::fs::read_dir(dir.join("play")).unwrap() {
-        let path = entry.unwrap().path();
-        if path.to_string_lossy().ends_with(".moves") {
-            logs.extend(std::fs::read_to_string(&path).unwrap().lines().map(|l| GameLog::parse(l).unwrap()));
-        }
-    }
-    smallmobile_lab2::judge::rejudge(&logs, 0.1, 2, &az, 1, 2, &dir.join("judged")).unwrap();
-    let mut positions = 0;
-    for entry in std::fs::read_dir(dir.join("judged")).unwrap() {
-        let path = entry.unwrap().path();
-        if path.to_string_lossy().ends_with(selfplay::SUFFIX) {
-            for rec in std::fs::read(&path).unwrap().as_chunks::<{ selfplay::RECORD }>().0 {
-                // la part de victoire de chaque joueur, d'après des fins jouées jusqu'au bout
-                let win: f32 = (0..rec[0] as usize)
-                    .map(|r| f32::from_le_bytes(rec[3 + 4 * r..7 + 4 * r].try_into().unwrap()))
-                    .sum();
-                assert!((win - 1.0).abs() < 1e-4, "parts de victoire : {win}");
-                positions += 1;
-            }
-        }
-    }
-    assert!(positions > 0);
     std::fs::remove_dir_all(&dir).unwrap();
 }

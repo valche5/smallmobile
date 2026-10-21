@@ -1,12 +1,10 @@
-"""Entraîne le réseau sur des parties d'entraînement (`lab2 selfplay`, `lab2 judge`), puis l'exporte pour
-Rust.
+"""Entraîne le réseau sur des parties d'entraînement (`lab2 selfplay`), puis l'exporte pour Rust.
 
-    python train.py --data ../data/gen1 ../data/gen1-judged --init ../nets/gen0.bin --out ../nets/gen1.bin
+    python train.py --data ../data/gen1 ../data/gen1-mixed --init ../nets/gen0.bin --out ../nets/gen1.bin
 
 Cibles : la politique (politique améliorée de la recherche à la racine, Gumbel AlphaZero), la
-victoire (part de chaque joueur à la fin, ou moyenne des fins rejugées) et, en appoint, les pièces
-gagnées d'ici la fin. Les positions sont vues du joueur qui agit. Les positions rejugées
-(`lab2 judge`, sans cible de politique) n'apprennent que la valeur.
+victoire (part de chaque joueur à la fin de la partie) et, en appoint, les pièces gagnées d'ici la
+fin. Les positions sont vues du joueur qui agit.
 
 Recette fixe, reprise de lab1 : AdamW, taux 5e-4 en un cycle, 24 000 lots de 512 positions.
 """
@@ -52,7 +50,6 @@ def batches(recs, idx, size, device):
             policy=policy / policy.sum(1, keepdim=True).clamp(min=1),
             win=torch.from_numpy(r["win"]).to(device),
             gain=torch.from_numpy(r["gain"]).to(device) / GAIN_SCALE,
-            has_policy=legal.any(1) & (policy.sum(1) > 0),
         )
 
 
@@ -60,14 +57,13 @@ def losses(net, b):
     """Pertes et mesures : politique, valeur, pièces, précision de la politique, brier."""
     logits, value = net(b["node"], b["glob"], b["adj"], b["regions"])
     logits = logits.masked_fill(~b["legal"], -1e9)
-    hp = b["has_policy"].float()
-    pol = (-(b["policy"] * F.log_softmax(logits, 1)).sum(1) * hp).sum() / hp.sum().clamp(min=1)
+    pol = -(b["policy"] * F.log_softmax(logits, 1)).sum(1).mean()
     present = torch.arange(5, device=value.device)[None] < b["players"][:, None]
     vlog = value[:, :5].masked_fill(~present, -1e9)
     val = -(b["win"] * F.log_softmax(vlog, 1)).sum(1).mean()
     gain = (((value[:, 5:] - b["gain"]) ** 2) * present).sum(1).mean()
     # précision : le coup préféré de la recherche est-il le préféré du réseau ?
-    acc = ((logits.argmax(1) == b["policy"].argmax(1)).float() * hp).sum() / hp.sum().clamp(min=1)
+    acc = (logits.argmax(1) == b["policy"].argmax(1)).float().mean()
     # la victoire prédite, comparée à la cible (erreur quadratique, « Brier »)
     brier = ((torch.softmax(vlog, 1) - b["win"]) ** 2).sum(1).mean()
     return pol, val, gain, acc, brier
@@ -123,15 +119,13 @@ def main():
             sums += [x.item() for x in (pol, val, gain, acc, brier)]
             count += 1
         net.eval()
-        # moyennes pondérées par le nombre de positions qui ont chaque cible (politique, valeur)
-        vs = np.zeros(5)
-        vc = np.zeros(5)
+        # moyennes pondérées par le nombre de positions de chaque lot
+        vs, vc = np.zeros(5), 0
         with torch.no_grad():
             for b in batches(recs, val_idx, 2048, device):
-                n = np.array([b["has_policy"].sum().item(), len(b["players"])])[[0, 1, 1, 0, 1]]
-                vs += [x.item() for x in losses(net, b)] * n
-                vc += n
-        t, v = sums / max(count, 1), vs / np.maximum(vc, 1)
+                vs += np.array([x.item() for x in losses(net, b)]) * len(b["players"])
+                vc += len(b["players"])
+        t, v = sums / max(count, 1), vs / max(vc, 1)
         print(
             f"époque {epoch + 1}/{epochs} ({time.time() - start:.0f} s, {done}/{STEPS} mises à jour) | entraînement : "
             f"politique {t[0]:.3f} valeur {t[1]:.3f} pièces {t[2]:.3f} précision {t[3]:.1%} | validation : "

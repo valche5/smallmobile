@@ -8,18 +8,15 @@
 //! - `table` : une partie à jouer (carte, joueurs), et son résultat ;
 //! - `know` : ce qu'un joueur sait vraiment (pioches et dés cachés, histoire des joueurs) et des
 //!   mondes possibles ;
-//! - `moves` : les coups d'un joueur, regroupés pour que la recherche ait peu de choix à la fois ;
+//! - `moves` : les coups d'un joueur, une décision à la fois ;
 //! - `agent` : les joueurs (IA du jeu et ses styles, hasard, Expert) ;
 //! - `encode`, `net`, `az` : ce que voit le réseau, le réseau, la recherche guidée par le réseau ;
 //! - `arena` : des milliers de parties pour comparer deux joueurs ;
-//! - `selfplay` : parties d'entraînement du réseau ;
-//! - `judge` : positions rejugées par des fins de partie simulées (cibles de valeur presque sans
-//!   bruit).
+//! - `selfplay` : parties d'entraînement du réseau.
 
 pub mod agent;
 pub mod arena;
 pub mod az;
-pub mod judge;
 pub mod selfplay;
 pub mod table;
 

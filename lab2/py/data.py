@@ -1,5 +1,4 @@
-"""Les parties d'entraînement écrites par `lab2 selfplay` et `lab2 judge` (voir lab2/src/selfplay.rs pour le
-format)."""
+"""Les parties d'entraînement écrites par `lab2 selfplay` (voir lab2/src/selfplay.rs pour le format)."""
 
 from pathlib import Path
 
@@ -22,8 +21,7 @@ RECORD = np.dtype(
         ("flags", "u1"),
         ("win", "<f4", 5),
         ("gain", "<f4", 5),
-        # politique améliorée de la recherche, à une constante près (ILLEGAL : coup impossible ;
-        # que des 0 : pas de cible de politique, position rejugée)
+        # politique améliorée de la recherche, à une constante près (ILLEGAL : coup impossible)
         ("policy", "<u2", KEYS),
         ("adj", "<u8", REGIONS),
         ("node", "u1", (REGIONS, NODE)),

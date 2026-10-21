@@ -10,8 +10,7 @@
 //! u8 drapeaux : 1, table variée (d'autres joueurs que l'IA qui apprend)
 //! f32 × 5  victoire de chaque joueur relatif (part, 0 à 1)
 //! f32 × 5  pièces gagnées d'ici la fin par chaque joueur relatif
-//! u16 × KEYS  politique améliorée de chaque coup, × `PROBABILITY` (65535 : coup impossible ; que
-//!             des 0 : pas de cible de politique, position rejugée)
+//! u16 × KEYS  politique améliorée de chaque coup, × `PROBABILITY` (65535 : coup impossible)
 //! u8 × REGIONS × 8  voisines (un bit par région, 64 bits par région)
 //! u8 × REGIONS × NODE  entrées par région
 //! u8 × GLOBAL  entrées de la partie

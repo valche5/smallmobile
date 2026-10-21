@@ -35,9 +35,16 @@ de l'utilisateur, prises sans mesure préalable (régressions passagères accept
 
 Gardés de lab1 : l'encodage (820 entrées, histoire des joueurs comprise), la valeur (0,5 ×
 victoire + 0,5 × sigmoïde de l'avance en pièces, échelle 8), le tronc du réseau (graphe des
-régions, 4 couches de 64), l'auto-apprentissage avec recherches courtes, les tables variées, les
-positions rejugées par des fins jouées par le réseau. La taille du réseau pourra augmenter si les
-mesures le demandent (accord de l'utilisateur, 21 octobre).
+régions, 4 couches de 64), l'auto-apprentissage avec recherches courtes, les tables variées. La
+taille du réseau pourra augmenter si les mesures le demandent (accord de l'utilisateur, 21 octobre).
+
+**Positions rejugées supprimées** (décision de l'utilisateur, 21 octobre, pendant les données de
+gen1) : lab1 les gardait pour des cibles de valeur moins bruitées (moyenne de 32 fins jouées par le
+réseau), mais leur gain y était faible et fragile (+2,4 ± 2,2 points sur les résultats seuls, une
+mesure, P2), elles sont circulaires (le réseau juge ses propres fins) et coûtaient ici 72 s par
+morceau de 500 parties contre 19 s pour les jouer. Avec gen0, elles étaient même faussées : ses
+sorties de jetons et de pouvoirs valent toutes zéro, et à égalité son coup préféré met tous les
+jetons sur une seule région. Le calcul va plutôt à plus de parties réelles.
 
 ## Système actuel
 

@@ -9,8 +9,6 @@
 //!     [--full-share 0.5 --fast 50]   (recherches avec bruit de Gumbel ; part des recherches complètes)
 //!     [--field 'easy|normal:aggressive|az:net=gen0.bin,n=20' --mixed 0.5]   (tables variées)
 //! lab2 check-net --net poids.bin --data parties.pos [--count 5]   (comparaison avec lab2/py/check.py)
-//! lab2 judge --games lab2/data/gen1 --out lab2/data/gen1-judged --judge az:net=poids.bin [--share 0.1] [--rollouts 32]
-//!     (positions de parties déjà jouées, fichiers .moves de lab2 selfplay, rejugées par le réseau)
 //! lab2 analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par labtools/export-room.ts)
 //! ```
 
@@ -32,7 +30,6 @@ fn main() {
         "selfplay" => selfplay_cmd(&opts),
         "check-net" => check_net_cmd(&opts),
         "analyze" => analyze_cmd(&opts),
-        "judge" => judge_cmd(&opts),
         _ => usage(),
     }
 }
@@ -48,7 +45,6 @@ fn usage() -> ! {
     eprintln!("            [--full-share 0.25 --fast 50]   (part des recherches complètes, itérations des autres)");
     eprintln!("            [--field 'easy|hard|az:…' --mixed 0.5]   (tables variées : adversaires, part des parties)");
     eprintln!("        lab2 check-net --net poids.bin --data parties.pos [--count N]");
-    eprintln!("        lab2 judge --games DIR --out DIR --judge az:… [--share 0.1] [--rollouts 32] [--seed S]");
     eprintln!("        lab2 analyze --game partie.smk --agent az:net=poids.bin,n=20000");
     std::process::exit(2)
 }
@@ -333,57 +329,4 @@ fn analyze_cmd(opts: &HashMap<String, String>) {
         let mv = legal.iter().find(|c| c.key == *key).map(|c| moves::describe(&g, &c.mv)).unwrap_or_default();
         println!("{n:>8}  {:>7.1} %  {:>7.1} %  {:>7.1} %  {mv}", 100.0 * q, 100.0 * prior, 100.0 * p);
     }
-}
-
-/// Juge à nouveau les positions de parties déjà jouées : les fichiers `.moves` de `--games`.
-/// Les parties enregistrées (fichiers `.moves` de `lab2 selfplay`) du dossier `--games`, et le nombre
-/// de fichiers lus.
-fn game_logs(opts: &HashMap<String, String>) -> (Vec<smallmobile_lab2::selfplay::GameLog>, usize) {
-    use smallmobile_lab2::selfplay::GameLog;
-    fn moves_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{} : {e}", dir.display())) {
-            let path = entry.expect("dossier lisible").path();
-            if path.is_dir() {
-                moves_files(&path, out);
-            } else if path.to_string_lossy().ends_with(".moves") {
-                out.push(path);
-            }
-        }
-    }
-    let mut files = Vec::new();
-    moves_files(std::path::Path::new(opts.get("games").unwrap_or_else(|| usage())), &mut files);
-    files.sort();
-    let mut logs = Vec::new();
-    for path in &files {
-        let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{} : {e}", path.display()));
-        logs.extend(
-            text.lines().map(|l| GameLog::parse(l).unwrap_or_else(|| panic!("ligne illisible : {}", path.display()))),
-        );
-    }
-    (logs, files.len())
-}
-
-fn judge_cmd(opts: &HashMap<String, String>) {
-    let (logs, files) = game_logs(opts);
-    let out = opts.get("out").unwrap_or_else(|| usage());
-    let start = Instant::now();
-    let name = opts.get("judge").unwrap_or_else(|| usage());
-    let az = agent::az_named(name).unwrap_or_else(|| {
-        eprintln!("juge inconnu : {name} (az:net=poids.bin)");
-        std::process::exit(2)
-    });
-    let judged = smallmobile_lab2::judge::rejudge(
-        &logs,
-        get(opts, "share", 0.1),
-        get(opts, "rollouts", 32),
-        &az,
-        get(opts, "seed", 1),
-        get(opts, "threads", threads()),
-        std::path::Path::new(out),
-    );
-    if let Err(e) = judged {
-        eprintln!("échec : {e}");
-        std::process::exit(1)
-    }
-    println!("{} parties ({files} fichiers) rejugées en {:.0} s", logs.len(), start.elapsed().as_secs_f64());
 }

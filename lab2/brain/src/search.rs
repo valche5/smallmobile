@@ -272,11 +272,6 @@ fn fold(hash: u64, chance: u64) -> u64 {
     (hash ^ chance).wrapping_mul(0x0100_0000_01b3)
 }
 
-/// Le coup préféré du réseau.
-fn best(legal: &[Choice], logits: &[f32]) -> Move {
-    legal.iter().max_by(|a, b| logits[a.key as usize].total_cmp(&logits[b.key as usize])).expect("des coups").mv
-}
-
 impl Az {
     pub fn new(cfg: Config, net: Arc<Net>, label: String) -> Self {
         Az { cfg, net, label }
@@ -318,25 +313,6 @@ impl Az {
             finals[q] = s.players[q].coins as f32 + eval.gain[r];
         }
         self.blend(&absolute(&eval.win, me, n), &finals, n)
-    }
-
-    /// Joue la partie jusqu'au bout, le réseau choisissant pour tous son coup préféré : les fins de
-    /// partie qui rejugent les positions (`lab2 judge`). `w` est un monde possible (`determinize`).
-    /// `evals` : les évaluations déjà faites, à garder d'une fin à l'autre d'une même position (les
-    /// fins d'une position se ressemblent jusqu'au premier dé ou à la première carte tirée).
-    pub fn play_out<'m>(&self, evals: &mut Evals, w: &Game<'m>, k: &Knowledge) -> Game<'m> {
-        let mut end = *w;
-        let mut kw = *k;
-        while end.state.phase != Phase::GameOver {
-            let legal = moves::legal(&end, &kw);
-            let mv = if legal.len() == 1 {
-                legal[0].mv
-            } else {
-                best(&legal, &evals.get(&self.net, &encode(&end, &kw), end.map).logits)
-            };
-            kw.play(&mut end, &mv).expect("coup de la fin de partie");
-        }
-        end
     }
 
     /// La valeur d'une partie finie.
