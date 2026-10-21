@@ -14,10 +14,10 @@ réflexion disponible sur mini. Conserver ces deux mesures de force.
 **Où on en est (21 octobre) :** apprendre valeur et politique sur du jeu fort a relancé le
 progrès que les générations identiques à gen8 n'apportaient plus (gen9, puis gen10w) ; gen11 (E0)
 est un peu devant gen10w et le remplace dans le jeu. Le 21 octobre, chaque question ouverte a été
-tranchée et les variantes non retenues supprimées du code (« Une seule façon de faire »). **En
-cours :** l'adaptation aux adversaires (gen12, P3 : deviner le style de chacun d'après ses coups
-dans la partie, et le simuler ainsi ; « fondamental dans Small World » pour l'utilisateur).
-**Ensuite :** cibles territoriales (P7), puis placements.
+tranchée et les variantes non retenues supprimées du code (« Une seule façon de faire »). L'essai
+d'adaptation aux adversaires (gen12, P3) est abandonné pour le moment ; son code reste (histoire
+des joueurs, tête « coup réel », `bh`), non mesuré. **Ensuite :** cibles territoriales (P7), puis
+placements.
 
 **Décision du 20 octobre : l'Expert ne sait pas contre qui il joue.** Il doit bien jouer dans tous
 les cas : ni `rp=4` (simulation selon le type de chaque place), ni type de place (humain, IA,
@@ -270,20 +270,10 @@ apporté en jeu. Une information manquante dans l'encodage est une explication p
 
 ### Données et modèles à réutiliser
 
-Les dossiers désignent le générateur : `data/gen10` contient les parties de gen9 qui ont servi
-à entraîner gen10. Données dans le bucket (`s3://…/data/`) ; réseau `lab/nets/gen11.bin` (son
-`.pt` à côté, hors Git).
-
-| Source | Usage et provenance |
-| --- | --- |
-| `gen10`, `gen10-judged` | 20 000 parties gen9 `rp=1` (1,54 million de positions) ; 888 000 positions rejugées par 32 fins de gen9 |
-| `gen11`, `gen11-judged`, `gen11-mixed` | 20 000 parties gen10w `rp=1`, 30 % des positions rejugées par 32 fins de gen10w ; 10 000 parties à tables variées |
-| `gen12-mixed` | 10 000 parties à tables variées de gen11 (E0), avec les coups des autres joueurs |
-
-Elles sont aux anciens formats : gen12 les convertit au format v5 (`*-v5`), puis
-`lab/py/migrate.py` (temporaire) au format unique v6. Les données plus anciennes (`normal`,
-`gen0` à `gen9`, `label1` à `label4`, `p2`) et leurs conversions sont à supprimer (décision du
-21 octobre : encodages et formats abandonnés).
+Aucune donnée gardée : toutes les parties et positions (`normal`, `gen0` à `gen12`, `label1` à
+`label4`, `p2`), aux encodages et formats abandonnés, ont été supprimées le 21 octobre, sur mini et
+dans le bucket (décision de l'utilisateur). La génération suivante repart de parties neuves de
+gen11 au format unique. Réseau : `lab/nets/gen11.bin` (son `.pt` à côté, hors Git).
 
 L'auto-apprentissage garde 50 % des décisions cherchées à fond (n=200, bruit 0,25), les autres
 à 50 itérations : 500 parties en 102 à 152 s sur 64 cœurs selon les tables. `train.py` n'utilise
@@ -291,7 +281,7 @@ pas la validation pour choisir un état : nombre de lots fixe, dernier état exp
 
 ## Questions ouvertes
 
-1. **Adaptation aux adversaires** (P3, gen12 en cours) : l'histoire des joueurs aide-t-elle à
+1. **Adaptation aux adversaires** (P3, essai gen12 abandonné le 21 octobre, à reprendre) : l'histoire des joueurs aide-t-elle à
    prévoir leurs coups, et à mieux jouer face à des styles différents ?
 2. **Cibles trop globales** (P7) : victoire et pièces finales disent mal quelle région ou quel
    choix a été mal jugé ; des cibles locales pourraient enrichir le tronc commun.
@@ -375,16 +365,17 @@ garde), quitte à y revenir au besoin. Branche `cleanup`, fusionnée le 21 octob
   Difficile, non mesuré).
 - **Vérifié :** `lab speed` donne les mêmes empreintes (décisions et valeurs au bit près) pour
   gen11 avec le nouveau code que pour E0 avec l'ancien ; des parties jouées par l'ancien code,
-  converties par `migrate.py`, sont identiques octet pour octet à celles du nouveau (tables
+  converties par un script temporaire (`lab/py/migrate.py`, supprimé ensuite), sont identiques octet pour octet à celles du nouveau (tables
   variées et coups observés compris) ; tests Rust, Rust et PyTorch concordent (5·10⁻⁵).
 
-### En cours : adaptation aux adversaires (gen12, P3)
+### Adaptation aux adversaires : gen12 abandonné (21 octobre)
 
-Lancé le 21 octobre à 1 h 30 avec l'ancien code (archives, P3 : « Essai gen12 »). À l'arrivée :
-convertir ses données et ses réseaux H0 et H1 (`migrate.py`), puis supprimer `migrate.py` et les
-données aux anciens formats ; garder un seul réglage de `bh` (0, 1 ou 2, voir `search::Config`) ;
-si l'histoire n'aide pas, supprimer l'histoire et la tête « coup réel ». Le jeu ne transmet pas
-encore l'histoire à `expert` : à faire si l'essai réussit.
+Lancé le 21 octobre à 1 h 30 avec l'ancien code (archives, P3 : « Essai gen12 »), arrêté à 2 h 08
+à la demande de l'utilisateur, pendant la conversion des données : les 10 000 parties à tables
+variées étaient faites (500 en 102 s, 312 Mo par bloc avec les coups observés), rien d'entraîné ni
+mesuré ; 40 min, 0,51 $. Données supprimées avec les autres. Le code de P3 reste dans le jeu et le
+labo (histoire des joueurs en entrée, tête « coup réel » apprise par `train.py`, `bh` et `bt` dans
+`search::Config`) : à mesurer, ou à supprimer, quand l'essai reprendra.
 
 ### Ensuite
 
@@ -434,8 +425,8 @@ et 21,54 $ de réserve. Depuis ce relevé, estimations de `cloud.sh` : P0 0,87 $
 script non exécutable, et une reprise par AWS à 20 h 30, sans perte grâce à `--save`),
 confirmation P2 1,19 $, données de gen9 3,31 $, entraînement et arènes de gen9 0,96 $,
 données de gen10 3,46 $, entraînement et arènes de gen10 1,26 $, données de gen11 2,38 $,
-entraînement de gen11 1,43 $ (dont 0,18 $ perdus sur le premier lancement), soit 18,39 $ (gen12 en
-cours depuis le 21 octobre, 1 h 30). **Montants datés : consulter coûts et crédits du compte de gestion
+entraînement de gen11 1,43 $ (dont 0,18 $ perdus sur le premier lancement), gen12 abandonné
+0,51 $, soit 18,90 $. **Montants datés : consulter coûts et crédits du compte de gestion
 avant chaque campagne. Les crédits ne se renouvellent pas chaque semaine.**
 
 Pour chaque étape autorisée : mesurer un petit échantillon sur AWS, estimer durée et coût total
