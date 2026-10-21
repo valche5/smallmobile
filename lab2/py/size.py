@@ -5,7 +5,9 @@ erreurs de validation à celles d'autres tailles sur les mêmes parties.
     python size.py --data ../data/loop/c019 ../data/loop/c020 --size 96x6 --passes 2 --out ../runs/size/96x6.bin
 
 `--size LARGEURxCOUCHES` : un réseau neuf ; ou `--init réseau.bin` pour continuer un réseau déjà
-entraîné (sa taille vient du fichier). Après chaque passage sur les données : temps par lot et mesures de
+entraîné (sa taille vient du fichier ; ses mesures de départ sont affichées). `--share` : ne garder
+qu'une part des positions, tirée au hasard mais la même d'un processus à l'autre (plus de parties
+dans la même mémoire). Après chaque passage sur les données : temps par lot et mesures de
 validation. Une taille par processus : lab2/runs/size.sh en lance plusieurs en même temps.
 """
 
@@ -28,6 +30,7 @@ def main():
     size.add_argument("--size", help="LARGEURxCOUCHES, par exemple 96x6 : un réseau neuf")
     size.add_argument("--init", help="un réseau déjà entraîné (.bin), à continuer")
     ap.add_argument("--passes", type=int, default=2)
+    ap.add_argument("--share", type=float, default=1.0, help="part des positions gardées")
     ap.add_argument("--out", required=True)
     ap.add_argument("--threads", type=int)
     args = ap.parse_args()
@@ -35,7 +38,8 @@ def main():
     torch.manual_seed(0)
     if args.threads:
         torch.set_num_threads(args.threads)
-    recs, keys = load_data(args.data)
+    pick = np.random.default_rng(1)
+    recs, keys = load_data(args.data, keep=(lambda k: pick.random(len(k)) < args.share) if args.share < 1 else None)
     is_val = in_validation(keys, VAL_SHARE)
     val_idx, train_idx = np.flatnonzero(is_val), np.flatnonzero(~is_val)
     if args.init:
@@ -49,7 +53,13 @@ def main():
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=LR, total_steps=args.passes * per_pass, pct_start=0.1)
     weight = recs["weight"][train_idx].astype(np.float64)
     rng = np.random.default_rng(0)
-    print(f"{args.size} : {params} paramètres ; {len(train_idx)} positions d'entraînement, {len(val_idx)} de validation")
+    print(
+        f"{args.size} : {params} paramètres ; {len(train_idx)} positions d'entraînement, {len(val_idx)} de validation, "
+        f"{len(np.unique(keys))} parties",
+        flush=True,
+    )
+    if args.init:
+        print(f"{args.size}, au départ : {show(validate(net, recs, val_idx, 'cpu'))}", flush=True)
     for k in range(args.passes):
         order = rng.choice(train_idx, size=per_pass * BATCH, p=weight / weight.sum())
         start = time.time()
