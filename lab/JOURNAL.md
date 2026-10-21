@@ -1,8 +1,9 @@
 # IA SmallMobile : résultats utiles et plan d'expériences
 
-État au 20 octobre 2026. Ce document remplace le journal chronologique ; les anciens détails
-restent dans Git. Les résultats ci-dessous ont été mesurés. Les étapes P0 à P7 sont un plan
-à exécuter : la réécriture du document ne vaut pas réalisation de ces étapes.
+État au 21 octobre 2026. Ce document remplace le journal chronologique ; les anciens détails
+restent dans Git. Les résultats ci-dessous ont été mesurés. Le plan (« Plan ») ne garde que ce
+qui est en cours et les deux pistes suivantes ; l'ancien plan P0 à P7, fermé le 21 octobre, est
+archivé en fin de document (« Archives »).
 
 ## Objectif et priorité
 
@@ -10,15 +11,13 @@ Construire l'IA la plus forte possible sur les cartes générées, à **2, 3, 4 
 Le labo peut chercher longtemps ; la version du jeu doit aussi être évaluée au temps de
 réflexion disponible sur mini. Conserver ces deux mesures de force.
 
-**Où on en est (20 octobre) :** apprendre valeur et politique sur du jeu fort a relancé le
-progrès que les générations identiques à gen8 n'apportaient plus : C (+5 à +6 sur gen8), gen9
-(+7,9 sur C, plus de +10 sur gen8, livré le 20 octobre), gen10 (fenêtre W : +6,3 sur gen9, mais
-moins bon face à Normale). **Leviers suivants, dans l'ordre :** auditer l'encodage (fait :
-encodage v2) ; entraîner face à une population d'adversaires (P6, campagne gen11 en cours) ;
-**puis, en priorité, l'adaptation aux adversaires** (P3 : deviner le style de chacun d'après ses
-coups dans la partie, et le simuler ainsi ; « fondamental dans Small World » pour l'utilisateur,
-20 octobre au soir) ; cibles territoriales (P7) ; placements et recherche (P5). Détail : « Suite
-du plan après gen10 ».
+**Où on en est (21 octobre) :** apprendre valeur et politique sur du jeu fort a relancé le
+progrès que les générations identiques à gen8 n'apportaient plus (gen9, puis gen10w) ; gen11 (E0)
+est un peu devant gen10w et le remplace dans le jeu. Le 21 octobre, chaque question ouverte a été
+tranchée et les variantes non retenues supprimées du code (« Une seule façon de faire »). **En
+cours :** l'adaptation aux adversaires (gen12, P3 : deviner le style de chacun d'après ses coups
+dans la partie, et le simuler ainsi ; « fondamental dans Small World » pour l'utilisateur).
+**Ensuite :** cibles territoriales (P7), puis placements.
 
 **Décision du 20 octobre : l'Expert ne sait pas contre qui il joue.** Il doit bien jouer dans tous
 les cas : ni `rp=4` (simulation selon le type de chaque place), ni type de place (humain, IA,
@@ -39,13 +38,13 @@ pour décider. Voir `brain/src/know.rs` et le correctif P0.
   d'actions en boucle ouverte, mondes possibles, sélection PUCT ; chaque joueur maximise sa
   propre valeur. Les placements sont regroupés en quelques plans candidats.
 - `lab/` : arène, auto-apprentissage, cibles de valeur ; `lab/py/` : entraînement PyTorch.
-- Réseau : graphe des régions, 4 couches de largeur 64 ; 77 entrées par région, 700 globales
-  jusqu'à gen10 (version 1), 806 pour gen11 (version 2), 926 avec l'histoire des joueurs
-  (version 3, P3) ; 448 clés d'actions. Sorties : politique, victoire par joueur, pièces encore à
-  gagner ; depuis la version 3, une tête « coup réel » facultative (P3).
+- Réseau : graphe des régions, 4 couches de largeur 64 ; 77 entrées par région, 820 globales
+  (700 sur la position, puis 120 sur l'histoire des joueurs, P3) ; 448 clés d'actions. Sorties :
+  politique, victoire par joueur, pièces encore à gagner, et une tête « coup réel » facultative
+  (P3). Un seul encodage et un seul format de positions (`*.v6.bin`) depuis le 21 octobre.
   Inférence Rust AVX2/FMA ; concordance Python/Rust déjà vérifiée à environ 5·10⁻⁵.
-- Expert livré : `lab/nets/gen10w.bin` depuis le 20 octobre au soir (gen9 le matin, gen8 avant), via `target/release/expert`
-  et `src/server/expert.ts`.
+- Expert livré : `lab/nets/gen11.bin` depuis le 21 octobre (gen10w la veille au soir, gen9 le
+  matin, gen8 avant), via `target/release/expert` et `src/server/expert.ts`.
   `bun run kernel:build` construit le noyau WebAssembly et cet exécutable.
 - Mesure : `lab arena --hero A --field B`, ou `--table 'A|B|C'` pour une table fixe ; chaque
   joueur passe à chaque place. `--out r.tsv` écrit chaque place de chaque partie ;
@@ -57,35 +56,25 @@ pour décider. Voir `brain/src/know.rs` et le correctif P0.
   chaque décision (`ai.net`, et `expert` en tête du fichier ; ajouté après coup, gen8, aux parties
   d'avant le 20 octobre) ; résumé par `bun lab/tools/games.ts`. Les quelques parties humaines disponibles ne suffisent pas encore
   à entraîner un modèle des humains. Les 4 parties archivées au 19 octobre réunissent 1 ou
-  2 humains et 1 à 3 Expert : l'Expert affronte surtout d'autres Expert, qu'il simule pourtant
-  comme Normal (`rp=2`).
+  2 humains et 1 à 3 Expert : l'Expert affronte surtout d'autres Expert.
 
-Réglage livré (gen10w depuis le 20 octobre au soir, gen9 avant ; gen8 reste le témoin figé des mesures
-ci-dessous) :
+Réglage livré : `az:net=lab/nets/gen11.bin,n=200`. Il ne reste que trois réglages ; tout le
+reste est fixe, en constantes de `brain/src/search.rs` (21 octobre) :
 
-```text
-az:net=lab/nets/gen10w.bin,n=200,w=0.5,c=2.5,roll=1,depth=3,rp=1
-```
+| Réglage | Valeur | Sens |
+| --- | --- | --- |
+| `n` | 200 | Itérations de recherche par décision |
+| `noise` | 0 ; 0,25 en auto-apprentissage | Part du bruit de Dirichlet à la racine |
+| `bh`, `bt` | 0 et 1 | Adversaires simulés par la tête « coup réel » (P3, tranché par gen12) |
 
-`rp=1` dans le jeu depuis le 20 octobre, 20 h 47 (décision de l'utilisateur : plus d'IA Normale
-dans les fins simulées ; environ 190 ms par décision sur mini avec le code accéléré). Les mesures
-« aux réglages livrés » de ce journal ont été faites en `rp=2` jusqu'à gen10 ; la comparaison
-`rp=1`/`rp=2` avec gen10w est prévue dans la campagne gen11.
-
-| Paramètre | Sens |
-| --- | --- |
-| `n` | Itérations de recherche par décision |
-| `w` | Poids de la victoire ; le reste est une sigmoïde de l'avance sur le meilleur rival |
-| `c` | Exploration PUCT ; normalisation des valeurs par nœud activée par défaut |
-| `roll` | Part des fins simulées dans l'évaluation ; 0 = réseau seul |
-| `depth` | Nombre de **tours de joueur**, puis évaluation par le réseau ; 0 = fin complète |
-| `rp=0` | Normal pour tous dans les fins simulées |
-| `rp=1` | Politique du réseau pour tous, sans recherche imbriquée |
-| `rp=2` | Réseau pour soi, Normal pour les adversaires |
-| `rp=3` | Réseau pour soi, modèle adverse tiré selon les croyances |
-| `rp=4` | Réseau pour soi, chaque adversaire selon le type de sa place (réseau pour un Expert, Normal pour une IA du jeu) ; place inconnue : mélange égal |
-| `rt` | Température des coups du réseau dans les fins ; défaut 0, coup préféré |
-| `rolls` | Fins simulées par position nouvelle ; défaut 1 |
+Constantes : exploration PUCT 2,5 ; valeur = 0,5 × victoire + 0,5 × sigmoïde (échelle 8) de
+l'avance en pièces sur le meilleur rival ; valeurs des coups ramenées entre 0 et 1 dans chaque
+nœud, coup jamais essayé à la valeur du nœud moins 0,2 ; concentration du bruit 0,3 ; chaque
+position nouvelle jugée par une fin simulée de 3 tours de joueur où le réseau joue pour tous
+(son coup préféré), puis par le réseau. Dans les mesures historiques, ces réglages s'écrivaient
+`c=2.5,w=0.5,roll=1,depth=3,rp=1,rt=0` ; `rp=0` (Normale pour tous), `rp=2` (Normale pour les
+adversaires, réglage du jeu jusqu'au 20 octobre), `rp=3` et `rp=4` (croyances, type de place) sont
+supprimés.
 
 Sur mini (i5-8500T, un cœur), l'Expert livré prend environ 80 à 250 ms par décision,
 médiane 170 ms. Ce sont des repères mesurés, pas une garantie de latence.
@@ -281,79 +270,40 @@ apporté en jeu. Une information manquante dans l'encodage est une explication p
 
 ### Données et modèles à réutiliser
 
-Les dossiers désignent le générateur : `data/gen7` contient les parties de gen7 qui ont servi
-à entraîner gen8. Données volumineuses et checkpoints `.pt` : à retrouver sur mini et dans
-le bucket. Réseaux exportés `.bin` : `lab/nets/`.
+Les dossiers désignent le générateur : `data/gen10` contient les parties de gen9 qui ont servi
+à entraîner gen10. Données dans le bucket (`s3://…/data/`) ; réseau `lab/nets/gen11.bin` (son
+`.pt` à côté, hors Git).
 
 | Source | Usage et provenance |
 | --- | --- |
-| `normal`, `gen0`, `gen1` | Amorçage : Normal, MCTS, premières recherches hybrides |
-| `label1` | Environ 1,96 million de positions issues de Normal avec exploration |
-| `label2`, `label3`, `label4` | Positions issues de gen3l, gen4, gen5 ; 60 000, 60 000, 80 000 parties sources |
-| Tous les `label1` à `label4` | Valeur calculée par **32 fins jouées par Normal**, même si la position vient d'un Expert |
-| `gen6` | 20 000 parties, 1,42 million de positions ; `rp=2`, n=200, profondeur 3 |
-| `gen7` | 20 000 parties, 1,48 million de positions, environ 8 Go ; même recette |
-| gen8 | Depuis gen7 ; valeur sur `label1` à `label4`, politique sur `gen7:policy` et `gen6@0.5:policy`, 8 passes |
-| `p2`, `p2-judged` | 5 000 parties gen8 `rp=1` (377 000 positions) ; 221 000 positions rejugées par 32 fins de gen8 |
-| `gen9`, `gen9-judged` | 20 000 parties p2c `rp=1` (1,51 million de positions) ; 861 000 positions rejugées par 32 fins de p2c |
-| gen9 | Depuis gen8 ; anciennes sources au quart, plus `p2`, `p2-judged`, `gen9`, `gen9-judged` (valeur et politique), 24 000 lots (P2 étendu) |
 | `gen10`, `gen10-judged` | 20 000 parties gen9 `rp=1` (1,54 million de positions) ; 888 000 positions rejugées par 32 fins de gen9 |
-| `gen10f`, `gen10w` | Depuis gen9, 24 000 lots : F comme gen9 plus `gen10` ; W seulement `p2`, `gen9`, `gen10` (fenêtre) |
+| `gen11`, `gen11-judged`, `gen11-mixed` | 20 000 parties gen10w `rp=1`, 30 % des positions rejugées par 32 fins de gen10w ; 10 000 parties à tables variées |
+| `gen12-mixed` | 10 000 parties à tables variées de gen11 (E0), avec les coups des autres joueurs |
 
-Les générations récentes gardent 50 % des décisions cherchées à fond, les autres à 50 itérations,
-avec bruit 0,25 pour les recherches complètes. Générer 20 000 parties prenait environ une heure
-sur 64 cœurs ; entraîner gen8 environ 78 minutes. Ce sont des repères pour l'ancienne recette,
-pas une estimation des fins entièrement jouées par le réseau.
+Elles sont aux anciens formats : gen12 les convertit au format v5 (`*-v5`), puis
+`lab/py/migrate.py` (temporaire) au format unique v6. Les données plus anciennes (`normal`,
+`gen0` à `gen9`, `label1` à `label4`, `p2`) et leurs conversions sont à supprimer (décision du
+21 octobre : encodages et formats abandonnés).
 
-Dans `train.py`, `:policy` exclut la valeur d'une source ; `@0.5` sous-échantillonne les blocs,
-ce n'est pas un poids de perte. `--q-weight` mélange résultat et pièces attendues par la
-recherche, sans modifier la cible de victoire. `--lazy` lit les données à la demande.
-`train.py` n'utilise pas la validation pour choisir un état : nombre de passes fixe, dernier
-état exporté. Le découpage par blocs n'a donc faussé que les chiffres affichés, pas les réseaux.
-Les enregistrements gardent les pièces attendues par la recherche (`qgain`), pas ses chances
-de victoire, ni la graine et les actions de la partie.
+L'auto-apprentissage garde 50 % des décisions cherchées à fond (n=200, bruit 0,25), les autres
+à 50 itérations : 500 parties en 102 à 152 s sur 64 cœurs selon les tables. `train.py` n'utilise
+pas la validation pour choisir un état : nombre de lots fixe, dernier état exporté.
 
-Les frontières des parties se retrouvent dans les fichiers existants : les positions d'une
-partie se suivent et partagent la même carte. Sur `gen7/s6acfc7-00.v2.bin`, le triplet
-(joueurs, régions, voisinages) découpe 23 122 positions en 322 segments, tous de cartes
-distinctes, de longueur médiane 49 à 2 joueurs et 91 à 5 joueurs, au plus 117 : des parties
-entières (64 fichiers, environ 20 000 parties).
+## Questions ouvertes
 
-## Hypothèses à départager
+1. **Adaptation aux adversaires** (P3, gen12 en cours) : l'histoire des joueurs aide-t-elle à
+   prévoir leurs coups, et à mieux jouer face à des styles différents ?
+2. **Cibles trop globales** (P7) : victoire et pièces finales disent mal quelle région ou quel
+   choix a été mal jugé ; des cibles locales pourraient enrichir le tronc commun.
+3. **Coups absents** (placements) : `brain/src/moves.rs` fixe certains placements de pouvoirs et
+   limite les plans de redéploiement et de défense ; la recherche ne peut choisir un plan absent.
+   Coût en jeu non mesuré.
 
-1. **Ancrage sur Normal.** La valeur apprend ses fins de partie ; la politique apprend des
-   recherches dont les adversaires des fins simulées jouent Normal. C'est une explication
-   plausible du plateau, pas une causalité isolée. `label --agent` ne change que les positions
-   sources : le joueur qui les juge reste Normal.
-2. **Adaptation adverse.** `brain/src/opponents.rs` contient deux modèles, Normal et le coup
-   préféré du réseau, avec mise à jour bayésienne. `search_against` reçoit les croyances,
-   mais leur observation n'est pas branchée dans l'arène ou le jeu. `rp=3` via `search` est
-   donc un mélange 50/50 sans adaptation. Aucun gain adaptatif n'est mesuré. Les types de
-   places (humain, Expert, niveau d'IA) sont publics : simuler chaque place selon son type est
-   honnête et ne demande aucune croyance ; seul le jeu des humains reste à deviner.
-   **Type de place exclu (décision du 20 octobre) :** l'Expert ne sait pas contre qui il joue ;
-   seul le profil observé dans la partie est permis (P3).
-3. **Cibles de politique.** Une recherche à 200 itérations peut bien jouer sans suffisamment
-   améliorer la politique qu'elle doit enseigner. Comparer les recettes à coût total comparable.
-4. **Coups absents.** `brain/src/moves.rs` fixe certains placements de pouvoirs et limite les
-   plans de redéploiement/défense. La recherche ne peut choisir un plan absent. L'importance
-   de cette restriction n'a pas été mesurée.
-5. **Entrées de la valeur.** Avec les anciennes cibles, l'erreur de valeur ne baissait ni avec
-   les données ni avec la taille du réseau. Les nouvelles la font baisser (9,3 → 8,4 → 6,6
-   pièces face aux fins du réseau, gen8 → C → gen9), sauf à la dernière manche, presque
-   déterministe (2,5 → 3,3). Deux informations publiques manquent dans `brain/src/encode.rs`
-   (vérifié le 20 octobre) : une paix n'est encodée que si elle concerne le joueur qui agit,
-   celle entre deux adversaires est invisible ; des cartes rendues sous la pioche, le réseau
-   reçoit le nombre (`G_KNOWN_TAIL`), pas l'ordre, public. Le type de chaque place n'est pas
-   non plus une entrée, et ne doit pas l'être (décision du 20 octobre). Effet non mesuré :
-   l'erreur résiduelle seule ne prouve pas que ces manques en sont la cause.
-6. **Angle mort de l'auto-apprentissage.** Des parties entre réseaux apprennent peu à exploiter
-   des adversaires d'un autre style. Mesuré en gen10 : sans les anciennes parties de Normal, W
-   bat F parmi des gen9 (+3,0) mais exploite moins bien Normale (−4,3). Essai direct : une
-   population d'adversaires dans les parties d'entraînement (P6).
-7. **Cibles trop globales.** Victoire et pièces finales disent mal quelle région ou quel choix a
-   été mal jugé. Des cibles locales (propriétaire de chaque région après une rotation, revenu
-   au prochain décompte, pertes d'une armée) pourraient enrichir le tronc commun (P7).
+Fermées le 21 octobre : l'ancrage sur Normale (elle ne joue plus dans la recherche ni dans les
+cibles) ; les croyances bayésiennes et le type de place (supprimés, remplacés par l'histoire) ;
+les cibles de politique et les pièces attendues par la recherche (P4, `q` : non retenues) ; les
+entrées de la valeur (encodage v2 : sans gain mesuré en gen11, retiré) ; l'angle mort de
+l'auto-apprentissage (les tables variées font partie des données, P3 en a besoin).
 
 ## Protocole commun
 
@@ -400,7 +350,126 @@ entières (64 fichiers, environ 20 000 parties).
 - Tests ciblés pour chaque modification, puis vérifications Rust du projet avec timeout.
   Entraînement et campagnes de parties se font sur AWS.
 
-## Plan priorisé
+## Plan
+
+### Une seule façon de faire (21 octobre)
+
+Décision de l'utilisateur : une option par question, les autres supprimées du code (Git les
+garde), quitte à y revenir au besoin. Branche `cleanup`, fusionnée le 21 octobre :
+- **Recherche :** fins simulées jouées par le réseau pour tous (`rp=1`), réglages fixes en
+  constantes (« Système actuel ») ; croyances (`opponents.rs`), IA Normale dans la recherche et
+  recherche sans réseau (`mcts`, celle de gen0) supprimées.
+- **Encodage et formats :** un encodage (700 entrées de base puis l'histoire), un format de
+  positions (`*.v6.bin`, sans les cibles `q`) ; entrées de la version 2, traduction des clés de
+  paix des vieux réseaux et `lab reencode` supprimés.
+- **Entraînement :** une recette (AdamW, 5e-4 en un cycle, 24 000 lots de 512, `train.py` sans
+  options de recette) ; témoins (`--old-inputs`, `--no-history`, `--no-v2`), `--q-weight`,
+  `--policy-temp`, `--lazy`, `dossier@part`, `:policy`/`:value` supprimés.
+- **Données :** auto-apprentissage de l'Expert, tables variées et coups observés compris, puis
+  positions rejugées par 32 fins du réseau (`lab judge`) ; `lab label` et jugement par Normale
+  supprimés.
+- **Outils :** `lab arena`, `speed`, `selfplay`, `check-net`, `judge`, `analyze` ; `bench`,
+  `agree`, `trace`, `noise`, `audit` supprimés.
+- **Réseaux :** gen11 seul (E0 converti à l'encodage unique, poids des entrées retirées nuls) ;
+  le jeu passe de gen10w à gen11 (E0 : +3,7 ± 1,6 parmi des gen10w ; face à Normale et
+  Difficile, non mesuré).
+- **Vérifié :** `lab speed` donne les mêmes empreintes (décisions et valeurs au bit près) pour
+  gen11 avec le nouveau code que pour E0 avec l'ancien ; des parties jouées par l'ancien code,
+  converties par `migrate.py`, sont identiques octet pour octet à celles du nouveau (tables
+  variées et coups observés compris) ; tests Rust, Rust et PyTorch concordent (5·10⁻⁵).
+
+### En cours : adaptation aux adversaires (gen12, P3)
+
+Lancé le 21 octobre à 1 h 30 avec l'ancien code (archives, P3 : « Essai gen12 »). À l'arrivée :
+convertir ses données et ses réseaux H0 et H1 (`migrate.py`), puis supprimer `migrate.py` et les
+données aux anciens formats ; garder un seul réglage de `bh` (0, 1 ou 2, voir `search::Config`) ;
+si l'histoire n'aide pas, supprimer l'histoire et la tête « coup réel ». Le jeu ne transmet pas
+encore l'histoire à `expert` : à faire si l'essai réussit.
+
+### Ensuite
+
+1. **Cibles territoriales** (P7, archives).
+2. **Placements** (P5, archives : espace des coups).
+
+Aucune autre piste ouverte.
+
+## Les machines AWS
+
+Règles d'usage (aucun calcul lourd sur mini, `lab/tools/cloud.sh`, une commande par étape avec
+délai estimé, utilisateur informé à chaque étape, `cloud.sh status` après chaque calcul) :
+voir `AGENTS.md`. Aucun calcul AWS sans son accord pour l'instant ; ce plan n'autorise pas une
+dépense.
+
+Configuration constatée le 19 octobre 2026, à revérifier avant de dépenser :
+
+- SmallAI `631245464763`, profil `smallai`, région `eu-north-1` (Stockholm). Fonctionnalités
+  avancées activées, Spot autorisé, quota Standard Spot 64 vCPU ; une seule `c7a.16xlarge`
+  à la fois. Le DryRun a vérifié les permissions, pas la disponibilité réelle.
+- `cloud.sh` impose Spot sans repli à la demande (`SPOT=0` refusé). Par défaut :
+  `c7a.16xlarge`, 128 Gio de mémoire, disque gp3 de 100 Gio. Plafond de **1 $/h pour le calcul**,
+  hors disque, IPv4, S3 et autres frais. Lire le prix Spot effectif avant de chiffrer une étape ;
+  les anciennes générations à environ 10 $ utilisaient le tarif à la demande.
+- Maximum 12 h par machine, extinction après 20 min sans calcul, destruction à l'extinction
+  avec suppression du disque. Spot ponctuel, interruption avec destruction, aucun remplacement
+  automatique.
+- Interruptions, relevé du 19 octobre : AWS classe `c7a.16xlarge` à Stockholm dans la tranche
+  « 5 à 10 % » (part des machines reprises sur le mois écoulé ; `c7a.8xlarge` : plus de 20 %).
+  Les prix Spot ont doublé en un mois (0,35 → 0,77 à 0,89 $/h selon la zone) ; eu-north-1c a
+  dépassé le plafond de 1 $/h du 13 au 16 octobre (1,064 $ au plus haut). `cloud.sh up` prend la
+  zone la moins chère sous le plafond. Pour un calcul long, `job --save lab/X,...` garde ces
+  dossiers dans le bucket (`s3://…/X`) : repris au lancement, copiés toutes les 10 min, à
+  l'annonce d'une reprise (2 min avant) et à la fin. Découper le calcul en morceaux déplacés
+  dans le dossier gardé une fois complets, et sauter ceux déjà présents : un calcul relancé
+  reprend alors où il en était.
+- Bucket `s3://smallai-lab-631245464763/data/`, rôle machine `smallai-worker`, politiques dans
+  `lab/tools/aws/`. Synchroniser ensuite les résultats sur mini.
+
+Budget global avant crédits `Credits-Semaine-19-25-Oct-2026-110USD`, compte de gestion
+`051299608012` : **110 $ du 19 octobre 00:00 UTC au 26 octobre 00:00 UTC**, alertes à
+55/80/100/110 $. Ce sont des alertes, pas une coupure automatique. Les anciens plafonds mensuels
+ne s'appliquent plus. Dernier relevé du 19 octobre : 8,31 $ consommés sur la période,
+123,23 $ de crédits restants estimés, soit 101,69 $ de dépenses supplémentaires dans ce budget
+et 21,54 $ de réserve. Depuis ce relevé, estimations de `cloud.sh` : P0 0,87 $, essais Spot
+0,02 $, P1 1,11 $, pilote P2 0,86 $, entraînement et arènes P2 1,54 $ (dont 0,10 $ perdus sur un
+script non exécutable, et une reprise par AWS à 20 h 30, sans perte grâce à `--save`),
+confirmation P2 1,19 $, données de gen9 3,31 $, entraînement et arènes de gen9 0,96 $,
+données de gen10 3,46 $, entraînement et arènes de gen10 1,26 $, données de gen11 2,38 $,
+entraînement de gen11 1,43 $ (dont 0,18 $ perdus sur le premier lancement), soit 18,39 $ (gen12 en
+cours depuis le 21 octobre, 1 h 30). **Montants datés : consulter coûts et crédits du compte de gestion
+avant chaque campagne. Les crédits ne se renouvellent pas chaque semaine.**
+
+Pour chaque étape autorisée : mesurer un petit échantillon sur AWS, estimer durée et coût total
+(installation, données, calcul, évaluation), fixer le timeout, puis lancer l'étape complète.
+Ne pas lancer toute la feuille de route d'un seul bloc. L'en-tête de `tools/cloud.sh` documente
+`job --type ... --data ... --get ... -- 'commande'` et le rapatriement des résultats.
+
+## Références et tenue du document
+
+- **David J. Wu — Accelerating Self-Play Learning in Go (KataGo, 2019/2020).**
+  [Article](https://arxiv.org/abs/1902.10565),
+  [texte intégral](https://arxiv.org/html/1902.10565v5).
+  Sections 3.1/3.2 : allocation variable de recherche, exploration et cibles de politique.
+  Application : P4. La randomisation du budget existe déjà dans le labo ; ses réglages et la
+  qualité des cibles restent à comparer dans ce jeu. Section 4.1 : propriété du plateau et score
+  comme cibles auxiliaires. Application : P7.
+- **Équipe AlphaStar — Mastering the real-time strategy game StarCraft II (2019).**
+  [Présentation des auteurs](https://deepmind.google/blog/alphastar-mastering-the-real-time-strategy-game-starcraft-ii/).
+  « How AlphaStar is trained » : population de concurrents, versions figées, diversité des
+  stratégies. Application : P6, population d'adversaires puis exploiteurs. Cela inspire un essai,
+  sans garantie de progrès pour un jeu à 2–5 joueurs.
+
+Après chaque expérience, mettre à jour la synthèse et le statut de l'étape concernée. Garder
+dans `lab/runs/` scripts, résultats détaillés et manifeste : hypothèse, code/poids, sources,
+graines, paramètres, budget, résultats par taille, incertitude et décision. `lab/runs/` est
+ignoré par Git : sauvegarder ces fichiers et les autres artefacts sur mini et/ou S3, avec leur
+emplacement consigné. Ne pas recréer une
+chronologie exhaustive ici : conserver ce qui change une décision, les échecs qui évitent
+de refaire un essai et les prochaines actions concrètes.
+
+## Archives : plan jusqu'au 20 octobre (fermé le 21 octobre)
+
+Gardé pour ses résultats et ses raisons. Les réglages, commandes et formats qu'il cite (`rp`,
+`roll`, `label`, `reencode`, `*.v3.bin`…) n'existent plus dans le code depuis le 21 octobre.
 
 ### P0 — Fiabiliser la recherche et les mesures
 
@@ -1013,76 +1082,3 @@ l'Expert ne sait pas contre qui il joue).
 Garder les résultats de parties fortes au cœur des cibles de valeur. Faible priorité inchangée :
 réseau plus gros (latence sur mini ; l'échec passé portait sur les anciennes cibles), davantage
 de fins moyennées du même réseau, générations identiques sans mesurer leur gain marginal.
-
-## Les machines AWS
-
-Règles d'usage (aucun calcul lourd sur mini, `lab/tools/cloud.sh`, une commande par étape avec
-délai estimé, utilisateur informé à chaque étape, `cloud.sh status` après chaque calcul) :
-voir `AGENTS.md`. Aucun calcul AWS sans son accord pour l'instant ; ce plan n'autorise pas une
-dépense.
-
-Configuration constatée le 19 octobre 2026, à revérifier avant de dépenser :
-
-- SmallAI `631245464763`, profil `smallai`, région `eu-north-1` (Stockholm). Fonctionnalités
-  avancées activées, Spot autorisé, quota Standard Spot 64 vCPU ; une seule `c7a.16xlarge`
-  à la fois. Le DryRun a vérifié les permissions, pas la disponibilité réelle.
-- `cloud.sh` impose Spot sans repli à la demande (`SPOT=0` refusé). Par défaut :
-  `c7a.16xlarge`, 128 Gio de mémoire, disque gp3 de 100 Gio. Plafond de **1 $/h pour le calcul**,
-  hors disque, IPv4, S3 et autres frais. Lire le prix Spot effectif avant de chiffrer une étape ;
-  les anciennes générations à environ 10 $ utilisaient le tarif à la demande.
-- Maximum 12 h par machine, extinction après 20 min sans calcul, destruction à l'extinction
-  avec suppression du disque. Spot ponctuel, interruption avec destruction, aucun remplacement
-  automatique.
-- Interruptions, relevé du 19 octobre : AWS classe `c7a.16xlarge` à Stockholm dans la tranche
-  « 5 à 10 % » (part des machines reprises sur le mois écoulé ; `c7a.8xlarge` : plus de 20 %).
-  Les prix Spot ont doublé en un mois (0,35 → 0,77 à 0,89 $/h selon la zone) ; eu-north-1c a
-  dépassé le plafond de 1 $/h du 13 au 16 octobre (1,064 $ au plus haut). `cloud.sh up` prend la
-  zone la moins chère sous le plafond. Pour un calcul long, `job --save lab/X,...` garde ces
-  dossiers dans le bucket (`s3://…/X`) : repris au lancement, copiés toutes les 10 min, à
-  l'annonce d'une reprise (2 min avant) et à la fin. Découper le calcul en morceaux déplacés
-  dans le dossier gardé une fois complets, et sauter ceux déjà présents : un calcul relancé
-  reprend alors où il en était.
-- Bucket `s3://smallai-lab-631245464763/data/`, rôle machine `smallai-worker`, politiques dans
-  `lab/tools/aws/`. Synchroniser ensuite les résultats sur mini.
-
-Budget global avant crédits `Credits-Semaine-19-25-Oct-2026-110USD`, compte de gestion
-`051299608012` : **110 $ du 19 octobre 00:00 UTC au 26 octobre 00:00 UTC**, alertes à
-55/80/100/110 $. Ce sont des alertes, pas une coupure automatique. Les anciens plafonds mensuels
-ne s'appliquent plus. Dernier relevé du 19 octobre : 8,31 $ consommés sur la période,
-123,23 $ de crédits restants estimés, soit 101,69 $ de dépenses supplémentaires dans ce budget
-et 21,54 $ de réserve. Depuis ce relevé, estimations de `cloud.sh` : P0 0,87 $, essais Spot
-0,02 $, P1 1,11 $, pilote P2 0,86 $, entraînement et arènes P2 1,54 $ (dont 0,10 $ perdus sur un
-script non exécutable, et une reprise par AWS à 20 h 30, sans perte grâce à `--save`),
-confirmation P2 1,19 $, données de gen9 3,31 $, entraînement et arènes de gen9 0,96 $,
-données de gen10 3,46 $, entraînement et arènes de gen10 1,26 $, données de gen11 2,38 $,
-entraînement de gen11 1,43 $ (dont 0,18 $ perdus sur le premier lancement), soit 18,39 $ (gen12 en
-cours depuis le 21 octobre, 1 h 30). **Montants datés : consulter coûts et crédits du compte de gestion
-avant chaque campagne. Les crédits ne se renouvellent pas chaque semaine.**
-
-Pour chaque étape autorisée : mesurer un petit échantillon sur AWS, estimer durée et coût total
-(installation, données, calcul, évaluation), fixer le timeout, puis lancer l'étape complète.
-Ne pas lancer toute la feuille de route d'un seul bloc. L'en-tête de `tools/cloud.sh` documente
-`job --type ... --data ... --get ... -- 'commande'` et le rapatriement des résultats.
-
-## Références et tenue du document
-
-- **David J. Wu — Accelerating Self-Play Learning in Go (KataGo, 2019/2020).**
-  [Article](https://arxiv.org/abs/1902.10565),
-  [texte intégral](https://arxiv.org/html/1902.10565v5).
-  Sections 3.1/3.2 : allocation variable de recherche, exploration et cibles de politique.
-  Application : P4. La randomisation du budget existe déjà dans le labo ; ses réglages et la
-  qualité des cibles restent à comparer dans ce jeu. Section 4.1 : propriété du plateau et score
-  comme cibles auxiliaires. Application : P7.
-- **Équipe AlphaStar — Mastering the real-time strategy game StarCraft II (2019).**
-  [Présentation des auteurs](https://deepmind.google/blog/alphastar-mastering-the-real-time-strategy-game-starcraft-ii/).
-  « How AlphaStar is trained » : population de concurrents, versions figées, diversité des
-  stratégies. Application : P6, population d'adversaires puis exploiteurs. Cela inspire un essai,
-  sans garantie de progrès pour un jeu à 2–5 joueurs.
-
-Après chaque expérience, mettre à jour la synthèse et le statut de l'étape concernée. Garder
-dans `lab/runs/` scripts, résultats détaillés et manifeste : hypothèse, code/poids, sources,
-graines, paramètres, budget, résultats par taille, incertitude et décision. `lab/runs/` est
-ignoré par Git : sauvegarder ces fichiers et les autres artefacts sur mini et/ou S3, avec leur
-emplacement consigné. Ne pas recréer une
-chronologie exhaustive ici : conserver ce qui change une décision, les échecs qui évitent
-de refaire un essai et les prochaines actions concrètes.
