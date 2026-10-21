@@ -271,8 +271,8 @@ cmd_push() { # tous les labos (membres de l'espace de travail Rust), sans leurs 
   local labs
   labs=$(ls -d lab[0-9]*)
   # shellcheck disable=SC2086
-  tar -czf - --exclude='lab[0-9]*/data' --exclude='lab[0-9]*/runs' --exclude=.venv --exclude=__pycache__ \
-    --exclude='*.pt' Cargo.toml Cargo.lock rustfmt.toml kernel labtools $labs |
+  tar -czf - --exclude='lab[0-9]*/data' --exclude='lab[0-9]*/runs' --exclude=labtools/state --exclude=.venv \
+    --exclude=__pycache__ --exclude='*.pt' Cargo.toml Cargo.lock rustfmt.toml kernel labtools $labs |
     on 'mkdir -p smallmobile && tar -xzf - -C smallmobile'
   if compgen -G "$LAB/runs/*.sh" > /dev/null; then
     tar -czf - "$LAB"/runs/*.sh | on 'tar -xzf - -C smallmobile'
