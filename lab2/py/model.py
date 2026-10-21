@@ -1,4 +1,7 @@
-"""Le réseau, côté PyTorch. Même architecture que lab2/brain/src/net.rs, qui le recalcule en Rust."""
+"""Le réseau, côté PyTorch. Même architecture que lab2/brain/src/net.rs, qui le recalcule en Rust.
+
+    python model.py ../nets/gen0.bin     écrit un réseau neuf (gen0 : il joue au hasard)
+"""
 
 import struct
 
@@ -85,6 +88,11 @@ class Net(nn.Module):
         self.glob_pol2 = nn.Linear(h, GLOBAL_KEYS)
         self.val1 = nn.Linear(2 * h, h)
         self.val2 = nn.Linear(h, 10)
+        # les sorties partent de zéro : un réseau neuf joue au hasard (politique uniforme, mêmes
+        # chances pour tous les joueurs)
+        for lin in (self.node_pol, self.glob_pol2, self.val2):
+            nn.init.zeros_(lin.weight)
+            nn.init.zeros_(lin.bias)
         node, glob = scales()
         self.register_buffer("node_scale", torch.from_numpy(node), persistent=False)
         self.register_buffer("global_scale", torch.from_numpy(glob), persistent=False)
@@ -165,3 +173,10 @@ def export(net: Net, path):
             for d in t.shape:
                 f.write(struct.pack("<I", d))
             f.write(t.numpy().astype("<f4").tobytes())
+
+
+if __name__ == "__main__":
+    import sys
+
+    torch.manual_seed(0)
+    export(Net(), sys.argv[1])

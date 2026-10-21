@@ -11,14 +11,11 @@ NODE = 77
 # l'histoire des joueurs
 GLOBAL = 820
 ILLEGAL = 65535
-# drapeau d'un enregistrement (champ `flags`) : table variée
-MIXED = 1
 
 RECORD = np.dtype(
     [
         ("players", "u1"),
         ("regions", "u1"),
-        ("flags", "u1"),
         ("win", "<f4", 5),
         ("gain", "<f4", 5),
         # politique améliorée de la recherche, à une constante près (ILLEGAL : coup impossible)

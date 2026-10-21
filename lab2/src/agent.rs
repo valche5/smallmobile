@@ -49,7 +49,7 @@ impl KernelAi {
     }
 }
 
-/// Des styles de jeu de l'IA Normale, pour des tables variées (`lab1/JOURNAL.md`, P3) : nom, réglages.
+/// Des styles de jeu de l'IA Normale, adversaires des arènes (`lab1/JOURNAL.md`, P3) : nom, réglages.
 /// Les conquêtes au rendement immédiat (`conquest_model=0`) laissent jouer les primes et malus des
 /// régions visées ; le déclin à seuils (`decline_model=0`), ses seuils.
 pub const STYLES: [(&str, &str); 5] = [

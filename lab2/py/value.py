@@ -1,6 +1,6 @@
 """Où les réseaux se trompent : leurs erreurs sur les parties de validation, par genre de position.
 
-    python value.py --data ../data/gen1 ../data/gen1-mixed --nets ../nets/gen0.bin ../runs/gen1/gen1.bin
+    python value.py --data ../data/gen2 --nets ../nets/gen1.bin ../nets/gen2.bin
 
 Genres : phase (choix d'un peuple, conquête, redéploiement avec ou sans jetons en main, défense),
 à 2 joueurs ou à 3 à 5. Pour chaque réseau : perte de la valeur (celle de train.py), brier, biais
@@ -107,6 +107,8 @@ def main():
     linked = same_turn(recs, keys)
     for name, (a, b) in PASSAGES.items():
         sel = linked & (phase[:-1] == a) & (phase[1:] == b)
+        if not sel.any():
+            continue
         print(f"{name:32} {sel.sum():7}")
         for net, r in results.items():
             d = (r["pred"][1:] - r["pred"][:-1])[sel]

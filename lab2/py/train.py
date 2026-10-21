@@ -1,8 +1,8 @@
 """Entraîne le réseau sur des parties d'entraînement (`lab2 selfplay`), puis l'exporte pour Rust.
 
-    python train.py --data ../data/gen1 ../data/gen1-mixed --init ../nets/gen0.bin --out ../nets/gen1.bin
+    python train.py --data ../data/gen2 --init ../nets/gen1.bin --out ../nets/gen2.bin
 
-Sans `--init`, un réseau neuf (taille par défaut de `model.Net`).
+Sans `--init`, un réseau neuf (`model.Net`).
 
 Cibles : la politique (politique améliorée de la recherche à la racine, Gumbel AlphaZero), la
 victoire (part de chaque joueur à la fin de la partie) et, en appoint, les pièces gagnées d'ici la

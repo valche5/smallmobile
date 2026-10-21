@@ -24,7 +24,7 @@ Labos :
 | Labo | Approche | État |
 | --- | --- | --- |
 | `lab1` | Recherche AlphaZero sur mondes possibles (boucle ouverte), fins simulées de 3 tours, coups regroupés ; réseaux gen0 à gen11 | Figé le 21 octobre 2026 ; Expert `lab1/gen11` du jeu |
-| `lab2` | Gumbel AlphaZero, nœuds de hasard, coups jeton après jeton (`lab2/journal.md`) | En cours depuis le 21 octobre 2026 |
+| `lab2` | Gumbel AlphaZero, nœuds de hasard, coups jeton après jeton, départ de zéro (`lab2/journal.md`) | En cours depuis le 21 octobre 2026 |
 
 Outils communs (ce dossier) :
 
@@ -127,7 +127,7 @@ script non exécutable, et une reprise par AWS à 20 h 30, sans perte grâce à 
 confirmation P2 1,19 $, données de gen9 3,31 $, entraînement et arènes de gen9 0,96 $,
 données de gen10 3,46 $, entraînement et arènes de gen10 1,26 $, données de gen11 2,38 $,
 entraînement de gen11 1,43 $ (dont 0,18 $ perdus sur le premier lancement), gen12 abandonné
-0,51 $, lab2 gen1 1,53 $, diagnostics de lab2 0,65 et 0,31 $, soit 21,39 $. **Montants datés : consulter coûts et crédits du compte de gestion
+0,51 $, premiers essais de lab2 depuis les poids de lab1 (abandonnés, données effacées) 2,49 $, soit 21,39 $. **Montants datés : consulter coûts et crédits du compte de gestion
 avant chaque campagne. Les crédits ne se renouvellent pas chaque semaine.**
 
 Pour chaque étape autorisée : mesurer un petit échantillon sur AWS, estimer durée et coût total

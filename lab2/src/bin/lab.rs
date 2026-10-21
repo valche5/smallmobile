@@ -6,8 +6,7 @@
 //! lab2 arena --table 'az:net=poids.bin|hard|normal' [--deals 100] [--out r.tsv]   (table fixe)
 //! lab2 speed --agent az:net=poids.bin,n=200 [--positions 12] [--seed 1]   (temps et empreinte des recherches)
 //! lab2 selfplay --agent az:net=poids.bin --games 1000 --out lab2/data/gen1 [--players 2,3,4,5]
-//!     [--full-share 0.5 --fast 50]   (recherches avec bruit de Gumbel ; part des recherches complètes)
-//!     [--field 'easy|normal:aggressive|az:net=gen0.bin,n=20' --mixed 0.5]   (tables variées)
+//!     (auto-jeu, recette `selfplay::RECIPE`)
 //! lab2 check-net --net poids.bin --data parties.pos [--count 5]   (comparaison avec lab2/py/check.py)
 //! lab2 analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par labtools/export-room.ts)
 //! ```
@@ -42,8 +41,6 @@ fn usage() -> ! {
     eprintln!("        lab2 arena --table 'A|B|B' [--deals N] [--threads N] [--seed S] [--out F]");
     eprintln!("        lab2 speed --agent az:… [--players 2,3,4,5] [--positions 12] [--seed S]");
     eprintln!("        lab2 selfplay --agent az:… --games N --out DIR [--players 2,3,4,5] [--seed S]");
-    eprintln!("            [--full-share 0.25 --fast 50]   (part des recherches complètes, itérations des autres)");
-    eprintln!("            [--field 'easy|hard|az:…' --mixed 0.5]   (tables variées : adversaires, part des parties)");
     eprintln!("        lab2 check-net --net poids.bin --data parties.pos [--count N]");
     eprintln!("        lab2 analyze --game partie.smk --agent az:net=poids.bin,n=20000");
     std::process::exit(2)
@@ -236,17 +233,11 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
         games: get(opts, "games", 100),
         threads: get(opts, "threads", threads()),
         seed: get(opts, "seed", 1),
-        opts: selfplay::Options { full_share: get(opts, "full-share", 1.0), fast: get(opts, "fast", 50) },
+        opts: selfplay::RECIPE,
     };
-    // tables variées : les adversaires possibles, séparés par « | » (leur numéro dans les .moves)
-    let others: Vec<Box<dyn Agent>> = opts.get("field").map_or(Vec::new(), |f| f.split('|').map(agent_named).collect());
-    for (i, a) in others.iter().enumerate() {
-        eprintln!("adversaire {i} : {}", a.name());
-    }
-    let field = selfplay::Field { agents: others.iter().map(|a| a.as_ref()).collect(), share: get(opts, "mixed", 0.0) };
     let out = opts.get("out").unwrap_or_else(|| usage());
     let start = Instant::now();
-    if let Err(e) = selfplay::run(&cfg, &az, &field, std::path::Path::new(out)) {
+    if let Err(e) = selfplay::run(&cfg, &az, std::path::Path::new(out)) {
         eprintln!("échec : {e}");
         std::process::exit(1)
     }

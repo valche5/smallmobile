@@ -513,18 +513,12 @@ fn a_clear_arena_stops_early_and_keeps_its_first_deals() {
 }
 
 #[test]
-fn varied_tables_record_only_the_learner() {
-    use smallmobile_kernel::Level;
-    use smallmobile_lab2::agent::{Agent, KernelAi};
-    use smallmobile_lab2::selfplay::{self, Field, GameLog, ILLEGAL, PROBABILITY, RECORD};
-    let (easy, hard) = (KernelAi::new(Level::Easy), KernelAi::new(Level::Hard));
-    let field = Field { agents: vec![&easy as &dyn Agent, &hard], share: 0.5 };
-    let az = expert(2);
-    let dir = std::env::temp_dir().join(format!("smallmobile-field-{}", std::process::id()));
+fn each_choice_records_the_improved_policy() {
+    use smallmobile_lab2::selfplay::{self, GameLog, ILLEGAL, PROBABILITY, RECORD};
+    let dir = std::env::temp_dir().join(format!("smallmobile-policy-{}", std::process::id()));
     let opts = selfplay::Options { full_share: 1.0, fast: 1 };
-    let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 12, threads: 2, seed: 12, opts };
-    selfplay::run(&cfg, &az, &field, &dir).unwrap();
-    let (mut mixed, mut plain) = (0, 0);
+    let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 8, threads: 2, seed: 12, opts };
+    selfplay::run(&cfg, &expert(2), &dir).unwrap();
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
         if !path.to_string_lossy().ends_with(selfplay::SUFFIX) {
@@ -538,17 +532,16 @@ fn varied_tables_record_only_the_learner() {
         let bytes = std::fs::read(&path).unwrap();
         let mut records = bytes.chunks(RECORD);
         for log in &logs {
-            // une position par décision de l'IA qui apprend, marquée « table variée » s'il y a
-            // lieu, avec la politique améliorée sur ses coups possibles
+            // une position par décision où il y avait le choix, avec la politique améliorée sur
+            // ses coups possibles
             let table = log.table();
             log.replay(&table, |g, k| {
-                let me = g.state.actor().unwrap();
                 let legal = moves::legal(g, k);
-                if legal.len() > 1 && log.seats.get(me).is_none_or(|&s| s < 0) {
+                if legal.len() > 1 {
                     let rec = records.next().unwrap();
-                    assert_eq!(rec[2], !log.seats.is_empty() as u8);
+                    assert_eq!((rec[0] as usize, rec[1] as usize), (log.players, table.map.len()));
                     let policy: Vec<u16> =
-                        rec[43..43 + 2 * moves::KEYS].chunks(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+                        rec[42..42 + 2 * moves::KEYS].chunks(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
                     let legal_keys: Vec<usize> = legal.iter().map(|c| c.key as usize).collect();
                     let mut sum = 0.0;
                     for (key, &p) in policy.iter().enumerate() {
@@ -561,27 +554,19 @@ fn varied_tables_record_only_the_learner() {
                 }
             })
             .unwrap();
-            if log.seats.is_empty() {
-                plain += 1;
-            } else {
-                assert!(log.seats.contains(&-1) && log.seats.iter().any(|&s| s >= 0));
-                mixed += 1;
-            }
-            assert_eq!(GameLog::parse(&log.line()).unwrap(), *log);
         }
         assert!(records.next().is_none());
     }
-    assert!(mixed > 0 && plain > 0, "{mixed} tables variées, {plain} autres");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
 fn position_files_say_how_many_positions_each_game_has() {
-    use smallmobile_lab2::selfplay::{self, Field};
+    use smallmobile_lab2::selfplay;
     let dir = std::env::temp_dir().join(format!("smallmobile-games-{}", std::process::id()));
     let opts = selfplay::Options { full_share: 1.0, fast: 1 };
     let cfg = selfplay::Config { players: vec![2, 3], games: 5, threads: 2, seed: 3, opts };
-    selfplay::run(&cfg, &expert(2), &Field::none(), &dir).unwrap();
+    selfplay::run(&cfg, &expert(2), &dir).unwrap();
     let (mut total, mut positions) = (0, 0);
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
@@ -606,12 +591,12 @@ fn position_files_say_how_many_positions_each_game_has() {
 
 #[test]
 fn self_play_games_can_be_replayed() {
-    use smallmobile_lab2::selfplay::{self, Field, GameLog};
+    use smallmobile_lab2::selfplay::{self, GameLog};
     use smallmobile_lab2::table::Outcome;
     let dir = std::env::temp_dir().join(format!("smallmobile-replay-{}", std::process::id()));
     let opts = selfplay::Options { full_share: 1.0, fast: 1 };
     let cfg = selfplay::Config { players: vec![2, 4], games: 4, threads: 2, seed: 5, opts };
-    selfplay::run(&cfg, &expert(2), &Field::none(), &dir).unwrap();
+    selfplay::run(&cfg, &expert(2), &dir).unwrap();
     let mut games = 0;
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();

@@ -7,7 +7,6 @@
 //!
 //! ```text
 //! u8 joueurs, u8 régions
-//! u8 drapeaux : 1, table variée (d'autres joueurs que l'IA qui apprend)
 //! f32 × 5  victoire de chaque joueur relatif (part, 0 à 1)
 //! f32 × 5  pièces gagnées d'ici la fin par chaque joueur relatif
 //! u16 × KEYS  politique améliorée de chaque coup, × `PROBABILITY` (65535 : coup impossible)
@@ -29,7 +28,6 @@ use smallmobile_kernel::ids::MAX_PLAYERS;
 use smallmobile_kernel::wire::{self, Writer};
 use smallmobile_kernel::{Action, Game, Phase};
 
-use crate::agent::Agent;
 use crate::az::Az;
 use crate::encode::{Encoded, GLOBAL, NODE, REGIONS, encode};
 use crate::know::Knowledge;
@@ -37,7 +35,7 @@ use crate::moves::{self, KEYS};
 use crate::rand::{Rng, mix};
 use crate::table::{Outcome, Table};
 
-pub const RECORD: usize = 3 + 20 + 20 + KEYS * 2 + REGIONS * 8 + REGIONS * NODE + GLOBAL;
+pub const RECORD: usize = 2 + 20 + 20 + KEYS * 2 + REGIONS * 8 + REGIONS * NODE + GLOBAL;
 /// Le suffixe des fichiers de positions.
 pub const SUFFIX: &str = ".pos";
 pub const ILLEGAL: u16 = u16::MAX;
@@ -47,8 +45,6 @@ pub const PROBABILITY: f32 = 60_000.0;
 /// Un exemple pour le réseau, cibles en joueurs relatifs (0 : celui qui agit).
 pub struct Record<'a> {
     pub enc: &'a Encoded,
-    /// La partie se joue à une table variée (`Field`).
-    pub mixed: bool,
     pub map: &'a smallmobile_kernel::Map,
     pub win: [f32; MAX_PLAYERS],
     pub gain: [f32; MAX_PLAYERS],
@@ -58,7 +54,7 @@ pub struct Record<'a> {
 impl Record<'_> {
     pub fn bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(RECORD);
-        buf.extend_from_slice(&[self.enc.players as u8, self.enc.regions as u8, self.mixed as u8]);
+        buf.extend_from_slice(&[self.enc.players as u8, self.enc.regions as u8]);
         for x in self.win.iter().chain(&self.gain) {
             buf.extend_from_slice(&x.to_le_bytes());
         }
@@ -99,75 +95,36 @@ pub struct Options {
     pub fast: usize,
 }
 
+/// La recette des données : une recherche complète (enregistrée) pour 8 coups. La valeur apprend
+/// un seul résultat par partie, quel que soit le nombre de ses positions : mieux vaut beaucoup de
+/// parties que beaucoup de positions par partie (AlphaGo n'en gardait qu'une par partie pour sa
+/// valeur).
+pub const RECIPE: Options = Options { full_share: 0.125, fast: 50 };
+
 /// Une partie jouée : son résultat, le nombre de positions écrites, les actions du noyau de chaque
-/// coup, et qui jouait à chaque place (`GameLog::seats`).
+/// coup.
 pub struct Played {
     pub outcome: Outcome,
     pub positions: usize,
     pub moves: Vec<Vec<Action>>,
-    pub seats: Vec<i8>,
-}
-
-/// Des tables variées : une part `share` des parties, l'IA qui apprend y occupe certaines places
-/// seulement (chacune avec une chance sur deux, au moins une), les autres places étant tirées
-/// parmi `agents` (forces et styles différents). Seules ses positions à elle sont enregistrées ;
-/// elle ne sait jamais qui occupe quelle place.
-pub struct Field<'a> {
-    pub agents: Vec<&'a dyn Agent>,
-    pub share: f64,
-}
-
-impl Field<'_> {
-    pub fn none() -> Self {
-        Field { agents: Vec::new(), share: 0.0 }
-    }
-
-    /// Pour chaque place : -1 pour l'IA qui apprend, sinon le numéro de l'adversaire dans `agents`.
-    fn seats(&self, players: usize, rng: &mut Rng) -> Vec<i8> {
-        let mut seats = vec![-1i8; players];
-        if self.agents.is_empty() || rng.unit() >= self.share {
-            return seats;
-        }
-        loop {
-            for s in seats.iter_mut() {
-                *s = if rng.unit() < 0.5 { -1 } else { rng.below(self.agents.len()) as i8 };
-            }
-            if seats.contains(&-1) && seats.iter().any(|&s| s >= 0) {
-                return seats;
-            }
-        }
-    }
 }
 
 /// Joue une partie ; écrit un enregistrement par position cherchée à fond (plus d'un coup
-/// possible) de l'IA qui apprend. `seats` : `Field::seats`.
-#[allow(clippy::too_many_arguments)]
+/// possible).
 pub fn play(
     table: &Table,
     seed: u32,
     az: &Az,
-    field: &Field,
-    seats: &[i8],
     opts: Options,
     rng: &mut Rng,
     out: &mut impl Write,
 ) -> std::io::Result<Played> {
-    let mixed = seats.iter().any(|&s| s >= 0);
     let mut g = table.game(seed);
     let mut k = Knowledge::default();
     let mut pending: Vec<Pending> = Vec::new();
     let mut played = Vec::new();
     while g.state.phase != Phase::GameOver {
         let actor = g.state.actor().expect("un joueur doit agir");
-        if let Some(agent) = usize::try_from(seats[actor]).ok().map(|i| field.agents[i]) {
-            // un adversaire d'une table variée : toute sa décision, en actions du noyau
-            let actions = agent.act(&g, &k, &mut rng.fork());
-            for a in &actions {
-                k.apply(&mut g, a).expect("action d'un adversaire");
-            }
-            played.push(actions);
-            continue;
-        }
         let legal = moves::legal(&g, &k);
         let mv = if legal.len() == 1 {
             legal[0].mv
@@ -195,10 +152,10 @@ pub fn play(
             win[r] = o.win[q] as f32;
             gain[r] = (o.coins[q] - p.coins[q]) as f32;
         }
-        let rec = Record { enc: &p.enc, mixed, map: &table.map, win, gain, policy: &p.policy };
+        let rec = Record { enc: &p.enc, map: &table.map, win, gain, policy: &p.policy };
         out.write_all(&rec.bytes())?;
     }
-    Ok(Played { outcome: o, positions: pending.len(), moves: played, seats: seats.to_vec() })
+    Ok(Played { outcome: o, positions: pending.len(), moves: played })
 }
 
 /// Les pièces de chaque joueur.
@@ -214,7 +171,7 @@ fn coins(g: &Game) -> [i32; MAX_PLAYERS] {
 /// partie dans `moves_file`, séparée par des tabulations : donne, joueurs, graine de la carte,
 /// graine de la partie, pièces finales (séparées par des virgules), puis les coups séparés par des
 /// espaces ; un coup est une suite d'actions séparées par « / », une action ses mots `wire`
-/// séparés par des virgules. À une table variée, en plus : qui jouait à chaque place (`seats`).
+/// séparés par des virgules.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GameLog {
     pub deal: u64,
@@ -224,9 +181,6 @@ pub struct GameLog {
     pub coins: Vec<i32>,
     /// Les mots de chaque action de chaque coup.
     pub moves: Vec<Vec<Vec<u32>>>,
-    /// À une table variée, pour chaque place : -1 pour l'IA qui apprend, sinon le numéro de
-    /// l'adversaire (`Field::agents`) ; vide si l'IA qui apprend jouait partout.
-    pub seats: Vec<i8>,
 }
 
 impl GameLog {
@@ -248,8 +202,7 @@ impl GameLog {
             })
             .collect();
         let coins = played.outcome.coins[..table.players].to_vec();
-        let seats = if played.seats.iter().any(|&s| s >= 0) { played.seats.clone() } else { Vec::new() };
-        GameLog { deal, players: table.players, map_seed, seed, coins, moves, seats }
+        GameLog { deal, players: table.players, map_seed, seed, coins, moves }
     }
 
     pub fn line(&self) -> String {
@@ -257,7 +210,7 @@ impl GameLog {
         let coins: Vec<String> = self.coins.iter().map(i32::to_string).collect();
         let moves: Vec<String> =
             self.moves.iter().map(|m| m.iter().map(|a| join(a)).collect::<Vec<_>>().join("/")).collect();
-        let mut line = format!(
+        format!(
             "{}\t{}\t{}\t{}\t{}\t{}",
             self.deal,
             self.players,
@@ -265,12 +218,7 @@ impl GameLog {
             self.seed,
             coins.join(","),
             moves.join(" ")
-        );
-        if !self.seats.is_empty() {
-            let seats: Vec<String> = self.seats.iter().map(i8::to_string).collect();
-            line += &format!("\t{}", seats.join(","));
-        }
-        line
+        )
     }
 
     pub fn parse(line: &str) -> Option<GameLog> {
@@ -280,11 +228,7 @@ impl GameLog {
         let coins = f.next()?.split(',').map(|c| c.parse().ok()).collect::<Option<Vec<i32>>>()?;
         let words = |a: &str| a.split(',').map(|w| w.parse().ok()).collect::<Option<Vec<u32>>>();
         let moves = f.next()?.split(' ').map(|m| m.split('/').map(words).collect()).collect::<Option<Vec<_>>>()?;
-        let seats = match f.next() {
-            Some(seats) => seats.split(',').map(|s| s.parse().ok()).collect::<Option<Vec<i8>>>()?,
-            None => Vec::new(),
-        };
-        Some(GameLog { deal, players, map_seed, seed, coins, moves, seats })
+        Some(GameLog { deal, players, map_seed, seed, coins, moves })
     }
 
     /// La table de la partie.
@@ -292,9 +236,8 @@ impl GameLog {
         Table::new(self.players, self.map_seed)
     }
 
-    /// Rejoue la partie sur sa table : `visit` voit chaque position avant un coup (ou une décision
-    /// d'un adversaire d'une table variée), avec ce que sait le joueur qui agit. Renvoie la partie
-    /// finie.
+    /// Rejoue la partie sur sa table : `visit` voit chaque position avant un coup, avec ce que sait
+    /// le joueur qui agit. Renvoie la partie finie.
     pub fn replay<'m>(
         &self,
         table: &'m Table,
@@ -306,16 +249,12 @@ impl GameLog {
             visit(&g, &k);
             let actions = self.actions(mv, table)?;
             // le coup de `moves` qui donne ces actions : la fin de tour reste suivie comme en jouant
-            // (`Knowledge::redeploy`) ; sinon (IA du jeu), les actions telles quelles
-            let known = moves::legal(&g, &k).into_iter().find(|c| moves::actions(&g, &c.mv) == actions);
-            match known {
-                Some(c) => k.play(&mut g, &c.mv).map_err(|e| format!("coup refusé {:?} : {e:?}", c.mv))?,
-                None => {
-                    for a in &actions {
-                        k.apply(&mut g, a).map_err(|e| format!("action refusée {a:?} : {e:?}"))?;
-                    }
-                }
-            }
+            // (`Knowledge::redeploy`)
+            let c = moves::legal(&g, &k)
+                .into_iter()
+                .find(|c| moves::actions(&g, &c.mv) == actions)
+                .ok_or_else(|| format!("aucun coup ne donne {actions:?}"))?;
+            k.play(&mut g, &c.mv).map_err(|e| format!("coup refusé {:?} : {e:?}", c.mv))?;
         }
         Ok(g)
     }
@@ -352,8 +291,8 @@ pub fn moves_file(path: &Path) -> std::path::PathBuf {
 }
 
 /// Des parties d'entraînement en parallèle, un fichier par fil dans `dir` (avec `games_file` et
-/// `moves_file`), à des tables variées si `field` en donne.
-pub fn run(cfg: &Config, az: &Az, field: &Field, dir: &Path) -> std::io::Result<()> {
+/// `moves_file`).
+pub fn run(cfg: &Config, az: &Az, dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let next = AtomicUsize::new(0);
     let positions = AtomicUsize::new(0);
@@ -377,8 +316,7 @@ pub fn run(cfg: &Config, az: &Az, field: &Field, dir: &Path) -> std::io::Result<
                     let (map_seed, seed) = (deal % 1_000_000_007, mix(deal, 1) as u32);
                     let table = Table::new(n, map_seed);
                     let mut rng = Rng::new(mix(deal, 99));
-                    let seats = field.seats(n, &mut Rng::new(mix(deal, 98)));
-                    let played = play(&table, seed, az, field, &seats, cfg.opts, &mut rng, &mut out)?;
+                    let played = play(&table, seed, az, cfg.opts, &mut rng, &mut out)?;
                     let count = played.positions;
                     games.write_all(&(count as u32).to_le_bytes())?;
                     writeln!(logs, "{}", GameLog::new(deal, map_seed, seed, &table, &played).line())?;
@@ -408,7 +346,7 @@ pub fn read_record(rec: &[u8]) -> (Encoded, Vec<Vec<u8>>) {
     assert_eq!(rec.len(), RECORD);
     let players = rec[0] as usize;
     let regions = rec[1] as usize;
-    let mut at = 3 + 20 + 20 + KEYS * 2;
+    let mut at = 2 + 20 + 20 + KEYS * 2;
     let mut adj = Vec::with_capacity(regions);
     for i in 0..REGIONS {
         let bits = u64::from_le_bytes(rec[at..at + 8].try_into().expect("8 octets"));
