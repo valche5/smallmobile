@@ -1,0 +1,14 @@
+[package]
+name = "smallmobile-lab2"
+version = "0.1.0"
+edition = "2024"
+description = "Laboratoire 2 : Gumbel AlphaZero avec nœuds de hasard, coups jeton après jeton (journal.md)."
+publish = false
+
+[[bin]]
+name = "lab2"
+path = "src/bin/lab.rs"
+
+[dependencies]
+smallmobile-kernel = { path = "../kernel" }
+smallmobile-brain2 = { path = "brain" }

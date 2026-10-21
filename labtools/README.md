@@ -24,6 +24,7 @@ Labos :
 | Labo | Approche | État |
 | --- | --- | --- |
 | `lab1` | Recherche AlphaZero sur mondes possibles (boucle ouverte), fins simulées de 3 tours, coups regroupés ; réseaux gen0 à gen11 | Figé le 21 octobre 2026 ; Expert `lab1/gen11` du jeu |
+| `lab2` | Gumbel AlphaZero, nœuds de hasard, coups jeton après jeton (`lab2/journal.md`) | En cours depuis le 21 octobre 2026 |
 
 Outils communs (ce dossier) :
 
