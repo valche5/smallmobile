@@ -126,8 +126,9 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
 5. ~~Première boucle sur AWS depuis gen0 : 20 pas, arènes à chaque pas ; lab2 revient dans le jeu
    avec son meilleur réseau.~~ Faite le 21 octobre (voir Résultats).
 6. ~~Comparaison avec lab1 dans les conditions du jeu.~~ Faite le 21 octobre : −12,6.
-7. Sortir du plateau (+19 face à Difficile depuis c015, −12,6 face à lab1) : levier à choisir avec
-   l'utilisateur.
+7. ~~Taille du réseau.~~ Mesurée le 21 octobre : la taille ne limite pas la valeur (voir Résultats).
+8. Sortir du plateau (+19 face à Difficile depuis c015, −12,6 face à lab1) : la valeur manque de
+   parties ; levier à choisir avec l'utilisateur.
 
 ## Résultats
 
@@ -172,3 +173,31 @@ c020 par taille (2, 3, 4, 5 joueurs) : Difficile +36,7, +13,8, +13,0, +15,7 ; No
 - Fenêtre : le dernier cycle seul jusqu'à c009, deux cycles de c010 à c019, trois pour c020.
   Parties : 10 positions par partie au hasard, 22 puis 33 en fin de boucle ; 25 000 parties en
   109 s (hasard, 64 cœurs) puis 245 à 406 s (48 cœurs) ; entraînement 128 à 368 s.
+
+### Taille du réseau (21 octobre)
+
+`lab2/py/size.py`, scripts `lab2/runs/size.sh` et `size2.sh` (résultats `lab2/runs/size*`) : des
+réseaux entraînés depuis zéro, recette de train.py, sur les mêmes parties (cycles 19 et 20 de la
+première boucle, 50 000 parties, 1,57 million de positions d'entraînement, 81 000 de validation), validation sur les
+mêmes parties réservées. Coût d'une évaluation Rust en bf16 sur un cœur (c7a) :
+
+| Taille | Paramètres | Évaluation | 2 passages : valeur, possession, politique | 8 passages |
+| --- | --- | --- | --- | --- |
+| 64x4 | 206 713 | 36 µs | 1,161, 0,622, 1,507 | 1,074, 0,574, 1,441 |
+| 64x6 | 272 761 | 52 µs | 1,154, 0,615, 1,495 | |
+| 64x8 | 338 809 | 70 µs | 1,147, 0,610, 1,488 | |
+| 96x4 | 417 561 | 75 µs | 1,138, 0,602, 1,479 | 1,071, 0,559, 1,421 |
+| 96x6 | 565 785 | 105 µs | 1,137, 0,597, 1,472 | |
+| 128x4 | 700 089 | 115 µs | 1,125, 0,590, 1,463 | 1,078, 0,550, 1,408 |
+
+c020 (la boucle, 64x4) sur la même validation : 1,039, 0,547, 1,379 ; continué 4 passages sur ces
+parties : 1,046, 0,546, 1,381.
+
+- **La taille ne limite pas la valeur** : entraînées jusqu'au bout, les trois largeurs finissent à
+  1,07-1,08. Plus large aide un peu la politique et la possession (−0,02 à −0,03) ; la largeur
+  rapporte plus que la profondeur à coût égal.
+- **La valeur dépend du nombre de parties** : c020, qui a vu les 500 000 parties de la boucle, fait
+  1,039 contre 1,07 pour n'importe quelle taille sur 50 000 parties, et ne gagne rien à repasser
+  sur ces 50 000.
+- 64x4 reste la taille de lab2. 14 + 33 min de machine, 0,18 + 0,49 $.
+
