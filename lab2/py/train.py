@@ -2,6 +2,8 @@
 
     python train.py --data ../data/gen1 ../data/gen1-mixed --init ../nets/gen0.bin --out ../nets/gen1.bin
 
+Sans `--init`, un réseau neuf (taille par défaut de `model.Net`).
+
 Cibles : la politique (politique améliorée de la recherche à la racine, Gumbel AlphaZero), la
 victoire (part de chaque joueur à la fin de la partie) et, en appoint, les pièces gagnées d'ici la
 fin. Les positions sont vues du joueur qui agit.
@@ -19,7 +21,7 @@ import torch
 import torch.nn.functional as F
 
 from data import ILLEGAL, in_validation, load as load_data
-from model import GAIN_SCALE, export, load as load_net, unpack_adj
+from model import GAIN_SCALE, Net, export, load as load_net, unpack_adj
 
 LR = 5e-4
 WEIGHT_DECAY = 1e-4
@@ -72,10 +74,10 @@ def losses(net, b):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", nargs="+", required=True)
-    ap.add_argument("--init", required=True, help="le réseau de départ (.bin)")
+    ap.add_argument("--init", help="le réseau de départ (.bin) ; sans lui, un réseau neuf")
     ap.add_argument("--out", required=True)
     ap.add_argument("--threads", type=int, help="cœurs de PyTorch (plusieurs entraînements à la fois)")
-    ap.add_argument("--seed", type=int, default=0, help="ordre des lots")
+    ap.add_argument("--seed", type=int, default=0, help="ordre des lots, poids d'un réseau neuf")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -83,6 +85,7 @@ def main():
         torch.set_num_threads(args.threads)
     recs, keys = load_data(args.data)
     rng = np.random.default_rng(args.seed)
+    torch.manual_seed(args.seed)
     # validation sur des parties entières, choisies par une règle fixe (`in_validation`) : aucune
     # position d'une partie vue à l'entraînement, ni par cette génération ni par les suivantes
     is_val = in_validation(keys, VAL_SHARE)
@@ -92,7 +95,7 @@ def main():
         f"({len(val_idx)} positions de {len(np.unique(keys[is_val]))} parties pour la validation)"
     )
 
-    net = load_net(args.init).to(device)
+    net = (load_net(args.init) if args.init else Net()).to(device)
     opt = torch.optim.AdamW(net.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     per_epoch = math.ceil(len(train_idx) / BATCH)
     epochs = math.ceil(STEPS / per_epoch)
