@@ -91,10 +91,12 @@ jetons sur une seule région. Le calcul va plutôt à plus de parties réelles.
 2. ~~Coups : pouvoirs et jetons un par un, paix et déclin à part ; l'Expert du jeu renvoie sa fin
    de tour en actions groupées.~~ Fait le 21 octobre.
 3. ~~Réseau (clés des nouveaux coups), format des positions, entraînement ; réseau de départ gen0
-   tiré de lab1/gen11.~~ Fait le 21 octobre ; reste à vérifier sur AWS que PyTorch et Rust
-   calculent le même réseau (`lab2/py/check.py`, sans PyTorch sur mini).
-4. Première génération sur AWS (accord de l'utilisateur pour la dépense) : parties de gen0,
-   entraînement de gen1, arène face à l'Expert de lab1.
+   tiré de lab1/gen11.~~ Fait le 21 octobre ; PyTorch et Rust concordent (`lab2/py/check.py`).
+4. ~~Première génération sur AWS : parties de gen0, entraînement de gen1, arène face à l'Expert
+   de lab1.~~ Faite le 21 octobre : aucun progrès (voir Résultats).
+5. ~~Diagnostic : profondeur de la recherche ou justesse de la valeur, héritage de lab1.~~ Fait le
+   21 octobre : la valeur manque de parties indépendantes ; l'héritage de lab1 se garde.
+6. gen2 avec beaucoup plus de parties (recette à décider avec l'utilisateur, avant toute dépense).
 
 ## Résultats
 
@@ -143,3 +145,45 @@ toute nouvelle génération : la valeur seule voit trop peu loin (fins simulées
 coûte maintenant 10 à 20 décisions de l'arbre) ; la valeur héritée de gen11 juge mal les fins de
 tour à moitié jouées, et gen1 l'a sur-apprise ; ou les cibles d'une recherche guidée par une
 mauvaise valeur n'apprennent rien.
+
+### Diagnostic après gen1 (21 octobre)
+
+Deux questions avant toute nouvelle génération : la recherche manque-t-elle de profondeur, ou la
+valeur de justesse ? Et partir de gen0 (le réseau de lab1) aide-t-il ou freine-t-il ? Scripts
+`lab2/runs/diag1.sh` et `diag2.sh`, résultats dans `lab2/runs/diag1`, `diag2` ; mesure par genre
+de position : `lab2/py/value.py`, sur les 1 500 parties de validation de gen1 (169 167 positions).
+
+- **Plus de recherche aide peu.** gen0 face à lab1/gen11 (n=200), mêmes donnes (graine 1004) :
+  n=200 −15,2 ± 1,3 ; n=800 −13,3 ± 1,3 ; n=3200 −12,0 ± 1,4 (par taille, 2 à 5 j. : −14,7,
+  −12,6, −10,8, −9,8). Appariés : n=3200 − n=200 = +3,2 ± 1,8. Seize fois plus d'itérations
+  rattrapent 3 des 15 points : ce qui manque, c'est le réseau. lab2 est faible face à lab1 à
+  toutes les tailles, le plus à 2 joueurs (la force « à 2 joueurs » ne valait que face aux IA du
+  jeu). L'écart restant (12 points) a l'ordre de grandeur de ce que valaient les fins simulées
+  dans lab1 (+12) : elles compensaient une valeur trop faible pour jouer seule.
+- **La valeur de gen0 se trompait sur les fins de tour à moitié jouées, gen1 l'a corrigée.** Biais
+  (victoire prédite moins réelle du joueur qui agit) en redéploiement, jetons en main : gen0
+  +0,054, gen1 −0,004. Victoire prédite d'une position à la suivante du même tour, de la fin de la
+  conquête au redéploiement : gen0 +0,038 en moyenne (sa recherche avait intérêt à finir ses
+  conquêtes tôt), gen1 −0,003. Corrigé sans gain de force (gen1 − gen0 = −0,4) : ce n'était pas
+  la cause principale.
+- **La valeur reste faible à 3, 4 et 5 joueurs et apprend à peine.** Perte de la valeur en
+  conquête : 0,32 à 2 joueurs (0,69 au hasard), 1,15 à 3 à 5 (environ 1,37 au hasard). gen0 →
+  gen1 : 1,032 → 1,024 en tout. La politique progresse (1,485 → 1,426).
+- **Partir de gen0 aide.** Un réseau neuf (même taille, même recette, mêmes données que gen1,
+  `train.py` sans `--init`) : valeur 1,074 en validation (gen1 1,024, gen0 1,032), moins bonne à
+  chaque genre de position ; politique 1,473 (gen1 1,426), à égalité avec gen1 pour les jetons
+  posés un par un (1,466 et 1,464, coups que gen0 ne connaissait pas) mais loin derrière pour le
+  choix d'un peuple (1,158 contre 0,822) et la conquête (1,529 contre 1,446). Face à des gen0
+  (n=200, graine 1001) : −10,7 ± 1,4, soit −10,3 ± 2,1 sous gen1 sur les mêmes donnes. L'héritage
+  de lab1 se garde.
+- **La valeur sur-apprend parce qu'elle a trop peu de résultats indépendants.** Réseau neuf, en
+  validation : 1,093, 1,073, 1,076, 1,074 au fil des époques, pendant que l'entraînement descend à
+  0,954. Toutes les positions d'une partie (112 en moyenne) partagent le même résultat : 3,37
+  millions de positions ne font que 30 000 résultats. AlphaGo a buté sur le même écueil pour sa
+  valeur, et n'a gardé qu'une position par partie (30 millions de parties).
+
+**Conclusion du diagnostic : le goulet est la valeur, et elle manque de parties.** La suite :
+beaucoup plus de parties par génération plutôt que plus de positions par partie (moins de
+positions enregistrées par partie si le volume l'exige), en partant de gen1 (valeur calibrée,
+meilleure politique) ou de gen0. Coût : 53 min de machine pour diag1 (0,65 $), 24 min pour diag2
+(0,31 $).
