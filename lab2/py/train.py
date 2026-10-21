@@ -30,7 +30,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from data import ILLEGAL, OFF_MAP, OWNERS, RECORD, SUFFIX, in_validation, load as load_data
+from data import ILLEGAL, OFF_MAP, OWNERS, chosen, in_validation, load as load_data
 from model import GAIN_SCALE, export, load as load_net, unpack_adj
 
 LR = 5e-4
@@ -43,44 +43,6 @@ GAIN_WEIGHT = 0.25
 OWN_WEIGHT = 1.5
 # part des parties gardées pour la validation (`in_validation`)
 VAL_SHARE = 0.05
-# fenêtre (en positions) quand `total` positions ont été jouées : tout jusqu'à WINDOW_MIN, puis
-# WINDOW_MIN × (1 + WINDOW_GROWTH × ((total / WINDOW_MIN)^WINDOW_POWER − 1) / WINDOW_POWER) ; la
-# forme de KataGo, le minimum ajusté à nos cycles (800 000 positions) : plus de parties aident la valeur
-# (c020 continué sur 10 cycles fait mieux que sur 2), et un réseau plus large profite de plus de
-# parties (lab2/journal.md, taille du réseau)
-WINDOW_MIN = 1_000_000
-WINDOW_GROWTH = 0.4
-WINDOW_POWER = 0.75
-
-
-def window(total):
-    """Le nombre de positions de la fenêtre quand `total` positions ont été jouées."""
-    if total <= WINDOW_MIN:
-        return total
-    x = (total / WINDOW_MIN) ** WINDOW_POWER
-    return WINDOW_MIN * (1 + WINDOW_GROWTH * (x - 1) / WINDOW_POWER)
-
-
-def positions(d):
-    return sum(f.stat().st_size for f in d.glob("*" + SUFFIX)) // RECORD.itemsize
-
-
-def chosen(cycles, last):
-    """Les cycles de la fenêtre jusqu'à `last`, du plus ancien au plus récent (les derniers qui y
-    tiennent, au moins `last`), et le nombre de positions de `last`."""
-    dirs = sorted(p for p in Path(cycles).iterdir() if p.is_dir() and p.name <= last)
-    assert dirs and dirs[-1].name == last, f"cycle {last} absent de {cycles}"
-    sizes = [positions(d) for d in dirs]
-    room = window(sum(sizes))
-    keep, count = [], 0
-    for d, n in zip(reversed(dirs), reversed(sizes)):
-        if keep and count + n > room:
-            break
-        keep.append(d)
-        count += n
-    return keep[::-1], sizes[-1]
-
-
 def batches(recs, idx, size, device):
     for start in range(0, len(idx), size):
         sel = np.sort(idx[start : start + size])

@@ -31,10 +31,11 @@ mkdir -p "$DATA" "$OUT" "$TMP"
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/log.txt"; }
 name() { printf c%03d "$1"; }
 
-games() { # cycle, réseau, cœurs : écrites à part, puis déplacées (un cycle fini a ses fichiers ;
-  # --save peut recréer un dossier vide)
+games() { # cycle, réseau, cœurs : écrites à part, puis déplacées. Un cycle fini a ses fichiers
+  # .pos.games (--save peut recréer un dossier vide ; les .pos des cycles sortis de la fenêtre sont
+  # effacés du bucket par lab2/prune.sh, les .games restent)
   local c=$1 net=$2 threads=$3 start
-  compgen -G "$DATA/$c/*.pos" > /dev/null && return 0
+  compgen -G "$DATA/$c/*.pos.games" > /dev/null && return 0
   start=$(date +%s)
   rm -rf "${TMP:?}/$c"
   if ! $LAB selfplay --agent "az:net=$OUT/$net.bin,n=200" --games "$GAMES" --seed $((30000000 + 10#${c#c})) \
