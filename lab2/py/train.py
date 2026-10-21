@@ -1,10 +1,10 @@
 """Entraîne le réseau sur les parties de la boucle (`lab2/loop.sh`), puis l'exporte pour Rust.
 
-    python train.py --cycles ../data/loop --init ../runs/loop/c004.bin --out ../runs/loop/c005.bin
+    python train.py --cycles ../data/loop --last c005 --init ../runs/loop/c004.bin --out ../runs/loop/c005.bin
 
-Un pas de la boucle : le plus récent des cycles de `--cycles` (un sous-dossier par cycle) vient
-d'être joué par le réseau `--init`. L'entraînement repart de ce réseau, sur une fenêtre des derniers
-cycles qui grandit moins vite que le total des parties (comme KataGo : les données anciennes en
+Un pas de la boucle : le cycle `--last` (un sous-dossier de `--cycles`) vient d'être joué.
+L'entraînement repart du réseau précédent `--init`, sur une fenêtre des derniers cycles jusqu'à
+`--last`, fenêtre qui grandit moins vite que le total des parties (comme KataGo : les données anciennes en
 sortent), et chaque nouvelle position y sert en moyenne `USES` fois. Les positions sont tirées en
 proportion de leur poids (surprise de la recherche, comme KataGo).
 
@@ -14,7 +14,9 @@ fin et à qui appartient chaque région au début du prochain tour du joueur (co
 cases de KataGo : des dizaines d'étiquettes réelles par position, là où la victoire n'en donne
 qu'une par partie). Les positions sont vues du joueur qui agit.
 
-AdamW, taux 5e-4 en un cycle (montée puis descente) à chaque pas de la boucle, lots de 512.
+AdamW, taux 5e-4 en un cycle (montée puis descente) à chaque pas de la boucle, lots de 512 ; calcul
+en bf16 (`torch.autocast`, poids et optimiseur en 32 bits, comme AlphaZero sur TPU) : 1,3 fois plus
+rapide sur les processeurs qui ont AVX-512 BF16. Validation en 32 bits.
 """
 
 import argparse
@@ -58,10 +60,11 @@ def positions(d):
     return sum(f.stat().st_size for f in d.glob("*" + SUFFIX)) // RECORD.itemsize
 
 
-def chosen(cycles):
-    """Les cycles de la fenêtre, du plus ancien au plus récent (les derniers qui y tiennent, au moins
-    le plus récent), et le nombre de positions du plus récent."""
-    dirs = sorted(p for p in Path(cycles).iterdir() if p.is_dir())
+def chosen(cycles, last):
+    """Les cycles de la fenêtre jusqu'à `last`, du plus ancien au plus récent (les derniers qui y
+    tiennent, au moins `last`), et le nombre de positions de `last`."""
+    dirs = sorted(p for p in Path(cycles).iterdir() if p.is_dir() and p.name <= last)
+    assert dirs and dirs[-1].name == last, f"cycle {last} absent de {cycles}"
     sizes = [positions(d) for d in dirs]
     room = window(sum(sizes))
     keep, count = [], 0
@@ -124,6 +127,7 @@ def show(values):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cycles", required=True, help="les cycles de la boucle, un sous-dossier chacun")
+    ap.add_argument("--last", required=True, help="le cycle qui vient d'être joué (son dossier)")
     ap.add_argument("--init", required=True, help="le réseau qui a joué le dernier cycle (.bin)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--threads", type=int, help="cœurs de PyTorch")
@@ -134,7 +138,7 @@ def main():
     if args.threads:
         torch.set_num_threads(args.threads)
     start = time.time()
-    dirs, new = chosen(args.cycles)
+    dirs, new = chosen(args.cycles, args.last)
     recs, keys = load_data(dirs)
     rng = np.random.default_rng(args.seed)
     # validation sur des parties entières, choisies par une règle fixe (`in_validation`) : aucune
@@ -159,9 +163,10 @@ def main():
     net.train()
     sums = np.zeros(len(METRICS))
     for b in batches(recs, order, BATCH, device):
-        out = losses(net, b)
-        pol, val, gain, owners = out[:4]
-        loss = pol + val + GAIN_WEIGHT * gain + OWN_WEIGHT * owners
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            out = losses(net, b)
+            pol, val, gain, owners = out[:4]
+            loss = pol + val + GAIN_WEIGHT * gain + OWN_WEIGHT * owners
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(net.parameters(), 5.0)

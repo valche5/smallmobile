@@ -8,6 +8,7 @@
 //! lab2 selfplay --agent az:net=poids.bin --games 1000 --out lab2/data/gen1 [--players 2,3,4,5]
 //!     (auto-jeu, recette `selfplay::RECIPE`)
 //! lab2 check-net --net poids.bin --data parties.pos [--count 5]   (comparaison avec lab2/py/check.py)
+//! lab2 bench-net --net poids.bin --data parties.pos [--count 5000]   (vitesse et écarts du calcul bf16)
 //! lab2 analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par labtools/export-room.ts)
 //! ```
 
@@ -28,6 +29,7 @@ fn main() {
         "speed" => speed_cmd(&opts),
         "selfplay" => selfplay_cmd(&opts),
         "check-net" => check_net_cmd(&opts),
+        "bench-net" => bench_net_cmd(&opts),
         "analyze" => analyze_cmd(&opts),
         _ => usage(),
     }
@@ -42,6 +44,7 @@ fn usage() -> ! {
     eprintln!("        lab2 speed --agent az:… [--players 2,3,4,5] [--positions 12] [--seed S]");
     eprintln!("        lab2 selfplay --agent az:… --games N --out DIR [--players 2,3,4,5] [--seed S]");
     eprintln!("        lab2 check-net --net poids.bin --data parties.pos [--count N]");
+    eprintln!("        lab2 bench-net --net poids.bin --data parties.pos [--count N]");
     eprintln!("        lab2 analyze --game partie.smk --agent az:net=poids.bin,n=20000");
     std::process::exit(2)
 }
@@ -244,7 +247,8 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
     println!("{} parties en {:.0} s", cfg.games, start.elapsed().as_secs_f64());
 }
 
-/// Évalue les premières positions d'un fichier de parties : mêmes nombres attendus qu'en Python.
+/// Évalue les premières positions d'un fichier de parties en `f32` : mêmes nombres attendus qu'en
+/// Python.
 fn check_net_cmd(opts: &HashMap<String, String>) {
     let net = smallmobile_lab2::net::Net::load(std::path::Path::new(opts.get("net").unwrap_or_else(|| usage())))
         .unwrap_or_else(|e| panic!("réseau illisible : {e}"));
@@ -254,7 +258,7 @@ fn check_net_cmd(opts: &HashMap<String, String>) {
     let mut evals = 0;
     for rec in data.as_chunks::<{ selfplay::RECORD }>().0.iter().take(count) {
         let (e, adj) = selfplay::read_record(rec);
-        let ev = net.eval_with(&e, |i| &adj[i]);
+        let ev = net.eval_f32(&e, |i| &adj[i]);
         evals += 1;
         let legal: Vec<String> = (0..smallmobile_lab2::moves::KEYS)
             .filter(|&k| ev.logits[k].is_finite())
@@ -264,6 +268,55 @@ fn check_net_cmd(opts: &HashMap<String, String>) {
         println!("win {:?} gain {:?} logits {}", ev.win, ev.gain, legal.join(" "));
     }
     eprintln!("{:.1} µs par évaluation", 1e6 * start.elapsed().as_secs_f64() / evals.max(1) as f64);
+}
+
+/// Le calcul en bf16 face au calcul `f32` sur les premières positions d'un fichier : temps par
+/// évaluation (un cœur) et plus grands écarts des sorties.
+fn bench_net_cmd(opts: &HashMap<String, String>) {
+    use std::hint::black_box;
+    let net = smallmobile_lab2::net::Net::load(std::path::Path::new(opts.get("net").unwrap_or_else(|| usage())))
+        .unwrap_or_else(|e| panic!("réseau illisible : {e}"));
+    let data = std::fs::read(opts.get("data").unwrap_or_else(|| usage())).expect("fichier de parties");
+    let count: usize = get(opts, "count", 5000);
+    let positions: Vec<_> =
+        data.as_chunks::<{ selfplay::RECORD }>().0.iter().take(count).map(|r| selfplay::read_record(r)).collect();
+    let time = |eval: &dyn Fn(&smallmobile_lab2::encode::Encoded, &[Vec<u8>])| {
+        let start = Instant::now();
+        for (e, adj) in &positions {
+            eval(e, adj);
+        }
+        1e6 * start.elapsed().as_secs_f64() / positions.len().max(1) as f64
+    };
+    let f32_us = time(&|e, adj| {
+        black_box(net.eval_f32(e, |i| &adj[i]));
+    });
+    println!("{} positions ; f32 : {f32_us:.1} µs par évaluation", positions.len());
+    if net.eval_bf16(&positions[0].0, |i| &positions[0].1[i]).is_none() {
+        println!("bf16 : indisponible sur ce processeur (AVX-512 BF16)");
+        return;
+    }
+    let bf16_us = time(&|e, adj| {
+        black_box(net.eval_bf16(e, |i| &adj[i]));
+    });
+    let mut worst = [0.0f32; 3];
+    let gap = |a: &[f32], b: &[f32]| {
+        a.iter().zip(b).filter(|(a, _)| a.is_finite()).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max)
+    };
+    for (e, adj) in &positions {
+        let exact = net.eval_f32(e, |i| &adj[i]);
+        let low = net.eval_bf16(e, |i| &adj[i]).expect("bf16");
+        worst[0] = worst[0].max(gap(&low.win, &exact.win));
+        worst[1] = worst[1].max(gap(&low.gain, &exact.gain));
+        worst[2] = worst[2].max(gap(&low.logits, &exact.logits));
+    }
+    println!(
+        "bf16 : {bf16_us:.1} µs par évaluation ({:.2} fois plus rapide) ; plus grands écarts : victoire {:.4}, \
+         pièces {:.3}, logits {:.4}",
+        f32_us / bf16_us,
+        worst[0],
+        worst[1],
+        worst[2]
+    );
 }
 
 /// Le meilleur coup d'une vraie partie, avec ce que la recherche pense de chaque coup.

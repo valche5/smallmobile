@@ -61,8 +61,6 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
   suite d'un coup rangée par résultat de son hasard (`moves::chance` : cartes arrivées au marché,
   réussite du dé de renfort, dé des Berserks) ; un monde possible tiré par itération ; coups
   forcés sans nœud. Feuille : valeur du réseau. Seul réglage : `n` (itérations).
-- **Vitesse** : 200 itérations en 12,6 ms en moyenne sur mini, sur 24 positions de
-  `lab2 speed --positions 6 --seed 3` (21 octobre ; lab1 : 231 ms, avec ses fins simulées).
 - **Coups** (`lab2/brain/src/moves.rs`) : une décision à la fois. Fin de tour : `Lift` (forcé :
   un jeton par région, le reste en main, héros et campements relevés), puis les pouvoirs un par un
   (héros, forteresse, campement sur une région ; facultatifs : jouer un jeton ou finir le tour met
@@ -72,63 +70,57 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
   sortes × 64 régions (conquérir, dé, dragon, sorcellerie, abandon, héros, forteresse, campement,
   jeton). Une décision entière du jeu (`moves::decision`) se joue en actions groupées : héros et
   campements reposés au même endroit ne bougent pas, les jetons forment un seul placement.
-- **Réseaux** (`lab2/nets/`) : gen0 est un réseau neuf, écrit par
-  `python lab2/py/model.py lab2/nets/gen0.bin` : il joue au hasard. gen1 : voir Résultats.
-- **Jeu** : `lab2-expert` avec gen1, n = 800 (`src/shared/experts.ts`), variante par défaut
-  (sorti du jeu du départ de zéro jusqu'à gen1). Arène d'essai sur mini, un cœur, 3
-  joueurs face à Normale (2 donnes) : 65 ms en moyenne par décision à n = 800, p95 224 ms, fins de
-  tour comprises (n = 200 : 21 ms, p95 61 ms ; lab1 dans le jeu sur mini : 80 à 250 ms, médiane
-  170 ms).
+- **Réseau** (`lab2/brain/src/net.rs`, `lab2/py/model.py`) : graphe des régions, 4 couches de 64 ;
+  têtes de politique, de valeur (victoire, pièces gagnées) et, à l'entraînement seulement, de
+  possession (à qui appartient chaque région au prochain tour du joueur). gen0
+  (`lab2/nets/gen0.bin`, écrit par `python lab2/py/model.py`) est un réseau neuf : sorties à zéro,
+  il joue au hasard. Calcul Rust en `f32` (AVX2) ; sur un processeur qui a AVX-512 BF16 (AWS),
+  les grands produits en bf16, choisis automatiquement : mêmes résultats que leur référence
+  scalaire, écarts au `f32` de 10⁻⁴ sur la victoire et 0,004 sur les logits (`lab2 bench-net`).
+- **Jeu** : lab2 n'y est pas tant que la boucle n'a pas de réseau qui vaille ; il reviendra
+  (`src/shared/experts.ts`) à n = 800. Arène d'essai sur mini, un cœur, 3 joueurs face à Normale :
+  65 ms en moyenne par décision à n = 800, p95 224 ms, fins de tour comprises (lab1 dans le jeu
+  sur mini : 80 à 250 ms, médiane 170 ms).
 - **Arène** : un joueur rend une décision entière en actions du noyau ; témoin `lab1:net=…,n=…`
   (l'Expert de lab1 tel qu'il joue dans le jeu).
 - **Auto-jeu** (`lab2 selfplay`) : le réseau joue toutes les places ; bruit de Gumbel dans toutes
   les recherches, le coup joué est celui de la recherche. Recette `selfplay::RECIPE` : une
-  recherche complète (`n` de l'agent) pour 8 coups, enregistrée ; les autres à 50 itérations. La
-  valeur n'apprend qu'un résultat par partie, quel que soit le nombre de ses positions : beaucoup
-  de parties plutôt que beaucoup de positions par partie (AlphaGo n'en gardait qu'une par partie
-  pour sa valeur). Positions `*.pos` : cible de politique = politique améliorée de la racine.
-- **Entraînement** (`lab2/py/train.py`) : politique, victoire, pièces ; poids lus et écrits en
-  SMNN1 (`.bin`) ; sans `--init`, un réseau neuf. Au plus 4 passages sur les données (au-delà,
-  la valeur apprend les parties par cœur). Erreurs par genre de position : `lab2/py/value.py`.
+  recherche complète (`n` de l'agent) pour 8 coups, enregistrée ; les autres à 50 itérations.
+  Positions `*.pos` : politique améliorée de la racine, victoire, pièces gagnées, possession des
+  régions au prochain tour du joueur, et un poids (surprise de la recherche, voir Entraînement).
+- **Entraînement** (`lab2/py/train.py`) : politique, victoire, pièces et possession (poids 1,5,
+  comme la propriété des cases de KataGo : des dizaines d'étiquettes réelles par position, là où
+  la victoire n'en donne qu'une par partie). Positions tirées en proportion de leur poids : la
+  moitié répartie également, l'autre selon la surprise de la recherche (écart de sa politique à
+  l'a priori du réseau, « policy surprise weighting » de KataGo). Calcul en bf16 (poids en 32
+  bits). Erreurs par genre de position : `lab2/py/value.py`.
+- **Boucle** (`lab2/loop.sh`, idées de KataGo) : à chaque pas k, le réseau k s'entraîne depuis le
+  réseau k−1 sur une fenêtre des derniers cycles (toutes les positions jusqu'à 250 000, puis
+  250 000 × (1 + 0,4 × ((total / 250 000)^0,75 − 1) / 0,75)), chaque nouvelle position servant en
+  moyenne 4 fois ; pendant ce temps, le réseau k−1 joue les 25 000 parties du cycle k+1 (un cycle
+  de retard, comme les joueurs d'AlphaZero ou de KataGo pendant l'apprentissage) ; puis arènes
+  du réseau k face à Difficile et Normale (460 donnes chacune, mêmes donnes à chaque pas). Pas de
+  sélection du réseau, comme AlphaZero.
+- **Temps** (`c7a.16xlarge`, mesures du 21 octobre avec un réseau de 3 cycles d'essai) : 124
+  parties/s sur 64 cœurs en bf16 (82 en `f32`), 104 sur 48 cœurs, 102 pendant l'entraînement ;
+  entraînement 12 800 positions/s sur 16 cœurs en bf16 (9 900 en `f32` ; 10 000 pendant les
+  parties ; plus rien à gagner au-delà de 16 à 32 cœurs, la mémoire limite) ; arènes 57 s
+  (Difficile) et 22 s (Normale) à 920 donnes. Un pas : environ 5 min (25 000 parties en 245 s
+  pendant 215 s d'entraînement, puis 40 s d'arènes), contre environ 10 min en `f32` sans
+  recouvrement. Sur mini (6 cœurs, AVX2) : l'entraînement plafonne à 4 cœurs, et le bf16 y est
+  émulé (15 fois plus lent) : aucun entraînement réel sur mini.
 
 ## Plan
 
 1. ~~Recherche : Gumbel AlphaZero et nœuds de hasard.~~ Fait le 21 octobre.
 2. ~~Coups : pouvoirs et jetons un par un, paix et déclin à part ; l'Expert du jeu renvoie sa fin
    de tour en actions groupées.~~ Fait le 21 octobre.
-3. ~~Réseau (clés des nouveaux coups), format des positions, entraînement.~~ Fait le 21 octobre.
-4. ~~gen1 : 150 000 parties de gen0 en auto-jeu, un réseau neuf entraîné dessus, arènes face à
-   gen0, Normale et Difficile ; lab2 revient alors dans le jeu.~~ Fait le 21 octobre.
-5. Puis à chaque génération : parties du dernier réseau, entraînement depuis lui, arènes face au
-   précédent et aux IA du jeu, puis face à lab1 quand il s'en approche. Volume et recette revus
-   avec l'utilisateur à chaque étape.
+3. ~~Réseau, format des positions, entraînement ; départ de zéro.~~ Fait le 21 octobre.
+4. ~~Boucle par petits cycles à la manière de KataGo (possession, surprise, fenêtre), essai sur
+   mini, mesures sur AWS, bf16 et recouvrement.~~ Fait le 21 octobre.
+5. Première boucle sur AWS depuis gen0 (accord de l'utilisateur) : 20 pas, environ 1 h 45, suivie
+   par les arènes de chaque pas ; lab2 revient dans le jeu avec son meilleur réseau.
 
 ## Résultats
 
-Scores du protocole (`labtools/score.py`, tailles à poids égaux), 920 donnes par arène (230 par
-taille), n = 200 sauf mention.
-
-### gen1 (21 octobre)
-
-Scripts `lab2/runs/gen1-*.sh` (hors Git), journal `lab2/runs/gen1/log.txt` ; données
-`lab2/data/gen1` dans le bucket. Une machine `c7a.16xlarge` Spot, 30 min, 0,44 $.
-
-- **Données** : 150 000 parties de gen0 (au hasard) en auto-jeu, n = 200, `selfplay::RECIPE` ;
-  30 morceaux de 5 000 parties, graines 10 000 000 à 10 000 029, 32 s par morceau sur 64 cœurs.
-  1 508 359 positions, 10 par partie, 9,3 Go.
-- **Entraînement** d'un réseau neuf : 4 passages, 11 196 lots de 512, 125 s par passage. PyTorch
-  et Rust concordent (5·10⁻⁵). Validation sur 7 474 parties, passages 1 → 4 : politique 1,186 →
-  1,135, précision 54,3 % → 55,5 % ; valeur 0,701 → 0,615 (entraînement 0,594 : pas de
-  sur-apprentissage).
-- **Arènes** (`lab2/runs/gen1/arena-*.tsv`, 19 à 20 ms par décision) :
-
-  | Champ (graine) | Score | Par taille (2, 3, 4, 5 j.) |
-  | --- | --- | --- |
-  | gen0 (1001) | +67,6 ± 0,2 | +49,8, +66,5, +74,6, +79,5 (99,5 % de victoires) |
-  | Difficile (1002) | −29,7 ± 0,6 | −45,9, −31,3, −23,0, −18,4 |
-  | Normale (1003) | −27,6 ± 0,9 | −39,5, −30,7, −22,6, −17,8 |
-
-**gen1 a appris à jouer, mais seulement contre le hasard** : il écrase gen0 et ne gagne que 2 à
-4 % de ses parties face aux IA du jeu. Attendu : ses cibles de politique viennent de recherches
-sans valeur (presque uniformes), et sa valeur juge des parties jouées au hasard. Dans le jeu
-comme Expert du Labo 2 (décision de l'utilisateur : le labo y revient avec son premier réseau).
+Aucun pour l'instant.

@@ -32,6 +32,30 @@ fn expert(n: usize) -> smallmobile_lab2::az::Az {
     smallmobile_lab2::agent::az_named(&format!("az:net={},n={n}", net_path().display())).unwrap()
 }
 
+/// Un réseau dont tous les poids comptent : ceux de gen0, dont les tenseurs nuls (sorties,
+/// branches résiduelles) sont remplis au hasard.
+fn random_net() -> smallmobile_lab2::net::Net {
+    let bytes = std::fs::read(net_path()).unwrap();
+    let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    let mut rng = Rng::new(77);
+    let mut out = bytes[..9].to_vec();
+    let mut at = 9;
+    for _ in 0..word(5) {
+        let ndim_at = at + 4 + word(at);
+        let data = ndim_at + 4 + 4 * word(ndim_at);
+        let size: usize = (0..word(ndim_at)).map(|d| word(ndim_at + 4 + 4 * d)).product();
+        out.extend_from_slice(&bytes[at..data]);
+        let values = &bytes[data..data + 4 * size];
+        let zero = values.iter().all(|&b| b == 0);
+        for v in values.as_chunks::<4>().0 {
+            let x = if zero { (rng.unit() as f32 - 0.5) * 0.2 } else { f32::from_le_bytes(*v) };
+            out.extend_from_slice(&x.to_le_bytes());
+        }
+        at = data + 4 * size;
+    }
+    smallmobile_lab2::net::Net::from_bytes(&out).unwrap()
+}
+
 /// Joue au hasard, coup par coup, jusqu'à la fin ; `visit` voit chaque position et ses coups.
 fn random_game(
     g: &mut Game,
@@ -274,7 +298,7 @@ fn the_network_sees_only_what_the_player_knows() {
 #[test]
 fn the_fast_network_computes_like_the_simple_one() {
     use smallmobile_lab2::encode::encode;
-    let net = smallmobile_lab2::net::Net::load(&net_path()).unwrap();
+    let net = random_net();
     let close = |a: f32, b: f32| a == b || (a - b).abs() <= 1e-3 * (1.0 + b.abs());
     let mut rng = Rng::new(31);
     let mut checked = 0;
@@ -283,7 +307,7 @@ fn the_fast_network_computes_like_the_simple_one() {
         let (mut g, mut k) = (table.game(game as u32), Knowledge::default());
         random_game(&mut g, &mut k, &mut rng.fork(), |g, k, _| {
             let e = encode(g, k);
-            let fast = net.eval(&e, g.map);
+            let fast = net.eval_f32(&e, |i| &g.map.regions[i].adj);
             let simple = net.eval_portable(&e, |i| &g.map.regions[i].adj);
             let pairs = fast.win.iter().chain(&fast.gain).chain(&fast.logits);
             for (&a, &b) in pairs.zip(simple.win.iter().chain(&simple.gain).chain(&simple.logits)) {
@@ -293,6 +317,40 @@ fn the_fast_network_computes_like_the_simple_one() {
         });
     }
     assert!(checked > 500, "{checked} positions");
+}
+
+#[test]
+fn the_bf16_network_stays_close_to_f32() {
+    use smallmobile_lab2::encode::encode;
+    let net = random_net();
+    // le plus grand écart des sorties : (victoires, pièces, logits) ; et du calcul AVX-512 BF16 à
+    // sa référence, quand le processeur l'a
+    let mut worst = [0.0f32; 3];
+    let mut hardware: Option<f32> = None;
+    let gap = |a: &[f32], b: &[f32]| {
+        a.iter().zip(b).filter(|(a, _)| a.is_finite()).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max)
+    };
+    let mut rng = Rng::new(32);
+    for game in 0..8u64 {
+        let table = Table::new(2 + game as usize % 4, 3200 + game);
+        let (mut g, mut k) = (table.game(game as u32), Knowledge::default());
+        random_game(&mut g, &mut k, &mut rng.fork(), |g, k, _| {
+            let e = encode(g, k);
+            let adj = |i: usize| &g.map.regions[i].adj[..];
+            let (low, exact) = (net.eval_portable_bf16(&e, adj), net.eval_portable(&e, adj));
+            worst[0] = worst[0].max(gap(&low.win, &exact.win));
+            worst[1] = worst[1].max(gap(&low.gain, &exact.gain));
+            worst[2] = worst[2].max(gap(&low.logits, &exact.logits));
+            if let Some(hw) = net.eval_bf16(&e, adj) {
+                let all = |x: &smallmobile_lab2::net::Eval| [&x.win[..], &x.gain[..], &x.logits[..]].concat();
+                let d = gap(&all(&hw), &all(&low));
+                hardware = Some(hardware.unwrap_or(0.0).max(d));
+            }
+        });
+    }
+    eprintln!("bf16 : écarts au calcul f32 {worst:?} ; AVX-512 BF16 à sa référence : {hardware:?}");
+    assert!(worst[0] < 0.02 && worst[1] < 1.0 && worst[2] < 0.1, "bf16 trop loin de f32 : {worst:?}");
+    assert!(hardware.is_none_or(|d| d < 1e-3), "AVX-512 BF16 loin de sa référence : {hardware:?}");
 }
 
 #[test]

@@ -13,6 +13,11 @@
 //!
 //! La politique dit le meilleur coup (appris de la politique améliorée de la recherche).
 //!
+//! Calcul : en `f32` (AVX2 et FMA si le processeur les a) ; sur un processeur qui a AVX-512 BF16
+//! (AMD Zen 4, machines de calcul AWS), les trois grands produits de chaque couche se font en bf16
+//! (poids et entrées arrondis à 8 bits de mantisse, sommes en `f32`) : deux fois plus de produits
+//! par instruction, pour un écart de l'ordre du centième (`eval_portable_bf16`, sa référence).
+//!
 //! Format des poids : « SMNN1 », nombre de tenseurs, puis pour chacun nom, dimensions et `f32`
 //! (petit-boutiste). Les poids des couches linéaires sont rangés comme dans PyTorch (sortie × entrée).
 //! Les échelles des entrées (`node_scale`, `global_scale`) viennent avec les poids.
@@ -37,6 +42,9 @@ struct Linear {
     out: usize,
     w: Vec<f32>,
     b: Vec<f32>,
+    /// Les poids en bf16 par paires d'entrées (`bf16::pack`), pour les produits en bf16 ; vide si
+    /// le nombre d'entrées est impair.
+    wp: Vec<u32>,
 }
 
 impl Linear {
@@ -50,7 +58,8 @@ impl Linear {
                 wt[i * out + o] = w[o * inp + i];
             }
         }
-        Ok(Linear { inp, out, w: wt, b })
+        let wp = if inp.is_multiple_of(2) { bf16::pack(&wt, inp, out) } else { Vec::new() };
+        Ok(Linear { inp, out, w: wt, b, wp })
     }
 
     /// `y = b + x · W` (y de taille `out`).
@@ -212,21 +221,56 @@ impl Net {
         self.eval_with(e, |i| &map.regions[i].adj)
     }
 
-    /// Évalue une position encodée ; `adj(i)` : voisines de la région `i`.
+    /// Évalue une position encodée ; `adj(i)` : voisines de la région `i`. Le calcul le plus rapide
+    /// que permet le processeur : bf16 (`eval_bf16`), sinon `eval_f32`.
     pub fn eval_with<'a>(&self, e: &Encoded, adj: impl Fn(usize) -> &'a [u8]) -> Eval {
+        #[cfg(target_arch = "x86_64")]
+        if bf16::available() && self.bf16_ready() {
+            // SAFETY: le processeur a AVX2, FMA et AVX-512 BF16 (vérifié juste avant)
+            return unsafe { self.eval_avx512_bf16(e, adj) };
+        }
+        self.eval_f32(e, adj)
+    }
+
+    /// Le calcul en `f32` : avec AVX2 et FMA si le processeur les a. Celui que `lab2/py/check.py`
+    /// compare à PyTorch.
+    pub fn eval_f32<'a>(&self, e: &Encoded, adj: impl Fn(usize) -> &'a [u8]) -> Eval {
         #[cfg(target_arch = "x86_64")]
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
             // SAFETY: le processeur a AVX2 et FMA (vérifié juste avant)
             return unsafe { self.eval_avx2(e, adj) };
         }
-        self.eval_generic::<false>(e, adj)
+        self.eval_generic::<false, false>(e, adj)
+    }
+
+    /// Le calcul en bf16 si le processeur le permet (AVX-512 BF16), sinon `None`.
+    pub fn eval_bf16<'a>(&self, e: &Encoded, adj: impl Fn(usize) -> &'a [u8]) -> Option<Eval> {
+        #[cfg(target_arch = "x86_64")]
+        if bf16::available() && self.bf16_ready() {
+            // SAFETY: le processeur a AVX2, FMA et AVX-512 BF16 (vérifié juste avant)
+            return Some(unsafe { self.eval_avx512_bf16(e, adj) });
+        }
+        let _ = (e, adj);
+        None
     }
 
     /// Le calcul simple, celui d'un processeur sans AVX2 : la référence du calcul rapide (ses
     /// multiplications matricielles ne fusionnent pas multiplication et addition, d'où de petits
     /// écarts d'arrondi).
     pub fn eval_portable<'a>(&self, e: &Encoded, adj: impl Fn(usize) -> &'a [u8]) -> Eval {
-        self.eval_generic::<false>(e, adj)
+        self.eval_generic::<false, false>(e, adj)
+    }
+
+    /// La référence du calcul en bf16, sans instruction spéciale : mêmes arrondis et mêmes sommes,
+    /// dans le même ordre (`bf16::gemm_reference`).
+    pub fn eval_portable_bf16<'a>(&self, e: &Encoded, adj: impl Fn(usize) -> &'a [u8]) -> Eval {
+        assert!(self.bf16_ready(), "réseau sans calcul bf16 (largeur)");
+        self.eval_generic::<false, true>(e, adj)
+    }
+
+    /// Les produits en bf16 demandent une largeur multiple de 32 (conversion 32 nombres à la fois).
+    fn bf16_ready(&self) -> bool {
+        self.hidden.is_multiple_of(32)
     }
 
     /// Le même calcul avec AVX2, 8 nombres à la fois, sans changer un seul résultat : chaque nombre
@@ -234,13 +278,26 @@ impl Net {
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2,fma")]
     unsafe fn eval_avx2<'a>(&self, e: &Encoded, adj: impl Fn(usize) -> &'a [u8]) -> Eval {
-        self.eval_generic::<true>(e, adj)
+        self.eval_generic::<true, false>(e, adj)
+    }
+
+    /// Le calcul AVX2, avec les grands produits en bf16 (AVX-512 BF16).
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2,fma,avx512f,avx512bf16")]
+    unsafe fn eval_avx512_bf16<'a>(&self, e: &Encoded, adj: impl Fn(usize) -> &'a [u8]) -> Eval {
+        self.eval_generic::<true, true>(e, adj)
     }
 
     /// `AVX2` : le processeur a AVX2 et FMA. Les multiplications matricielles des couches utilisent
     /// alors FMA (`gemm_dispatch`), le reste des multiplications et additions séparées, comme sans.
+    /// `BF16` : les trois grands produits de chaque couche en bf16 (`product`), avec AVX-512 BF16 si
+    /// `AVX2`, sinon par leur référence.
     #[inline(always)]
-    fn eval_generic<'a, const AVX2: bool>(&self, e: &Encoded, adj: impl Fn(usize) -> &'a [u8]) -> Eval {
+    fn eval_generic<'a, const AVX2: bool, const BF16: bool>(
+        &self,
+        e: &Encoded,
+        adj: impl Fn(usize) -> &'a [u8],
+    ) -> Eval {
         let hd = self.hidden;
         let r = e.regions;
         let mut h = vec![0.0f32; r * hd];
@@ -265,6 +322,7 @@ impl Net {
         let mut gmid = vec![0.0f32; hd];
         let mut gadd = vec![0.0f32; hd];
         let mut gpart = vec![0.0f32; hd];
+        let mut packed = Vec::new();
         for layer in &self.layers {
             // moyenne des voisines
             for i in 0..r {
@@ -276,14 +334,13 @@ impl Net {
             for i in 0..r {
                 mid[i * hd..(i + 1) * hd].copy_from_slice(&gpart);
             }
-            let w = &layer.n1.w;
-            gemm_dispatch::<AVX2>(&h, r, hd, &w[..hd * hd], hd, &mut mid);
-            gemm_dispatch::<AVX2>(&agg, r, hd, &w[hd * hd..2 * hd * hd], hd, &mut mid);
+            product::<AVX2, BF16>(&h, r, hd, &layer.n1, 0, &mut mid, &mut packed);
+            product::<AVX2, BF16>(&agg, r, hd, &layer.n1, hd, &mut mid, &mut packed);
             relu(&mut mid);
             for i in 0..r {
                 add[i * hd..(i + 1) * hd].copy_from_slice(&layer.n2.b);
             }
-            gemm_dispatch::<AVX2>(&mid, r, hd, &layer.n2.w, hd, &mut add);
+            product::<AVX2, BF16>(&mid, r, hd, &layer.n2, 0, &mut add, &mut packed);
             h.iter_mut().zip(&add).for_each(|(a, b)| *a += b);
             cat[..hd].copy_from_slice(&g);
             let (mean, max) = cat[hd..].split_at_mut(hd);
@@ -338,6 +395,27 @@ fn accumulate_rows<const AVX2: bool>(l: &Linear, from: usize, x: &[f32], y: &mut
                 *yo += xi * wo;
             }
         }
+    }
+}
+
+/// `c += a · W[lignes from..from + k]` : `a` a `rows` lignes de `k` nombres, `c` a `rows` lignes de
+/// `l.out` nombres. En bf16 si `BF16` (`bf16::gemm`, `packed` : place pour `a` arrondie), sinon
+/// `gemm_dispatch`.
+#[inline(always)]
+fn product<const AVX2: bool, const BF16: bool>(
+    a: &[f32],
+    rows: usize,
+    k: usize,
+    l: &Linear,
+    from: usize,
+    c: &mut [f32],
+    packed: &mut Vec<u32>,
+) {
+    let n = l.out;
+    if BF16 {
+        bf16::gemm::<AVX2>(a, rows, k, &l.wp[from / 2 * n..(from + k) / 2 * n], n, c, packed);
+    } else {
+        gemm_dispatch::<AVX2>(a, rows, k, &l.w[from * n..(from + k) * n], n, c);
     }
 }
 
@@ -610,6 +688,184 @@ mod avx2 {
                     acc = _mm256_add_ps(acc, _mm256_loadu_ps(h.add(j as usize * hd + col)));
                 }
                 _mm256_storeu_ps(out.add(col), _mm256_mul_ps(acc, inv));
+            }
+        }
+    }
+}
+
+/// Les produits en bf16. Un nombre de 32 bits porte une paire de bf16 (entrées `2p` et `2p + 1`,
+/// la première dans les 16 bits de poids faible), comme l'instruction `vdpbf16ps` qui ajoute à
+/// chaque somme `f32` les produits de deux paires.
+mod bf16 {
+    /// L'arrondi au plus proche (pair en cas d'égalité) d'un `f32` en bf16, comme
+    /// `vcvtne2ps2bf16`.
+    pub fn round(x: f32) -> u32 {
+        let b = x.to_bits();
+        (b + 0x7fff + ((b >> 16) & 1)) >> 16
+    }
+
+    fn lo(p: u32) -> f32 {
+        f32::from_bits(p << 16)
+    }
+
+    fn hi(p: u32) -> f32 {
+        f32::from_bits(p & 0xffff_0000)
+    }
+
+    /// Les poids `w` (`inp × out`, `inp` pair) par paires d'entrées : `inp / 2 × out` nombres.
+    pub fn pack(w: &[f32], inp: usize, out: usize) -> Vec<u32> {
+        let mut p = vec![0; inp / 2 * out];
+        for k in 0..inp / 2 {
+            for o in 0..out {
+                p[k * out + o] = round(w[2 * k * out + o]) | round(w[(2 * k + 1) * out + o]) << 16;
+            }
+        }
+        p
+    }
+
+    /// Le processeur a AVX2, FMA et AVX-512 BF16.
+    #[cfg(target_arch = "x86_64")]
+    pub fn available() -> bool {
+        is_x86_feature_detected!("avx2")
+            && is_x86_feature_detected!("fma")
+            && is_x86_feature_detected!("avx512f")
+            && is_x86_feature_detected!("avx512bf16")
+    }
+
+    /// `c += a · b` : `a` (`rows × k`, `k` multiple de 32) arrondie en bf16 dans `packed`, `b` par
+    /// paires (`pack`, `k / 2 × n`). Avec AVX-512 BF16 si `HW` (et `n` multiple de 16), sinon
+    /// `gemm_reference`.
+    #[inline(always)]
+    pub fn gemm<const HW: bool>(
+        a: &[f32],
+        rows: usize,
+        k: usize,
+        b: &[u32],
+        n: usize,
+        c: &mut [f32],
+        packed: &mut Vec<u32>,
+    ) {
+        assert!(a.len() >= rows * k && b.len() >= k / 2 * n && c.len() >= rows * n, "dimensions");
+        packed.clear();
+        packed.resize(rows * k / 2, 0);
+        #[cfg(target_arch = "x86_64")]
+        if HW && k.is_multiple_of(32) && n.is_multiple_of(16) {
+            // SAFETY: AVX-512 BF16 vérifié par `eval_with` ; dimensions vérifiées juste avant
+            unsafe {
+                super::avx512::pack_rows(a, rows * k, packed);
+                super::avx512::gemm(packed, rows, k / 2, b, n, c);
+            }
+            return;
+        }
+        for (p, pair) in packed.iter_mut().zip(a[..rows * k].as_chunks::<2>().0) {
+            *p = round(pair[0]) | round(pair[1]) << 16;
+        }
+        gemm_reference(packed, rows, k / 2, b, n, c);
+    }
+
+    /// La référence de `vdpbf16ps` : à chaque somme, le produit des seconds éléments des paires puis
+    /// celui des premiers, chacun exact (bf16 × bf16 tient dans un `f32`), chaque addition arrondie.
+    pub fn gemm_reference(a: &[u32], rows: usize, kp: usize, b: &[u32], n: usize, c: &mut [f32]) {
+        for r in 0..rows {
+            let cr = &mut c[r * n..(r + 1) * n];
+            for (p, &x) in a[r * kp..(r + 1) * kp].iter().enumerate() {
+                let (x0, x1) = (lo(x), hi(x));
+                for (cv, &w) in cr.iter_mut().zip(&b[p * n..(p + 1) * n]) {
+                    *cv += x1 * hi(w);
+                    *cv += x0 * lo(w);
+                }
+            }
+        }
+    }
+}
+
+/// Les produits en bf16 avec AVX-512 BF16 (`bf16`).
+#[cfg(target_arch = "x86_64")]
+mod avx512 {
+    use std::arch::x86_64::*;
+
+    /// Les `len` premiers nombres de `a` (multiple de 32) arrondis en bf16, deux par nombre de
+    /// `out`, dans l'ordre.
+    #[target_feature(enable = "avx512f,avx512bf16")]
+    pub unsafe fn pack_rows(a: &[f32], len: usize, out: &mut [u32]) {
+        assert!(len.is_multiple_of(32) && a.len() >= len && out.len() >= len / 2, "dimensions");
+        let (a, out) = (a.as_ptr(), out.as_mut_ptr());
+        for i in (0..len).step_by(32) {
+            // SAFETY : `i + 32 <= len` nombres de `a`, `i / 2 + 16 <= len / 2` de `out`
+            unsafe {
+                let low = _mm512_loadu_ps(a.add(i));
+                let high = _mm512_loadu_ps(a.add(i + 16));
+                // les 16 premiers bf16 viennent du second argument
+                let both: __m512i = std::mem::transmute(_mm512_cvtne2ps_pbh(high, low));
+                _mm512_storeu_si512(out.add(i / 2) as *mut __m512i, both);
+            }
+        }
+    }
+
+    /// `c += a · b` : `a` par paires (`rows × kp`), `b` par paires (`kp × n`, `n` multiple de 16),
+    /// par tuiles de 6 lignes × 64 colonnes dont les 24 sommes restent dans les registres.
+    #[target_feature(enable = "avx512f,avx512bf16")]
+    pub unsafe fn gemm(a: &[u32], rows: usize, kp: usize, b: &[u32], n: usize, c: &mut [f32]) {
+        let (a, b, c) = (a.as_ptr(), b.as_ptr(), c.as_mut_ptr());
+        for col in (0..n).step_by(64) {
+            // SAFETY (pour chaque tuile) : lignes `row..row + R` < `rows`, colonnes `col..col + 16 V`
+            // <= `n`, dans les tranches vérifiées par l'appelant
+            unsafe {
+                match (n - col).min(64) / 16 {
+                    4 => rows_of::<4>(a, rows, kp, b.add(col), n, c.add(col)),
+                    3 => rows_of::<3>(a, rows, kp, b.add(col), n, c.add(col)),
+                    2 => rows_of::<2>(a, rows, kp, b.add(col), n, c.add(col)),
+                    _ => rows_of::<1>(a, rows, kp, b.add(col), n, c.add(col)),
+                }
+            }
+        }
+    }
+
+    /// Toutes les lignes, `16 V` colonnes.
+    #[target_feature(enable = "avx512f,avx512bf16")]
+    #[inline]
+    unsafe fn rows_of<const V: usize>(a: *const u32, rows: usize, kp: usize, b: *const u32, n: usize, c: *mut f32) {
+        let mut row = 0;
+        // SAFETY : voir `gemm`
+        unsafe {
+            while row + 6 <= rows {
+                tile::<6, V>(a.add(row * kp), kp, b, n, c.add(row * n));
+                row += 6;
+            }
+            match rows - row {
+                1 => tile::<1, V>(a.add(row * kp), kp, b, n, c.add(row * n)),
+                2 => tile::<2, V>(a.add(row * kp), kp, b, n, c.add(row * n)),
+                3 => tile::<3, V>(a.add(row * kp), kp, b, n, c.add(row * n)),
+                4 => tile::<4, V>(a.add(row * kp), kp, b, n, c.add(row * n)),
+                5 => tile::<5, V>(a.add(row * kp), kp, b, n, c.add(row * n)),
+                _ => {}
+            }
+        }
+    }
+
+    /// Une tuile de `R` lignes × `16 V` colonnes.
+    #[target_feature(enable = "avx512f,avx512bf16")]
+    #[inline]
+    unsafe fn tile<const R: usize, const V: usize>(a: *const u32, kp: usize, b: *const u32, n: usize, c: *mut f32) {
+        // SAFETY : les pointeurs restent dans la tuile (voir `gemm`)
+        unsafe {
+            let mut acc: [[__m512; V]; R] =
+                std::array::from_fn(|r| std::array::from_fn(|v| _mm512_loadu_ps(c.add(r * n + 16 * v))));
+            for p in 0..kp {
+                let w: [__m512bh; V] = std::array::from_fn(|v| {
+                    std::mem::transmute(_mm512_loadu_si512(b.add(p * n + 16 * v) as *const __m512i))
+                });
+                for (r, acc) in acc.iter_mut().enumerate() {
+                    let x: __m512bh = std::mem::transmute(_mm512_set1_epi32(*a.add(r * kp + p) as i32));
+                    for (acc, &w) in acc.iter_mut().zip(&w) {
+                        *acc = _mm512_dpbf16_ps(*acc, x, w);
+                    }
+                }
+            }
+            for (r, acc) in acc.iter().enumerate() {
+                for (v, &acc) in acc.iter().enumerate() {
+                    _mm512_storeu_ps(c.add(r * n + 16 * v), acc);
+                }
             }
         }
     }
