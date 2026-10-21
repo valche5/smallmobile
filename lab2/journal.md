@@ -77,8 +77,8 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
   il joue au hasard. Calcul Rust en `f32` (AVX2) ; sur un processeur qui a AVX-512 BF16 (AWS),
   les grands produits en bf16, choisis automatiquement : mêmes résultats que leur référence
   scalaire, écarts au `f32` de 10⁻⁴ sur la victoire et 0,004 sur les logits (`lab2 bench-net`).
-- **Jeu** : lab2 n'y est pas tant que la boucle n'a pas de réseau qui vaille ; il reviendra
-  (`src/shared/experts.ts`) à n = 800. Arène d'essai sur mini, un cœur, 3 joueurs face à Normale :
+- **Jeu** : `lab2-expert` avec c020 (`lab2/nets/c020.bin`), n = 800 (`src/shared/experts.ts`),
+  variante par défaut. Arène d'essai sur mini, un cœur, 3 joueurs face à Normale :
   65 ms en moyenne par décision à n = 800, p95 224 ms, fins de tour comprises (lab1 dans le jeu
   sur mini : 80 à 250 ms, médiane 170 ms).
 - **Arène** : un joueur rend une décision entière en actions du noyau ; témoin `lab1:net=…,n=…`
@@ -105,10 +105,15 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
   parties/s sur 64 cœurs en bf16 (82 en `f32`), 104 sur 48 cœurs, 102 pendant l'entraînement ;
   entraînement 12 800 positions/s sur 16 cœurs en bf16 (9 900 en `f32` ; 10 000 pendant les
   parties ; plus rien à gagner au-delà de 16 à 32 cœurs, la mémoire limite) ; arènes 57 s
-  (Difficile) et 22 s (Normale) à 920 donnes. Un pas : environ 5 min (25 000 parties en 245 s
-  pendant 215 s d'entraînement, puis 40 s d'arènes), contre environ 10 min en `f32` sans
-  recouvrement. Sur mini (6 cœurs, AVX2) : l'entraînement plafonne à 4 cœurs, et le bf16 y est
-  émulé (15 fois plus lent) : aucun entraînement réel sur mini.
+  (Difficile) et 22 s (Normale) à 920 donnes. En même temps, avec c020 : 48 cœurs de parties et
+  16 d'entraînement, 62 parties/s et 59,6 ms par lot ; 56 et 8 (entraînement compilé, lots
+  préparés à côté) : 67 parties/s mais 85,9 ms par lot, moins bien. `torch.compile` : 3 % gagnés à
+  16 cœurs en bf16 pour 9 à 18 s de compilation par cycle, pas gardé. Couches sans concaténation
+  (la part de g calculée une fois par position, comme en Rust) : même réseau, 11 % de moins sur
+  mini. Un pas de la première boucle : 5,5 à 7,3 min (les parties s'allongent avec le niveau),
+  contre environ 10 min en `f32` sans recouvrement. Sur mini (6 cœurs, AVX2) : l'entraînement
+  plafonne à 4 cœurs, et le bf16 y est émulé (15 fois plus lent) : aucun entraînement réel sur
+  mini.
 
 ## Plan
 
@@ -118,9 +123,46 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
 3. ~~Réseau, format des positions, entraînement ; départ de zéro.~~ Fait le 21 octobre.
 4. ~~Boucle par petits cycles à la manière de KataGo (possession, surprise, fenêtre), essai sur
    mini, mesures sur AWS, bf16 et recouvrement.~~ Fait le 21 octobre.
-5. Première boucle sur AWS depuis gen0 (accord de l'utilisateur) : 20 pas, environ 1 h 45, suivie
-   par les arènes de chaque pas ; lab2 revient dans le jeu avec son meilleur réseau.
+5. ~~Première boucle sur AWS depuis gen0 : 20 pas, arènes à chaque pas ; lab2 revient dans le jeu
+   avec son meilleur réseau.~~ Faite le 21 octobre (voir Résultats).
+6. Suite à décider avec l'utilisateur : comparaison avec lab1 dans les conditions du jeu ; sortir
+   du plateau (+19 face à Difficile depuis c015 ; faible à 3, 4 et 5 joueurs).
 
 ## Résultats
 
-Aucun pour l'instant.
+Scores du protocole (`labtools/score.py`, tailles à poids égaux), n = 200.
+
+### Première boucle (21 octobre)
+
+`lab2/loop.sh 20` depuis gen0 (au hasard), sur une `c7a.16xlarge` Spot à 0,846 $/h : 2 h 12 de
+boucle, 500 000 parties ; la machine a aussi servi aux mesures du bf16 et de l'entraînement
+(179 min en tout, 2,58 $). Parties `lab2/data/loop` dans le bucket, réseaux et arènes
+`lab2/runs/loop` (hors Git) ; c020 gardé dans `lab2/nets/`.
+
+Arènes de chaque réseau, 460 donnes (115 par taille), mêmes donnes à chaque pas :
+
+| Réseau | Difficile (1002) | Normale (1003) | Réseau | Difficile | Normale |
+| --- | --- | --- | --- | --- | --- |
+| c001 | −31,4 ± 0,4 | −29,2 ± 1,1 | c011 | +6,7 ± 2,2 | +10,6 ± 2,1 |
+| c002 | −29,1 ± 1,0 | −28,2 ± 1,2 | c012 | +10,4 ± 2,3 | +10,4 ± 2,0 |
+| c003 | −21,7 ± 1,8 | −16,2 ± 2,1 | c013 | +14,7 ± 2,3 | +14,0 ± 2,1 |
+| c004 | −18,8 ± 1,9 | −9,6 ± 2,3 | c014 | +15,9 ± 2,4 | +17,3 ± 2,2 |
+| c005 | −14,0 ± 2,1 | −7,2 ± 2,3 | c015 | +18,5 ± 2,4 | +16,2 ± 2,1 |
+| c006 | −9,8 ± 2,1 | −3,8 ± 2,1 | c016 | +19,0 ± 2,4 | +17,7 ± 2,2 |
+| c007 | −6,0 ± 2,0 | −1,4 ± 1,8 | c017 | +18,8 ± 2,2 | +17,9 ± 2,1 |
+| c008 | −5,6 ± 1,9 | +0,4 ± 1,9 | c018 | +19,6 ± 2,2 | +15,7 ± 2,1 |
+| c009 | +0,4 ± 2,2 | +5,0 ± 1,9 | c019 | +19,9 ± 2,3 | +17,5 ± 2,1 |
+| c010 | +3,1 ± 2,3 | +6,8 ± 1,8 | c020 | +19,8 ± 2,4 | +17,2 ± 2,1 |
+
+c020 par taille (2, 3, 4, 5 joueurs) : Difficile +36,7, +13,8, +13,0, +15,7 ; Normale +45,2,
++8,7, +6,7, +8,3.
+
+- **La boucle apprend depuis le hasard, sans rien de lab1 ni des IA du jeu** : à égalité avec
+  Normale au pas 8, avec Difficile au pas 9, puis 3,5 à 4 points par pas jusqu'à c015 ; c003
+  (75 000 parties) dépasse déjà l'ancien gen1 par génération (150 000 parties au hasard :
+  −29,7 et −27,6).
+- **Plateau depuis c015** : +18,5 à +19,9 face à Difficile, +15,7 à +17,9 face à Normale.
+- **Fort à 2 joueurs, plus faible à 3, 4 et 5**, comme les essais précédents.
+- Fenêtre : le dernier cycle seul jusqu'à c009, deux cycles de c010 à c019, trois pour c020.
+  Parties : 10 positions par partie au hasard, 22 puis 33 en fin de boucle ; 25 000 parties en
+  109 s (hasard, 64 cœurs) puis 245 à 406 s (48 cœurs) ; entraînement 128 à 368 s.
