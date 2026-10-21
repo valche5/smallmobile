@@ -3,7 +3,7 @@
  * `data/games/`, avec de quoi la rejouer à l'identique (graines et actions) et le temps de chaque
  * décision d'IA. Contrairement aux salles (`store.ts`), rien n'est jamais effacé.
  *
- *   bun lab/tools/games.ts data/games    (temps de décision des IA)
+ *   bun labtools/games.ts data/games    (temps de décision des IA)
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

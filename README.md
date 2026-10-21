@@ -11,7 +11,7 @@ conséquences **avant** d'être confirmée. Interface entièrement en français.
 Il faut [Bun](https://bun.sh) ≥ 1.2 et [Rust](https://rustup.rs) avec la cible WebAssembly
 (`rustup target add wasm32-unknown-unknown`) : les règles, l'IA et les cartes sont écrites en Rust
 (`kernel/`) et compilées en WebAssembly, chargé par le serveur et par les téléphones. L'IA Expert
-(`brain/`) est un programme natif que le serveur fait tourner à côté de lui.
+(`labN/brain/`, une par labo) est un programme natif que le serveur fait tourner à côté de lui.
 
 ```bash
 bun install
@@ -39,7 +39,7 @@ automatiquement.
 | ------------------- | ----------------------------------------------------------------- |
 | `bun start`         | Serveur de jeu (`PORT=8080 bun start` pour changer de port)       |
 | `bun run dev`       | Développement avec rechargement à chaud                           |
-| `bun run kernel:build` | Noyau du jeu en WebAssembly (`public/game-kernel.wasm`) et IA Expert (`target/release/expert`), fait par les autres commandes |
+| `bun run kernel:build` | Noyau du jeu en WebAssembly (`public/game-kernel.wasm`) et IA Expert de chaque labo (`target/release/labN-expert`), fait par les autres commandes |
 | `bun test`          | Tests : règles, pouvoirs, parties IA, serveur et WebSockets       |
 | `cargo test`        | Tests du noyau Rust (dont l'empreinte de non-régression de l'IA)  |
 | `bun run typecheck` | Vérification TypeScript                                           |
@@ -48,7 +48,7 @@ Les parties en cours sont enregistrées dans `data/rooms/` (modifiable avec
 `DATA_DIR`) : elles survivent à un redémarrage du serveur et sont effacées
 après 7 jours d'inactivité. Chaque partie jouée est aussi archivée dans
 `data/games/` (`GAMES_DIR`), pour le labo de l'IA : de quoi la rejouer à
-l'identique et le temps de chaque décision d'IA (`bun lab/tools/games.ts`).
+l'identique et le temps de chaque décision d'IA (`bun labtools/games.ts`).
 
 ## Jouer
 
@@ -65,9 +65,10 @@ l'identique et le temps de chaque décision d'IA (`bun lab/tools/games.ts`).
 - **Cartes** : Petite (2 joueurs, 23 régions, 10 tours), Moyenne (+1 IA),
   Grande (+2 IA), Immense (+3 IA). Les IA ont quatre niveaux ; « Difficile »
   simule les tours suivants (déclin, placement des jetons) et s'en prend
-  davantage à ses adversaires, surtout en duel ; « Expert » est l'IA du labo
-  (recherche guidée par un réseau de neurones, voir `lab/JOURNAL.md`), jouée
-  par le serveur.
+  davantage à ses adversaires, surtout en duel ; « Expert » est l'IA des labos
+  (recherche guidée par un réseau de neurones, voir `labtools/README.md`),
+  jouée par le serveur ; quand plusieurs labos en proposent une, on choisit
+  laquelle.
   « 🎲 Autre carte » génère un nouveau monde.
 - **Vues** (barre du bas) : 🗺️ Carte, 👑 Peuples (le marché), 👥 Joueurs
   (scores, revenus, connexion), 📜 Journal, 📖 Règles.

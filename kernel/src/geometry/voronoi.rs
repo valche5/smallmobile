@@ -63,7 +63,7 @@ impl Voronoi {
 
     fn collinear(d: &Delaunator) -> bool {
         let c = &d.coords;
-        d.triangles.chunks_exact(3).all(|t| {
+        d.triangles.as_chunks::<3>().0.iter().all(|t| {
             let (a, b, cc) = (2 * t[0], 2 * t[1], 2 * t[2]);
             let cross = (c[cc] - c[a]) * (c[b + 1] - c[a + 1]) - (c[b] - c[a]) * (c[cc + 1] - c[a + 1]);
             cross <= 1e-10
@@ -73,7 +73,7 @@ impl Voronoi {
     fn init(&mut self) {
         let points = &self.d.coords;
         let (mut bx, mut by) = (None::<f64>, 0.0);
-        for t in self.d.triangles.chunks_exact(3) {
+        for t in self.d.triangles.as_chunks::<3>().0 {
             let (t1, t2, t3) = (t[0] * 2, t[1] * 2, t[2] * 2);
             let (x1, y1) = (points[t1], points[t1 + 1]);
             let (x2, y2) = (points[t2], points[t2 + 1]);

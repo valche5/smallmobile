@@ -1,0 +1,14 @@
+[package]
+name = "smallmobile-lab1"
+version = "0.1.0"
+edition = "2024"
+description = "Laboratoire 1 (figé) : recherche AlphaZero sur mondes possibles, réseaux jusqu'à gen11 (JOURNAL.md)."
+publish = false
+
+[[bin]]
+name = "lab1"
+path = "src/bin/lab.rs"
+
+[dependencies]
+smallmobile-kernel = { path = "../kernel" }
+smallmobile-brain1 = { path = "brain" }

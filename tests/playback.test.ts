@@ -151,6 +151,7 @@ function roomView(g: GameState): RoomView {
     size: g.players.length,
     mapSeed: g.map.seed,
     aiLevel: 'normal',
+    expertLab: 'lab1',
     speed: 'normal',
     speedBy: null,
     started: true,
@@ -505,7 +506,7 @@ describe('avec le serveur', () => {
     store.onlineQuit(false);
     const rooms = new RoomManager(null, new ManualScheduler());
     FakeSocket.rooms = rooms;
-    store.onlineCreate({ name: 'Alice', color: ALICE, size: 2, aiLevel: 'normal', mapSeed: PRESETS[2]!.seed, opponent: 'human' });
+    store.onlineCreate({ name: 'Alice', color: ALICE, size: 2, aiLevel: 'normal', expertLab: 'lab1', mapSeed: PRESETS[2]!.seed, opponent: 'human' });
     await flush(10);
     const code = store.getState().online!.code!;
     const bob = new Phone();

@@ -114,6 +114,7 @@ Les autres champs sont facultatifs :
 - `players` : de 2 à 5 (2 par défaut) ;
 - `opponents` : un niveau pour tous les adversaires, ou une liste d'un niveau par adversaire, parmi
   `facile`, `normal`, `difficile`, `expert` (`expert` par défaut) ;
+- `expert` : la version de l'IA Expert, un labo (`lab1`…) ; la plus récente par défaut ;
 - `seat` : votre place, de 0 (premier à jouer) à `players − 1` (au hasard par défaut) ;
 - `name` : votre nom dans la partie ;
 - `seed` : un entier positif, pour rejouer la même carte et le même hasard (pioches, dés). Avec les

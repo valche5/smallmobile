@@ -22,6 +22,8 @@ export interface RoomView {
   size: number;
   mapSeed: number;
   aiLevel: AiLevel;
+  /** Le labo dont l'Expert joue les sièges de niveau `expert` (`experts.ts`). */
+  expertLab: string;
   speed: AiSpeed;
   /** Siège qui a réglé la vitesse en dernier (null : réglage d'origine). */
   speedBy: number | null;
@@ -52,11 +54,11 @@ export interface Replay {
 
 export type ClientMsg =
   /** `opponent` : 'ai' pour jouer seul contre l'IA (la partie commence aussitôt). */
-  | { t: 'create'; name: string; color: string; size: number; aiLevel: AiLevel; mapSeed: number; opponent?: 'human' | 'ai' }
+  | { t: 'create'; name: string; color: string; size: number; aiLevel: AiLevel; expertLab?: string; mapSeed: number; opponent?: 'human' | 'ai' }
   | { t: 'join'; code: string; name: string; color: string }
   /** `shown` : numéro de journal de la dernière trame affichée sur ce téléphone. */
   | { t: 'resume'; code: string; token: string; shown?: number }
-  | { t: 'lobby'; size?: number; aiLevel?: AiLevel; mapSeed?: number; name?: string; color?: string }
+  | { t: 'lobby'; size?: number; aiLevel?: AiLevel; expertLab?: string; mapSeed?: number; name?: string; color?: string }
   | { t: 'start' }
   | { t: 'action'; id: number; action: Action }
   | { t: 'undo' }

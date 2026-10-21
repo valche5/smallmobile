@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "smallmobile-brain"
+name = "smallmobile-brain1"
 version = "0.1.0"
 dependencies = [
  "smallmobile-kernel",
@@ -14,9 +14,9 @@ name = "smallmobile-kernel"
 version = "0.1.0"
 
 [[package]]
-name = "smallmobile-lab"
+name = "smallmobile-lab1"
 version = "0.1.0"
 dependencies = [
- "smallmobile-brain",
+ "smallmobile-brain1",
  "smallmobile-kernel",
 ]

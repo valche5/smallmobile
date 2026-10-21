@@ -3,6 +3,7 @@ import { AI_LEVELS, AI_NAMES, PLAYER_COLORS } from '../engine/data';
 import { PRESETS, presetMap } from '../engine/mapgen';
 import { randomSeed } from '../engine/rng';
 import type { AiLevel } from '../engine/types';
+import { DEFAULT_EXPERT_LAB, EXPERT_LABS } from '../shared/experts';
 import { normalizeCode } from '../shared/protocol';
 import { MapPreview } from './components/MapPreview';
 import { loadMe, saveMe, type Me } from './me';
@@ -56,6 +57,7 @@ function OnlineSetup({ joinCode }: { joinCode: string }) {
   const [size, setSize] = useState(2);
   const [opponent, setOpponent] = useState<'human' | 'ai'>('ai');
   const [aiLevel, setAiLevel] = useState<AiLevel>('normal');
+  const [expertLab, setExpertLab] = useState(DEFAULT_EXPERT_LAB);
   const [customSeed, setCustomSeed] = useState<number | null>(null);
   const [code, setCode] = useState(joinCode);
   const seed = customSeed ?? PRESETS[size]!.seed;
@@ -164,6 +166,15 @@ function OnlineSetup({ joinCode }: { joinCode: string }) {
                 </button>
               ))}
             </div>
+            {aiLevel === 'expert' && EXPERT_LABS.length > 1 && (
+              <div class="seg">
+                {EXPERT_LABS.map((l) => (
+                  <button key={l.id} class={expertLab === l.id ? 'on' : ''} onClick={() => setExpertLab(l.id)}>
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
         <MapPreview size={size} seed={seed}>
@@ -178,7 +189,7 @@ function OnlineSetup({ joinCode }: { joinCode: string }) {
         </MapPreview>
         <button
           class="btn primary big-btn wide"
-          onClick={() => !needName() && onlineCreate({ name: name(), color: me.color, size, aiLevel, mapSeed: seed, opponent })}
+          onClick={() => !needName() && onlineCreate({ name: name(), color: me.color, size, aiLevel, expertLab, mapSeed: seed, opponent })}
         >
           {opponent === 'ai' ? 'Jouer' : 'Créer la partie'}
         </button>

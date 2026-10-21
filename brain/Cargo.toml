@@ -1,9 +1,0 @@
-[package]
-name = "smallmobile-brain"
-version = "0.1.0"
-edition = "2024"
-description = "L'IA Expert : recherche guidée par un réseau de neurones, pour le jeu et pour le labo."
-publish = false
-
-[dependencies]
-smallmobile-kernel = { path = "../kernel" }

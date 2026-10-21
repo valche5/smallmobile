@@ -9,9 +9,10 @@ output/illustrations-preview/
 /target/
 public/game-kernel.wasm
 
-# sorties du labo de l'IA (résumées dans lab/JOURNAL.md)
-/lab/runs/
-/lab/py/.venv/
+# sorties des labos de l'IA (résumées dans le journal de chaque labo), état des machines AWS
+/lab[0-9]*/runs/
+/lab[0-9]*/py/.venv/
 __pycache__/
-/lab/data/
-/lab/nets/*.pt
+/lab[0-9]*/data/
+/lab[0-9]*/nets/*.pt
+/labtools/state/

@@ -18,8 +18,9 @@ import {
   type ServerMsg,
   type Snapshot,
 } from '../shared/protocol';
+import { EXPERT_LABS, expertLab } from '../shared/experts';
 import { expertNets, gameId, type GameArchive } from './archive';
-import type { Expert } from './expert';
+import type { Expert, Experts } from './expert';
 
 /** Un téléphone connecté. */
 export interface Client {
@@ -47,6 +48,8 @@ export interface RoomData {
   size: number;
   mapSeed: number;
   aiLevel: AiLevel;
+  /** Le labo dont l'Expert joue les sièges de niveau `expert` (`src/shared/experts.ts`). */
+  expertLab: string;
   speed: AiSpeed;
   /** Siège qui a réglé la vitesse en dernier. */
   speedBy?: number | null;
@@ -108,7 +111,7 @@ function toWire(game: GameState): GameWire {
 
 /** Ce que le serveur peut confier à d'autres : l'IA Expert, l'archive des parties jouées, le journal. */
 export interface RoomServices {
-  expert?: Expert | null;
+  experts?: Experts;
   archive?: GameArchive | null;
   /** Le journal du serveur (temps de décision de l'Expert). */
   log?: (line: string) => void;
@@ -116,7 +119,7 @@ export interface RoomServices {
 
 export class RoomManager {
   private rooms = new Map<string, Room>();
-  private expert: Expert | null;
+  private experts: Experts;
   private archive: GameArchive | null;
   private log: (line: string) => void;
 
@@ -125,11 +128,22 @@ export class RoomManager {
     private scheduler: Scheduler = realScheduler,
     services: RoomServices = {},
   ) {
-    this.expert = services.expert ?? null;
+    this.experts = services.experts ?? new Map();
     this.archive = services.archive ?? null;
     this.log = services.log ?? ((line) => console.log(line));
     for (const data of store?.loadAll() ?? []) {
-      const room: Room = { ...data, clients: new Set(), undo: [], timer: null, busyUntil: 0, groupOpen: false, history: [], plan: null };
+      // salles sauvegardées avant les variantes de l'Expert : celle par défaut
+      const room: Room = {
+        ...data,
+        expertLab: expertLab(data.expertLab),
+        clients: new Set(),
+        undo: [],
+        timer: null,
+        busyUntil: 0,
+        groupOpen: false,
+        history: [],
+        plan: null,
+      };
       this.rooms.set(room.code, room);
       this.scheduleAi(room);
     }
@@ -214,6 +228,7 @@ export class RoomManager {
       size,
       mapSeed: Number.isInteger(msg.mapSeed) ? msg.mapSeed : PRESETS[size]!.seed,
       aiLevel,
+      expertLab: expertLab(msg.expertLab),
       speed: 'normal',
       seats: [
         { name: cleanName(msg.name, 'Joueur 1'), color: validColor(msg.color) ?? PLAYER_COLORS[0]!.color, kind: 'human', ai: aiLevel, token, replaced: false },
@@ -308,6 +323,7 @@ export class RoomManager {
         room.aiLevel = msg.aiLevel;
         room.seats.forEach((s) => (s.ai = msg.aiLevel!));
       }
+      if (EXPERT_LABS.some((l) => l.id === msg.expertLab)) room.expertLab = msg.expertLab!;
       if (msg.mapSeed !== undefined && Number.isInteger(msg.mapSeed)) room.mapSeed = msg.mapSeed;
     }
     this.fixColors(room, client.seat);
@@ -455,7 +471,8 @@ export class RoomManager {
       const planned = room.plan?.seq === cur.seq ? room.plan.actions[0] : undefined;
       room.plan = null;
       if (planned && this.play(room, cur, planned)) return;
-      if (level === 'expert' && this.expert) return this.askExpert(room, cur, who);
+      const expert = level === 'expert' ? this.experts.get(room.expertLab) : undefined;
+      if (expert) return this.askExpert(room, cur, who, expert);
       const start = performance.now();
       let action: Action;
       try {
@@ -469,11 +486,11 @@ export class RoomManager {
   }
 
   /** L'Expert réfléchit hors du serveur ; la partie ne doit pas avoir bougé quand il répond. */
-  private askExpert(room: Room, cur: GameState, who: number) {
+  private askExpert(room: Room, cur: GameState, who: number, expert: Expert) {
     const start = performance.now();
     // la salle reste occupée : aucun autre tour d'IA ne part pendant la réflexion
     room.timer = 'expert';
-    this.expert!.decide(cur).then(
+    expert.decide(cur).then(
       (move) => {
         room.timer = null;
         if (room.game !== cur || !this.rooms.has(room.code)) return this.scheduleAi(room);
@@ -576,6 +593,7 @@ export class RoomManager {
       size: room.size,
       mapSeed: room.mapSeed,
       aiLevel: room.aiLevel,
+      expertLab: room.expertLab,
       speed: room.speed,
       speedBy: room.speedBy ?? null,
       started: !!room.game,

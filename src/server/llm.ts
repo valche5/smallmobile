@@ -20,8 +20,9 @@ import { KernelRefusal } from '../engine/kernel';
 import { randomSeed } from '../engine/rng';
 import { allTargets, currentActor, ranking, regionsOf, tokensOnBoard } from '../engine/rules';
 import type { Action, AiLevel, AiThought, GameState, RaceId } from '../engine/types';
+import { EXPERT_LABS, expertLab } from '../shared/experts';
 import { expertNets, gameId, type ArchivedGame, type GameArchive } from './archive';
-import type { Expert } from './expert';
+import type { Experts } from './expert';
 
 const LEVELS: AiLevel[] = ['facile', 'normal', 'difficile', 'expert'];
 const PHASES: Record<GameState['phase'], string> = {
@@ -48,6 +49,8 @@ export interface LlmGame {
   /** Le modèle qui joue, déclaré à la création, et l'outil qui le fait jouer. */
   model: string;
   client?: string;
+  /** Le labo dont l'Expert joue les adversaires de niveau `expert` (`src/shared/experts.ts`). */
+  expertLab: string;
   /** Fin de partie : pourquoi le joueur pense avoir gagné ou perdu. */
   debrief?: { text: string; at: number };
 }
@@ -88,7 +91,7 @@ export class LlmError extends Error {
 }
 
 export interface LlmOptions {
-  expert: Expert | null;
+  experts: Experts;
   /** L'archive des parties jouées, avec les vraies parties ; `null` : aucune. */
   archive: GameArchive | null;
   /** Dossier des parties ; `null` : en mémoire seulement (tests). */
@@ -107,8 +110,8 @@ export class LlmGames {
   /**
    * Nouvelle partie. `model` (obligatoire) : le modèle qui joue ; `client` : l'outil qui le fait jouer ;
    * `players` : 2 à 5 ; `opponents` : un niveau pour tous, ou un par adversaire (facile, normal,
-   * difficile, expert) ; `seat` : la place du joueur (au hasard sinon) ; `seed` : pour rejouer la même
-   * carte et le même hasard.
+   * difficile, expert) ; `expert` : le labo de l'Expert (le plus récent sinon) ; `seat` : la place du
+   * joueur (au hasard sinon) ; `seed` : pour rejouer la même carte et le même hasard.
    */
   async create(body: unknown): Promise<LlmView> {
     const b = (body ?? {}) as Record<string, unknown>;
@@ -121,6 +124,8 @@ export class LlmGames {
     const opponents = Array.isArray(raw) ? raw : Array.from({ length: players - 1 }, () => raw);
     if (opponents.length !== players - 1 || !opponents.every((o) => LEVELS.includes(o as AiLevel)))
       throw new LlmError(400, `\`opponents\` : un niveau, ou ${players - 1} niveaux parmi ${LEVELS.join(', ')}.`);
+    if (b.expert !== undefined && !EXPERT_LABS.some((l) => l.id === b.expert))
+      throw new LlmError(400, `\`expert\` : un labo parmi ${EXPERT_LABS.map((l) => l.id).join(', ')}.`);
     const seat = b.seat === undefined ? Math.floor(Math.random() * players) : Number(b.seat);
     if (!Number.isInteger(seat) || seat < 0 || seat >= players) throw new LlmError(400, `\`seat\` : de 0 à ${players - 1}.`);
     const seed = b.seed === undefined ? randomSeed() : Number(b.seed);
@@ -144,6 +149,7 @@ export class LlmGames {
       seen: 0,
       model,
       ...(client ? { client } : {}),
+      expertLab: expertLab(b.expert),
     };
     this.games.set(entry.id, entry);
     return this.run(entry, async () => {});
@@ -213,9 +219,10 @@ export class LlmGames {
       if (g.phase === 'gameOver' || who === null || who === entry.seat) return;
       const level = g.players[who]!.ai;
       const start = performance.now();
-      if (level === 'expert' && this.opts.expert) {
+      const expert = level === 'expert' ? this.opts.experts.get(entry.expertLab) : undefined;
+      if (expert) {
         try {
-          const move = await this.opts.expert.decide(g);
+          const move = await expert.decide(g);
           const thought: AiThought = {
             level,
             ms: Math.round(performance.now() - start),
@@ -251,8 +258,9 @@ export class LlmGames {
     if (this.opts.dir && /^[a-z0-9]{8}$/.test(id)) {
       try {
         const entry = JSON.parse(readFileSync(join(this.opts.dir, `${id}.json`), 'utf8')) as LlmGame;
-        // parties créées avant la déclaration du modèle
+        // parties créées avant la déclaration du modèle, ou avant les variantes de l'Expert
         entry.model ??= 'inconnu';
+        entry.expertLab = expertLab(entry.expertLab);
         this.games.set(id, entry);
         return entry;
       } catch {

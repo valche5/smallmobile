@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { AI_LEVELS, PLAYER_COLORS } from '../engine/data';
 import { PRESETS, presetMap } from '../engine/mapgen';
 import { randomSeed } from '../engine/rng';
+import { EXPERT_LABS } from '../shared/experts';
 import { MapPreview } from './components/MapPreview';
 import { QrCode } from './components/QrCode';
 import { saveMe } from './me';
@@ -175,6 +176,15 @@ function Room({ s }: { s: UIState }) {
                     </button>
                   ))}
                 </div>
+                {room.aiLevel === 'expert' && EXPERT_LABS.length > 1 && (
+                  <div class="seg">
+                    {EXPERT_LABS.map((l) => (
+                      <button key={l.id} class={room.expertLab === l.id ? 'on' : ''} onClick={() => onlineSend({ t: 'lobby', expertLab: l.id })}>
+                        {l.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </>

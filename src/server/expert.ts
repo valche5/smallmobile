@@ -1,13 +1,15 @@
 /**
- * L'IA Expert, jouée par un processus natif à côté du serveur (`brain/src/bin/expert.rs`, construit par
- * `bun run kernel:build`) : le serveur lui envoie la partie, elle renvoie les actions de son coup.
- * Un processus à part ne bloque jamais le serveur ; s'il tombe, il est relancé à la demande suivante.
+ * L'IA Expert, jouée par un processus natif à côté du serveur, un par labo (`labN/brain/src/bin/expert.rs`,
+ * programme `labN-expert` construit par `bun run kernel:build` ; variantes : `src/shared/experts.ts`) :
+ * le serveur lui envoie la partie, elle renvoie les actions de son coup. Un processus à part ne bloque
+ * jamais le serveur ; s'il tombe, il est relancé à la demande suivante.
  */
 import type { Subprocess } from 'bun';
 import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
 import { gameWords, readAction } from '../engine/kernel';
 import type { Action, GameState } from '../engine/types';
+import { EXPERT_LABS, type ExpertLab } from '../shared/experts';
 
 /** Un coup de l'Expert : ses actions, dans l'ordre, et ce qu'en pensait la recherche. */
 export interface ExpertMove {
@@ -17,7 +19,7 @@ export interface ExpertMove {
   iterations: number;
   /** Temps de calcul dans le processus (ms), sans l'aller-retour. */
   computeMs: number;
-  /** Le réseau qui a joué (nom du fichier sans `.bin`). */
+  /** Le labo et le réseau qui ont joué (`lab1/gen11`). */
   net: string;
 }
 
@@ -25,10 +27,15 @@ export interface Expert {
   decide(g: GameState): Promise<ExpertMove>;
 }
 
+/** Les Expert disponibles, par labo. */
+export type Experts = ReadonlyMap<string, Expert>;
+
 export interface ExpertOptions {
+  /** Le labo (`lab1`). */
+  lab: string;
   /** Le programme natif. */
   binary: string;
-  /** Les poids du réseau (lab/nets/*.bin). */
+  /** Les poids du réseau (labN/nets/*.bin). */
   net: string;
   /** Itérations de recherche par décision. */
   iterations: number;
@@ -36,12 +43,22 @@ export interface ExpertOptions {
   timeoutMs?: number;
 }
 
-export const DEFAULT_EXPERT: ExpertOptions = {
-  binary: process.env.EXPERT_BIN ?? './target/release/expert',
-  net: process.env.EXPERT_NET ?? './lab/nets/gen11.bin',
-  // n=200 : la meilleure IA du labo (lab/JOURNAL.md) ; ~0,1 à 0,2 s par décision sur mini
-  iterations: Number(process.env.EXPERT_N ?? 200),
-};
+/** Le programme et le réseau de l'Expert d'un labo. */
+export function expertOptions(lab: ExpertLab): ExpertOptions {
+  return { lab: lab.id, binary: `./target/release/${lab.id}-expert`, net: `./${lab.id}/nets/${lab.net}.bin`, iterations: lab.iterations };
+}
+
+/** Un processus par labo dont le programme et le réseau sont là ; `warn` signale les autres. */
+export function startExperts(warn: (why: string) => void): Map<string, ExpertProcess> {
+  const out = new Map<string, ExpertProcess>();
+  for (const lab of EXPERT_LABS) {
+    const opts = expertOptions(lab);
+    const missing = ExpertProcess.available(opts);
+    if (missing) warn(`IA Expert ${lab.id} indisponible : ${missing}`);
+    else out.set(lab.id, new ExpertProcess(opts));
+  }
+  return out;
+}
 
 interface Pending {
   resolve: (words: Uint32Array) => void;
@@ -71,7 +88,7 @@ export class ExpertProcess implements Expert {
     const request = new Uint32Array(4 + game.length);
     request.set([3 + game.length, this.opts.iterations, seed, 0]);
     request.set(game, 4);
-    return this.ask(request).then((words) => ({ ...readMove(words, g), net: basename(this.opts.net, '.bin') }));
+    return this.ask(request).then((words) => ({ ...readMove(words, g), net: `${this.opts.lab}/${basename(this.opts.net, '.bin')}` }));
   }
 
   /** Arrête le processus (fin du serveur). */
@@ -154,7 +171,7 @@ export class ExpertProcess implements Expert {
   }
 }
 
-/** La réponse du processus (voir `brain/src/bin/expert.rs`). */
+/** La réponse du processus (voir `labN/brain/src/bin/expert.rs`). */
 function readMove(xs: Uint32Array, g: GameState): Omit<ExpertMove, 'net'> {
   if ((xs[0]! | 0) < 0) {
     const bytes = new Uint8Array(xs.buffer, xs.byteOffset + 8, Math.min(xs[1]!, 4 * (xs.length - 2)));

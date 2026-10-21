@@ -1006,7 +1006,15 @@ function enterOnline(patch: Partial<OnlineState> = {}) {
   conn().connect();
 }
 
-export function onlineCreate(p: { name: string; color: string; size: number; aiLevel: AiLevel; mapSeed: number; opponent: 'human' | 'ai' }) {
+export function onlineCreate(p: {
+  name: string;
+  color: string;
+  size: number;
+  aiLevel: AiLevel;
+  expertLab: string;
+  mapSeed: number;
+  opponent: 'human' | 'ai';
+}) {
   intro = { t: 'create', ...p };
   resumeShown = null;
   setState({ seen: {} });
