@@ -72,10 +72,10 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
   sortes × 64 régions (conquérir, dé, dragon, sorcellerie, abandon, héros, forteresse, campement,
   jeton). Une décision entière du jeu (`moves::decision`) se joue en actions groupées : héros et
   campements reposés au même endroit ne bougent pas, les jetons forment un seul placement.
-- **Réseau** : gen0 (`lab2/nets/gen0.bin`) est un réseau neuf, écrit par
-  `python lab2/py/model.py lab2/nets/gen0.bin` : il joue au hasard.
-- **Jeu** : lab2 n'est pas proposé tant qu'il n'a pas de réseau entraîné ; il reviendra dans
-  `src/shared/experts.ts` avec gen1, par défaut, à n = 800. Arène d'essai sur mini, un cœur, 3
+- **Réseaux** (`lab2/nets/`) : gen0 est un réseau neuf, écrit par
+  `python lab2/py/model.py lab2/nets/gen0.bin` : il joue au hasard. gen1 : voir Résultats.
+- **Jeu** : `lab2-expert` avec gen1, n = 800 (`src/shared/experts.ts`), variante par défaut
+  (sorti du jeu du départ de zéro jusqu'à gen1). Arène d'essai sur mini, un cœur, 3
   joueurs face à Normale (2 donnes) : 65 ms en moyenne par décision à n = 800, p95 224 ms, fins de
   tour comprises (n = 200 : 21 ms, p95 61 ms ; lab1 dans le jeu sur mini : 80 à 250 ms, médiane
   170 ms).
@@ -88,8 +88,8 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
   de parties plutôt que beaucoup de positions par partie (AlphaGo n'en gardait qu'une par partie
   pour sa valeur). Positions `*.pos` : cible de politique = politique améliorée de la racine.
 - **Entraînement** (`lab2/py/train.py`) : politique, victoire, pièces ; poids lus et écrits en
-  SMNN1 (`.bin`) ; sans `--init`, un réseau neuf. Erreurs par genre de position :
-  `lab2/py/value.py`.
+  SMNN1 (`.bin`) ; sans `--init`, un réseau neuf. Au plus 4 passages sur les données (au-delà,
+  la valeur apprend les parties par cœur). Erreurs par genre de position : `lab2/py/value.py`.
 
 ## Plan
 
@@ -97,12 +97,38 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
 2. ~~Coups : pouvoirs et jetons un par un, paix et déclin à part ; l'Expert du jeu renvoie sa fin
    de tour en actions groupées.~~ Fait le 21 octobre.
 3. ~~Réseau (clés des nouveaux coups), format des positions, entraînement.~~ Fait le 21 octobre.
-4. gen1 (accord de l'utilisateur le 21 octobre) : 150 000 parties de gen0 en auto-jeu, un réseau
-   neuf entraîné dessus, arènes face à gen0, Normale et Difficile ; lab2 revient alors dans le jeu.
+4. ~~gen1 : 150 000 parties de gen0 en auto-jeu, un réseau neuf entraîné dessus, arènes face à
+   gen0, Normale et Difficile ; lab2 revient alors dans le jeu.~~ Fait le 21 octobre.
 5. Puis à chaque génération : parties du dernier réseau, entraînement depuis lui, arènes face au
    précédent et aux IA du jeu, puis face à lab1 quand il s'en approche. Volume et recette revus
    avec l'utilisateur à chaque étape.
 
 ## Résultats
 
-Aucun pour l'instant.
+Scores du protocole (`labtools/score.py`, tailles à poids égaux), 920 donnes par arène (230 par
+taille), n = 200 sauf mention.
+
+### gen1 (21 octobre)
+
+Scripts `lab2/runs/gen1-*.sh` (hors Git), journal `lab2/runs/gen1/log.txt` ; données
+`lab2/data/gen1` dans le bucket. Une machine `c7a.16xlarge` Spot, 30 min, 0,44 $.
+
+- **Données** : 150 000 parties de gen0 (au hasard) en auto-jeu, n = 200, `selfplay::RECIPE` ;
+  30 morceaux de 5 000 parties, graines 10 000 000 à 10 000 029, 32 s par morceau sur 64 cœurs.
+  1 508 359 positions, 10 par partie, 9,3 Go.
+- **Entraînement** d'un réseau neuf : 4 passages, 11 196 lots de 512, 125 s par passage. PyTorch
+  et Rust concordent (5·10⁻⁵). Validation sur 7 474 parties, passages 1 → 4 : politique 1,186 →
+  1,135, précision 54,3 % → 55,5 % ; valeur 0,701 → 0,615 (entraînement 0,594 : pas de
+  sur-apprentissage).
+- **Arènes** (`lab2/runs/gen1/arena-*.tsv`, 19 à 20 ms par décision) :
+
+  | Champ (graine) | Score | Par taille (2, 3, 4, 5 j.) |
+  | --- | --- | --- |
+  | gen0 (1001) | +67,6 ± 0,2 | +49,8, +66,5, +74,6, +79,5 (99,5 % de victoires) |
+  | Difficile (1002) | −29,7 ± 0,6 | −45,9, −31,3, −23,0, −18,4 |
+  | Normale (1003) | −27,6 ± 0,9 | −39,5, −30,7, −22,6, −17,8 |
+
+**gen1 a appris à jouer, mais seulement contre le hasard** : il écrase gen0 et ne gagne que 2 à
+4 % de ses parties face aux IA du jeu. Attendu : ses cibles de politique viennent de recherches
+sans valeur (presque uniformes), et sa valeur juge des parties jouées au hasard. Dans le jeu
+comme Expert du Labo 2 (décision de l'utilisateur : le labo y revient avec son premier réseau).
