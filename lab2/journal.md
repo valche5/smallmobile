@@ -125,8 +125,9 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
    mini, mesures sur AWS, bf16 et recouvrement.~~ Fait le 21 octobre.
 5. ~~Première boucle sur AWS depuis gen0 : 20 pas, arènes à chaque pas ; lab2 revient dans le jeu
    avec son meilleur réseau.~~ Faite le 21 octobre (voir Résultats).
-6. Suite à décider avec l'utilisateur : comparaison avec lab1 dans les conditions du jeu ; sortir
-   du plateau (+19 face à Difficile depuis c015 ; faible à 3, 4 et 5 joueurs).
+6. ~~Comparaison avec lab1 dans les conditions du jeu.~~ Faite le 21 octobre : −12,6.
+7. Sortir du plateau (+19 face à Difficile depuis c015, −12,6 face à lab1) : levier à choisir avec
+   l'utilisateur.
 
 ## Résultats
 
@@ -163,6 +164,11 @@ c020 par taille (2, 3, 4, 5 joueurs) : Difficile +36,7, +13,8, +13,0, +15,7 ; No
   −29,7 et −27,6).
 - **Plateau depuis c015** : +18,5 à +19,9 face à Difficile, +15,7 à +17,9 face à Normale.
 - **Fort à 2 joueurs, plus faible à 3, 4 et 5**, comme les essais précédents.
+- **Face à lab1, dans les conditions du jeu : −12,6 ± 1,3** (c020 à n = 800 face à l'Expert de
+  lab1, gen11 à n = 200 ; 920 donnes, graine 1004 ; par taille −11,2, −12,8, −13,4, −13,2 ;
+  `lab2/runs/lab1/arena-c020.tsv`, `lab2/runs/lab1.sh`). Le même écart à toutes les tailles,
+  alors que c020 domine Difficile bien plus à 2 joueurs qu'à 3, 4 et 5. 56 ms par décision en
+  moyenne pour c020 (bf16), p95 198 ms ; 23 min de machine, 0,29 $.
 - Fenêtre : le dernier cycle seul jusqu'à c009, deux cycles de c010 à c019, trois pour c020.
   Parties : 10 positions par partie au hasard, 22 puis 33 en fin de boucle ; 25 000 parties en
   109 s (hasard, 64 cœurs) puis 245 à 406 s (48 cœurs) ; entraînement 128 à 368 s.
