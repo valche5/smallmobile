@@ -8,12 +8,8 @@
 //! - une ligne par région (`NODE` entrées) : la carte, l'occupant, les jetons, ce que le peuple qui
 //!   conquiert peut y faire ;
 //! - une ligne pour la partie (`GLOBAL` entrées) : manche, phase, tour en cours, chaque joueur
-//!   (pièces, peuples, revenus), le marché ; puis (version 2) l'âge des peuples, le contenu des
-//!   pioches, les prochains peuples connus et toutes les paix ; puis (version 3) l'histoire de
-//!   chaque joueur depuis le début de la partie (`know::History`) : de quoi deviner son style.
-//!
-//! Les entrées de chaque version suivent celles de la précédente : un réseau d'une version plus
-//! ancienne lit le début de la ligne et ignore le reste.
+//!   (pièces, peuples, revenus), le marché ; puis l'histoire de chaque joueur depuis le début de la
+//!   partie (`know::History`) : de quoi deviner son style.
 
 use smallmobile_kernel::ids::{MAX_PLAYERS, Power, Race};
 use smallmobile_kernel::rules::TargetKind;
@@ -118,26 +114,9 @@ const M_COINS: usize = 35;
 const M_TOKENS: usize = 36;
 const M_AFFORDABLE: usize = 37;
 const M: usize = 38;
-/// Les entrées de la partie de la version 1 (réseaux jusqu'à gen10).
-pub const GLOBAL_V1: usize = G_MARKET + 6 * M;
-// --- version 2 : des informations publiques que la version 1 laissait de côté (`lab audit`) ----------
-/// Âge du peuple actif de chaque joueur relatif : manches depuis son choix.
-const G_AGE: usize = GLOBAL_V1; // 5
-/// Peuples dans la pioche : ni en jeu ni au marché (contenu public, ordre caché).
-const G_DECK_RACES: usize = G_AGE + MAX_PLAYERS; // 14
-/// Les prochains peuples connus de la pioche (rendus dessous, ordre public), dans l'ordre où ils
-/// sortiront après les cachés.
-const G_NEXT_RACES: usize = G_DECK_RACES + Race::COUNT; // NEXT_KNOWN × 14
-const NEXT_KNOWN: usize = 3;
-/// Pouvoirs dans la pioche.
-const G_DECK_POWERS: usize = G_NEXT_RACES + NEXT_KNOWN * Race::COUNT; // 20
-/// Toutes les paix des Diplomates : `diplomate relatif × 5 + cible relative`.
-const G_PEACE: usize = G_DECK_POWERS + Power::COUNT; // 25
-/// Les entrées de la partie de la version 2 (réseaux de gen11).
-pub const GLOBAL_V2: usize = G_PEACE + MAX_PLAYERS * MAX_PLAYERS;
-// --- version 3 : l'histoire de chaque joueur (`know::History`), d'après ses coups publics ----------
+// --- l'histoire de chaque joueur (`know::History`), d'après ses coups publics ----------------------
 /// Les habitudes de chaque joueur relatif (`know::habit`).
-const G_HABITS: usize = GLOBAL_V2; // 5 × habit::COUNT
+const G_HABITS: usize = G_MARKET + 6 * M; // 5 × habit::COUNT
 /// Régions prises par chaque joueur relatif à chaque joueur relatif (`attaquant × 5 + victime`) :
 /// depuis le début de la partie, puis pendant le dernier tour de chacun.
 const G_ATTACKS: usize = G_HABITS + MAX_PLAYERS * habit::COUNT; // 25
@@ -149,9 +128,6 @@ pub const GLOBAL: usize = G_RECENT + MAX_PLAYERS * MAX_PLAYERS;
 pub struct Encoded {
     pub regions: usize,
     pub players: usize,
-    /// La place (absolue) du joueur qui agit : pas une entrée du réseau, elle sert à traduire les
-    /// clés des coups des réseaux de la version 1 (`net`).
-    pub seat: usize,
     pub node: [[u8; NODE]; REGIONS],
     pub global: [u8; GLOBAL],
 }
@@ -175,7 +151,7 @@ pub fn encode(g: &Game, k: &Knowledge) -> Encoded {
     let rel = |q: usize| relative(q, me, n);
     let regions = g.map.len();
     assert!(regions <= REGIONS, "carte trop grande pour le réseau");
-    let mut e = Encoded { regions, players: n, seat: me, node: [[0; NODE]; REGIONS], global: [0; GLOBAL] };
+    let mut e = Encoded { regions, players: n, node: [[0; NODE]; REGIONS], global: [0; GLOBAL] };
 
     let army = s.turn.army.filter(|_| matches!(s.phase, Phase::Conquest | Phase::Redeploy));
     let army_owned = army.map_or(Default::default(), |a| g.owned(a));
@@ -304,26 +280,6 @@ pub fn encode(g: &Game, k: &Knowledge) -> Encoded {
         x[b + M_AFFORDABLE] = (m as i32 <= coins) as u8;
     }
 
-    for q in 0..n {
-        if let Some(race) = s.players[q].active {
-            put(&mut x[G_AGE + rel(q)], s.round - s.race(race).picked_round);
-        }
-    }
-    for &race in s.race_deck.iter() {
-        x[G_DECK_RACES + race.index()] = 1;
-    }
-    // la pioche se tire par le début ; les cartes connues sont à la fin
-    let hidden = s.race_deck.len() - known_tail.min(s.race_deck.len());
-    for (j, &race) in s.race_deck.iter().skip(hidden).take(NEXT_KNOWN).enumerate() {
-        x[G_NEXT_RACES + j * Race::COUNT + race.index()] = 1;
-    }
-    for &power in s.power_deck.iter() {
-        x[G_DECK_POWERS + power.index()] = 1;
-    }
-    for z in s.peace.iter() {
-        x[G_PEACE + rel(z.diplomat) * MAX_PLAYERS + rel(z.target)] = 1;
-    }
-
     let h = &k.history;
     for q in 0..n {
         for (i, &v) in h.habits[q].iter().enumerate() {
@@ -341,7 +297,7 @@ pub fn encode(g: &Game, k: &Knowledge) -> Encoded {
 // garde-fous : les tailles des blocs one-hot suivent le jeu
 const _: () = assert!(Race::COUNT == 14 && Power::COUNT == 20 && MAX_PLAYERS == 5);
 const _: () = assert!(N_POWER + 20 == N_TOKENS && P_POWER + 20 == P_HAND && M_POWER + 20 == M_COINS);
-const _: () = assert!(GLOBAL_V1 == 700 && GLOBAL_V2 == 806 && GLOBAL == 926);
+const _: () = assert!(G_HABITS == 700 && GLOBAL == 820);
 
 #[cfg(test)]
 mod tests {
@@ -353,63 +309,11 @@ mod tests {
     use crate::moves;
     use crate::rand::Rng;
 
-    /// Les entrées de la version 2 disent ce que dit la partie : âge des peuples, pioches, prochains
-    /// peuples connus, paix.
-    #[test]
-    fn version_2_inputs_follow_the_game() {
-        let mut rng = Rng::new(3);
-        let (mut known, mut peaces) = (0, 0);
-        for game in 0..60u64 {
-            let n = 2 + game as usize % 4;
-            let generated = mapgen::generate(n, 500 + game).unwrap();
-            let map = generated.to_map().unwrap();
-            let lost: RegionSet =
-                generated.regions.iter().enumerate().filter(|(_, r)| r.lost_tribe).map(|(i, _)| i).collect();
-            let levels = vec![Level::Hard; n];
-            let mut g = Game::create(&map, lost, &levels, generated.rounds, game as u32, &mut NoJournal);
-            let mut k = Knowledge::default();
-            while g.state.phase != Phase::GameOver {
-                let s = &g.state;
-                let x = encode(&g, &k).global;
-                let me = s.actor().unwrap();
-                let rel = |q: usize| relative(q, me, n);
-                for q in 0..n {
-                    let age = s.players[q].active.map_or(0, |race| s.round - s.race(race).picked_round);
-                    assert_eq!(x[G_AGE + rel(q)] as i32, age);
-                }
-                for race in Race::ALL {
-                    assert_eq!(x[G_DECK_RACES + race.index()] == 1, s.race_deck.contains(race));
-                }
-                for power in Power::ALL {
-                    assert_eq!(x[G_DECK_POWERS + power.index()] == 1, s.power_deck.contains(power));
-                }
-                let next: Vec<Race> =
-                    s.race_deck.iter().skip(s.race_deck.len() - k.race_tail).take(3).copied().collect();
-                for (j, row) in x[G_NEXT_RACES..G_DECK_POWERS].chunks(Race::COUNT).enumerate() {
-                    let marked: Vec<usize> = (0..Race::COUNT).filter(|&i| row[i] == 1).collect();
-                    assert_eq!(marked, next.get(j).map(|r| r.index()).into_iter().collect::<Vec<_>>());
-                }
-                known += !next.is_empty() as usize;
-                for d in 0..n {
-                    for t in 0..n {
-                        let at = s.peace.iter().any(|z| z.diplomat == d && z.target == t);
-                        assert_eq!(x[G_PEACE + rel(d) * MAX_PLAYERS + rel(t)] == 1, at);
-                        peaces += at as usize;
-                    }
-                }
-                let legal = moves::legal(&g);
-                let m = legal[rng.below(legal.len())].mv;
-                k.play(&mut g, &m).unwrap();
-            }
-        }
-        assert!(known > 0 && peaces > 0, "{known} positions avec des peuples connus, {peaces} paix");
-    }
-
-    /// Les entrées de la version 3 disent l'histoire des joueurs, comptée d'après le journal des
+    /// Les entrées de l'histoire des joueurs, comptée d'après le journal des
     /// événements de la partie ; et la même histoire se refait action par action (comme en rejouant
     /// une partie enregistrée) que coup par coup (comme la recherche).
     #[test]
-    fn version_3_inputs_tell_the_history() {
+    fn history_inputs_tell_the_history() {
         use smallmobile_kernel::action::{Event, Journal, Logged};
         /// Le journal d'un coup, gardé aussi en entier.
         struct Both<'a>(&'a mut crate::know::Returns, &'a mut Vec<Logged>);

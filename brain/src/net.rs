@@ -13,7 +13,7 @@
 //! ```
 //!
 //! La politique dit le meilleur coup (appris des visites de la recherche) ; la tête « coup réel »
-//! (réseaux de la version 3 des entrées) prévoit le coup que le joueur qui agit va vraiment jouer,
+//! prévoit le coup que le joueur qui agit va vraiment jouer,
 //! d'après la position et ce qu'il a fait jusque-là dans la partie (`know::History`) : elle a appris
 //! des coups joués par des joueurs de tous styles, et sert à simuler les adversaires.
 //!
@@ -27,7 +27,7 @@ use std::path::Path;
 
 use smallmobile_kernel::Map;
 
-use crate::encode::{Encoded, GLOBAL, GLOBAL_V1, GLOBAL_V2, NODE, REGIONS};
+use crate::encode::{Encoded, GLOBAL, NODE, REGIONS};
 use crate::moves::KEYS;
 
 /// Sortes de coups par région, dans l'ordre des clés (`moves::REGION`).
@@ -131,7 +131,6 @@ pub struct Net {
     val1: Linear,
     val2: Linear,
     node_scale: [f32; NODE],
-    /// Une par entrée de la partie que lit ce réseau (`GLOBAL_V1`, `GLOBAL_V2` ou `GLOBAL`).
     global_scale: Vec<f32>,
 }
 
@@ -212,22 +211,15 @@ impl Net {
             node_scale: scale(t, "node_scale")?,
             global_scale: t.remove("global_scale").ok_or_else(|| missing("global_scale"))?.1,
         };
-        let inputs = net.glob_in.inp;
         if net.node_in.inp != NODE
-            || ![GLOBAL_V1, GLOBAL_V2, GLOBAL].contains(&inputs)
-            || net.global_scale.len() != inputs
+            || net.glob_in.inp != GLOBAL
+            || net.global_scale.len() != GLOBAL
             || net.policy.glob2.out != GLOBAL_KEYS
             || net.behaviour.as_ref().is_some_and(|b| b.glob2.out != GLOBAL_KEYS)
         {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "réseau d'une autre version des entrées"));
         }
         Ok(net)
-    }
-
-    /// Les entrées de la partie que lit ce réseau : les `GLOBAL_V1` premières (version 1, jusqu'à
-    /// gen10), les `GLOBAL_V2` premières (version 2), ou toutes.
-    pub fn inputs(&self) -> usize {
-        self.glob_in.inp
     }
 
     /// Évalue une position encodée de cette carte.
@@ -275,12 +267,11 @@ impl Net {
             }
             self.node_in.apply::<AVX2>(&xn, &mut h[i * hd..(i + 1) * hd]);
         }
-        let inputs = self.glob_in.inp;
         for ((x, &v), &sc) in x.iter_mut().zip(&e.global).zip(&self.global_scale) {
             *x = v as f32 * sc;
         }
         let mut g = vec![0.0f32; hd];
-        self.glob_in.apply::<AVX2>(&x[..inputs], &mut g);
+        self.glob_in.apply::<AVX2>(&x, &mut g);
 
         let mut agg = vec![0.0f32; r * hd];
         let mut mid = vec![0.0f32; r * hd];
@@ -319,7 +310,7 @@ impl Net {
         }
         let mut mid = gmid;
 
-        let mut logits = self.policy.logits::<AVX2>(&g, &h, r, hd);
+        let logits = self.policy.logits::<AVX2>(&g, &h, r, hd);
         let behaviour = self.behaviour.as_ref().map(|b| b.logits::<AVX2>(&g, &h, r, hd));
 
         cat[..hd].copy_from_slice(&g);
@@ -340,10 +331,6 @@ impl Net {
         let mut gain = [0.0f32; 5];
         for q in 0..e.players {
             gain[q] = v[5 + q] * GAIN_SCALE;
-        }
-        // les réseaux de la version 1 ont appris les clés de paix par place absolue
-        if inputs == GLOBAL_V1 {
-            crate::moves::relative_peace(&mut logits, e.seat, e.players, f32::NEG_INFINITY);
         }
         Eval { win, gain, logits, behaviour }
     }
@@ -637,29 +624,3 @@ mod avx2 {
 }
 
 const _: () = assert!(GLOBAL_KEYS + REGION_KINDS * 64 == KEYS && REGIONS <= 64);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::moves::{FINISH, relative_peace};
-
-    /// Un réseau de la version 1 voyait la paix « à la place 2 » ; le joueur à la place 1 de 3
-    /// joueurs l'appelle désormais « au joueur suivant » (1), et « au deuxième suivant » (2) la paix
-    /// à la place 0.
-    #[test]
-    fn version_1_peace_keys_become_relative() {
-        let mut logits: Vec<f32> = (0..KEYS).map(|i| i as f32).collect();
-        relative_peace(&mut logits, 1, 3, f32::NEG_INFINITY);
-        let key = |plan: usize, target: usize, stout: usize| FINISH as usize + plan * 12 + target * 2 + stout;
-        for plan in 0..6 {
-            for stout in 0..2 {
-                assert_eq!(logits[key(plan, 0, stout)], key(plan, 0, stout) as f32, "sans paix : inchangé");
-                assert_eq!(logits[key(plan, 1, stout)], key(plan, 3, stout) as f32, "place 2 = place absolue 2 + 1");
-                assert_eq!(logits[key(plan, 2, stout)], key(plan, 1, stout) as f32, "place 0");
-                assert_eq!(logits[key(plan, 3, stout)], f32::NEG_INFINITY);
-            }
-        }
-        assert_eq!(logits[0], 0.0);
-        assert_eq!(logits[FINISH as usize + 72], (FINISH as usize + 72) as f32, "au-delà des plans : inchangé");
-    }
-}

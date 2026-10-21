@@ -7,16 +7,16 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from data import GLOBAL, GLOBAL_V1, GLOBAL_V2, KEYS, NODE, REGIONS
+from data import GLOBAL, KEYS, NODE, REGIONS
 
 GLOBAL_KEYS = 128
 # la tête de valeur prédit les pièces gagnées d'ici la fin divisées par ce nombre
 GAIN_SCALE = 50.0
 REGION_KINDS = 5
-# l'histoire des joueurs (version 3, lab/src/encode.rs) : habitudes de chaque joueur, puis régions
-# prises par chacun à chacun, depuis le début et pendant le dernier tour
+# l'histoire des joueurs (lab/src/encode.rs) : habitudes de chaque joueur, puis régions prises par
+# chacun à chacun, depuis le début et pendant le dernier tour
 HABITS = 14
-G_HABITS = GLOBAL_V2
+G_HABITS = 700
 G_ATTACKS = G_HABITS + 5 * HABITS
 G_RECENT = G_ATTACKS + 25
 
@@ -52,7 +52,6 @@ def scales():
         b = 67 + 5 * P + m * M
         glob[b + 35] = 0.2
         glob[b + 36] = 0.1
-    glob[GLOBAL_V1 : GLOBAL_V1 + 5] = 0.1  # âge des peuples actifs
     glob[G_HABITS:G_ATTACKS] = 0.1  # comptes de chaque joueur (lab/src/know.rs, `habit`)
     for q in range(5):
         glob[G_HABITS + q * HABITS + 13] = 0.05  # jetons perdus sous les attaques
@@ -135,15 +134,11 @@ class Net(nn.Module):
         return logits, value, beh
 
 
-def widen(weights):
-    """Les poids d'un réseau d'une version plus ancienne pour l'encodage et les têtes d'aujourd'hui :
-    les nouvelles entrées ont des poids nuls, les sorties ne changent pas ; la tête « coup réel »
-    absente part de la politique (les autres jouent comme le réseau), à réapprendre. Pour un réseau
-    de la version 1, les sorties des clés de paix des Diplomates changent de sens (place absolue →
-    relative), à réapprendre aussi."""
-    w = weights["glob_in.weight"]
-    assert w.shape[1] in (GLOBAL_V1, GLOBAL_V2, GLOBAL), f"réseau à {w.shape[1]} entrées de la partie"
-    out = {**weights, "glob_in.weight": torch.cat([w, w.new_zeros(w.shape[0], GLOBAL - w.shape[1])], 1)}
+def with_behaviour(weights):
+    """Les poids d'un réseau, avec la tête « coup réel » : absente, elle part de la politique (les
+    autres jouent comme le réseau), à apprendre."""
+    assert weights["glob_in.weight"].shape[1] == GLOBAL, "réseau d'un autre encodage"
+    out = dict(weights)
     for beh, pol in (("beh_node", "node_pol"), ("beh_glob1", "glob_pol1"), ("beh_glob2", "glob_pol2")):
         for part in ("weight", "bias"):
             out.setdefault(f"{beh}.{part}", weights[f"{pol}.{part}"].clone())

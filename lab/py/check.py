@@ -1,6 +1,6 @@
 """Vérifie que Rust (lab/src/net.rs) calcule exactement le même réseau que PyTorch.
 
-    python check.py parties.bin   → écrit /tmp/smallmobile-check.bin, puis compare avec `lab check-net`
+    python check.py parties.v6.bin   → écrit /tmp/smallmobile-check.bin, puis compare avec `lab check-net`
 """
 
 import os

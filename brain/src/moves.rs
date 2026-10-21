@@ -54,22 +54,6 @@ const DRAGON: Key = 2;
 const SORCERY: Key = 3;
 const ABANDON: Key = 4;
 
-/// Passe des clés de fin de tour de la version 1, où la paix désignait la place absolue de sa cible
-/// (`place + 1`), aux clés d'aujourd'hui (cible relative au joueur `seat` qui agit). `values` : une
-/// valeur par clé (sorties du réseau, visites) ; `absent` pour les cibles impossibles.
-pub fn relative_peace<T: Copy>(values: &mut [T], seat: usize, players: usize, absent: T) {
-    for plan in 0..6 {
-        let base = FINISH as usize + plan * 12;
-        let absolute: [T; 12] = values[base..base + 12].try_into().expect("12 clés par plan");
-        for target in 1..6 {
-            for stout in 0..2 {
-                values[base + target * 2 + stout] =
-                    if target < players { absolute[((seat + target) % players + 1) * 2 + stout] } else { absent };
-            }
-        }
-    }
-}
-
 fn region_key(kind: Key, region: usize) -> Key {
     REGION + kind * 64 + region as Key
 }

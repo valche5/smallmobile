@@ -12,7 +12,7 @@ sans délai peut bloquer la session indéfiniment.
 
 - `kernel/` : le jeu en Rust (règles, IA, cartes), compilé en WebAssembly pour le serveur et les
   téléphones (`public/game-kernel.wasm`, hors git, généré par `bun run kernel:build`).
-- `brain/` : l'IA Expert (recherche guidée par le réseau `lab/nets/gen10w.bin`), partagée par le labo et
+- `brain/` : l'IA Expert (recherche guidée par le réseau `lab/nets/gen11.bin`), partagée par le labo et
   le jeu. Dans le jeu, elle tourne seulement sur le serveur : programme natif `target/release/expert`
   (construit aussi par `bun run kernel:build`), piloté par `src/server/expert.ts`.
 - `src/` : interface Preact, serveur Bun, et le pont TypeScript vers le noyau (`src/engine/`). Toutes

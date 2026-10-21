@@ -2,7 +2,7 @@
 // pour que le labo l'analyse :
 //
 //   bun lab/tools/export-room.ts data/rooms/ABCD.json /tmp/ABCD.smk
-//   ./target/release/lab analyze --game /tmp/ABCD.smk --agent az:net=lab/nets/best.bin,n=20000
+//   ./target/release/lab analyze --game /tmp/ABCD.smk --agent az:net=lab/nets/gen11.bin,n=20000
 import { readFileSync, writeFileSync } from 'node:fs';
 import { gameWords } from '../../src/engine/kernel';
 

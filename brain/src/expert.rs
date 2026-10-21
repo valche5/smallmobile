@@ -1,5 +1,5 @@
-//! L'IA Expert telle que le jeu l'emploie : la recherche guidée par le réseau, avec les réglages
-//! retenus au labo, sur la partie telle que la voit le joueur qui doit agir.
+//! L'IA Expert telle que le jeu l'emploie : la recherche guidée par le réseau (réglages fixes de
+//! `search`), sur la partie telle que la voit le joueur qui doit agir.
 
 use std::sync::Arc;
 
@@ -10,13 +10,6 @@ use crate::moves;
 use crate::net::Net;
 use crate::rand::{Rng, mix};
 use crate::search::{Az, Config};
-
-/// Les réglages de l'Expert du jeu (`lab/JOURNAL.md`) : n=200, w=0,5, c=2,5, fins simulées de 3 tours,
-/// jouées par le réseau pour tous les joueurs (`rp=1`, depuis le 20 octobre ; `rp=2` avant : l'IA
-/// Normale y jouait les adversaires).
-pub fn config(iterations: usize) -> Config {
-    Config { iterations, c_puct: 2.5, win_weight: 0.5, rollout: 1.0, depth: 3, net_rollouts: 1, ..Config::default() }
-}
 
 pub struct Expert {
     search: Az,
@@ -35,7 +28,7 @@ pub struct Decision {
 
 impl Expert {
     pub fn new(net: Arc<Net>, iterations: usize) -> Expert {
-        Expert { search: Az::new(config(iterations), net, "expert".into()) }
+        Expert { search: Az::new(Config { iterations, ..Config::default() }, net, "expert".into()) }
     }
 
     /// Le prochain coup du joueur qui doit agir, découpé en actions du noyau. L'Expert ne voit que ce

@@ -13,19 +13,12 @@
 //! u16 × KEYS  visites de chaque coup (65535 : coup impossible)
 //! u8 × REGIONS × 8  voisines (un bit par région, 64 bits par région)
 //! u8 × REGIONS × NODE  entrées par région
-//! u8 × GLOBAL  entrées de la partie (GLOBAL_V2 dans la version 4, GLOBAL_V1 avant)
-//! f32 × 5  pièces que la recherche attendait encore pour chaque joueur relatif (NaN : inconnu)
-//! f32 × 5  part de victoire que la recherche attendait pour chaque joueur relatif (NaN : inconnu)
+//! u8 × GLOBAL  entrées de la partie
 //! u16      clé du coup joué (65535 : inconnu)
 //! ```
 //!
-//! Les fichiers `*.v5.bin` ont tout, avec l'encodage de la version 3 (`encode`) ; les `*.v4.bin`
-//! s'arrêtent avant le coup joué, avec l'encodage de la version 2 ; les `*.v3.bin` ont l'encodage
-//! de la version 1 et ses clés de paix (place absolue de la cible, `moves::relative_peace`) ; les
-//! `*.v2.bin` s'arrêtent de plus avant la part de victoire attendue, les `*.bin` avant les pièces
-//! attendues. `lab reencode` passe des fichiers des versions 3 et 4 à la version 5. À côté de chaque
-//! fichier : `games_file` (positions de chaque partie) et, depuis la version 3, `moves_file` (de
-//! quoi rejouer chaque partie, `GameLog`).
+//! Fichiers `*.v6.bin` (`SUFFIX`). À côté de chacun : `games_file` (positions de chaque partie) et
+//! `moves_file` (de quoi rejouer chaque partie, `GameLog`).
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -38,102 +31,17 @@ use smallmobile_kernel::wire::{self, Writer};
 use smallmobile_kernel::{Action, Game, Phase};
 
 use crate::agent::Agent;
-use crate::az::Searched;
-use crate::encode::{Encoded, GLOBAL, GLOBAL_V1, GLOBAL_V2, NODE, REGIONS, encode};
+use crate::az::Az;
+use crate::encode::{Encoded, GLOBAL, NODE, REGIONS, encode};
 use crate::know::Knowledge;
 use crate::moves::{self, KEYS};
 use crate::rand::{Rng, mix};
 use crate::table::{Outcome, Table};
 
-pub const RECORD_V1: usize = 4 + 20 + 20 + KEYS * 2 + REGIONS * 8 + REGIONS * NODE + GLOBAL_V1;
-pub const RECORD_V2: usize = RECORD_V1 + 20;
-pub const RECORD_V3: usize = RECORD_V2 + 20;
-pub const RECORD_V4: usize = RECORD_V3 - GLOBAL_V1 + GLOBAL_V2;
-pub const RECORD: usize = RECORD_V4 - GLOBAL_V2 + GLOBAL + 2;
-/// Le suffixe des fichiers de positions écrits aujourd'hui.
-pub const SUFFIX: &str = ".v5.bin";
+pub const RECORD: usize = 4 + 20 + 20 + KEYS * 2 + REGIONS * 8 + REGIONS * NODE + GLOBAL + 2;
+/// Le suffixe des fichiers de positions.
+pub const SUFFIX: &str = ".v6.bin";
 pub const ILLEGAL: u16 = u16::MAX;
-
-/// Une IA qui cherche, et rend les visites de la racine.
-pub trait Searcher: Sync {
-    fn name(&self) -> String;
-    /// Itérations d'une recherche complète.
-    fn iterations(&self) -> usize;
-    /// `explore` : recherche complète d'auto-apprentissage (bruit à la racine si l'IA en a).
-    fn search(&self, g: &Game, k: &Knowledge, rng: &mut Rng, iterations: usize, explore: bool) -> Searched;
-}
-
-impl Searcher for crate::az::Az {
-    fn name(&self) -> String {
-        crate::agent::Agent::name(self)
-    }
-
-    fn iterations(&self) -> usize {
-        self.cfg.iterations
-    }
-
-    fn search(&self, g: &Game, k: &Knowledge, rng: &mut Rng, iterations: usize, explore: bool) -> Searched {
-        let noise = if explore { self.cfg.noise } else { 0.0 };
-        self.search_with(g, k, rng, iterations, noise)
-    }
-}
-
-impl Searcher for crate::mcts::Mcts {
-    fn name(&self) -> String {
-        crate::agent::Agent::name(self)
-    }
-
-    fn iterations(&self) -> usize {
-        self.cfg.iterations
-    }
-
-    fn search(&self, g: &Game, k: &Knowledge, rng: &mut Rng, iterations: usize, _: bool) -> Searched {
-        let (mv, stats) = self.search_with(g, k, rng, iterations);
-        let total: u32 = stats.iter().map(|s| s.1).sum();
-        let value = stats.iter().map(|s| s.2 * s.1 as f64).sum::<f64>() / total.max(1) as f64;
-        let visits = if stats.is_empty() {
-            moves::legal(g).iter().map(|c| (c.key, 1)).collect()
-        } else {
-            stats.iter().map(|s| (s.0, s.1)).collect()
-        };
-        let unknown = [f32::NAN; MAX_PLAYERS];
-        Searched { mv, visits, finals: unknown, wins: unknown, details: vec![], value: value as f32 }
-    }
-}
-
-/// L'IA du jeu comme « recherche » : une seule visite, sur son coup. Ses parties ne coûtent presque
-/// rien : elles apprennent au réseau à juger une position, et donnent un premier a priori des coups.
-/// Sa fin de tour est le coup `Auto`, sa défense le premier plan.
-impl Searcher for crate::agent::KernelAi {
-    fn name(&self) -> String {
-        crate::agent::Agent::name(self)
-    }
-
-    fn iterations(&self) -> usize {
-        1
-    }
-
-    fn search(&self, g: &Game, k: &Knowledge, rng: &mut Rng, _: usize, _: bool) -> Searched {
-        let legal = moves::legal(g);
-        let chosen = match g.state.phase {
-            Phase::Redeploy => legal.iter().find(|c| c.mv == moves::Move::Auto),
-            Phase::Defend => legal.first(),
-            _ => {
-                let mv = crate::agent::Agent::act(self, g, k, rng);
-                legal.iter().find(|c| c.mv == mv)
-            }
-        };
-        let c = chosen.expect("le coup de l'IA du jeu est parmi les coups possibles");
-        Searched {
-            mv: c.mv,
-            visits: vec![(c.key, 1)],
-            finals: [f32::NAN; MAX_PLAYERS],
-            wins: [f32::NAN; MAX_PLAYERS],
-            details: vec![],
-            value: f32::NAN,
-        }
-    }
-}
 
 /// Un exemple pour le réseau, cibles en joueurs relatifs (0 : celui qui agit).
 pub struct Record<'a> {
@@ -149,8 +57,6 @@ pub struct Record<'a> {
     pub win: [f32; MAX_PLAYERS],
     pub gain: [f32; MAX_PLAYERS],
     pub visits: &'a [u16; KEYS],
-    pub qgain: [f32; MAX_PLAYERS],
-    pub qwin: [f32; MAX_PLAYERS],
 }
 
 impl Record<'_> {
@@ -177,9 +83,6 @@ impl Record<'_> {
             buf.extend_from_slice(row);
         }
         buf.extend_from_slice(&self.enc.global);
-        for x in self.qgain.iter().chain(&self.qwin) {
-            buf.extend_from_slice(&x.to_le_bytes());
-        }
         buf.extend_from_slice(&self.played.to_le_bytes());
         debug_assert_eq!(buf.len(), RECORD);
         buf
@@ -191,9 +94,6 @@ struct Pending {
     actor: usize,
     coins: [i32; MAX_PLAYERS],
     visits: [u16; KEYS],
-    /// Pièces finales et part de victoire attendues par la recherche (joueurs réels).
-    finals: [f32; MAX_PLAYERS],
-    wins: [f32; MAX_PLAYERS],
     observed: bool,
     played: u16,
 }
@@ -258,7 +158,7 @@ impl Field<'_> {
 pub fn play(
     table: &Table,
     seed: u32,
-    searcher: &dyn Searcher,
+    az: &Az,
     field: &Field,
     seats: &[i8],
     opts: Options,
@@ -294,17 +194,15 @@ pub fn play(
                     actor,
                     coins: coins(&g),
                     visits,
-                    finals: [f32::NAN; MAX_PLAYERS],
-                    wins: [f32::NAN; MAX_PLAYERS],
                     observed: true,
                     played,
                 });
             }
             mv
         } else if !full {
-            searcher.search(&g, &k, rng, opts.fast, false).mv
+            az.search_with(&g, &k, rng, opts.fast, 0.0).mv
         } else {
-            let s = searcher.search(&g, &k, rng, searcher.iterations(), true);
+            let s = az.search(&g, &k, rng);
             let mut visits = [ILLEGAL; KEYS];
             for c in &legal {
                 visits[c.key as usize] = 0;
@@ -319,8 +217,6 @@ pub fn play(
                 actor,
                 coins: coins(&g),
                 visits,
-                finals: s.finals,
-                wins: s.wins,
                 observed: false,
                 played: ILLEGAL,
             });
@@ -351,13 +247,10 @@ pub fn play(
     for p in &pending {
         let mut win = [0.0; MAX_PLAYERS];
         let mut gain = [0.0; MAX_PLAYERS];
-        let (mut qgain, mut qwin) = ([f32::NAN; MAX_PLAYERS], [f32::NAN; MAX_PLAYERS]);
         for r in 0..n {
             let q = (p.actor + r) % n;
             win[r] = o.win[q] as f32;
             gain[r] = (o.coins[q] - p.coins[q]) as f32;
-            qgain[r] = p.finals[q] - p.coins[q] as f32;
-            qwin[r] = p.wins[q];
         }
         let rec = Record {
             enc: &p.enc,
@@ -368,8 +261,6 @@ pub fn play(
             win,
             gain,
             visits: &p.visits,
-            qgain,
-            qwin,
         };
         out.write_all(&rec.bytes())?;
     }
@@ -529,7 +420,7 @@ pub fn games_file(path: &Path) -> std::path::PathBuf {
     name.into()
 }
 
-/// Le fichier qui accompagne un fichier de positions (version 3) : une ligne `GameLog` par partie.
+/// Le fichier qui accompagne un fichier de positions : une ligne `GameLog` par partie.
 pub fn moves_file(path: &Path) -> std::path::PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(".moves");
@@ -537,13 +428,8 @@ pub fn moves_file(path: &Path) -> std::path::PathBuf {
 }
 
 /// Des parties d'entraînement en parallèle, un fichier par fil dans `dir` (avec `games_file` et
-/// `moves_file`).
-pub fn run(cfg: &Config, searcher: &dyn Searcher, dir: &Path) -> std::io::Result<()> {
-    run_with(cfg, searcher, &Field::none(), dir)
-}
-
-/// Comme `run`, avec des tables variées (`Field`).
-pub fn run_with(cfg: &Config, searcher: &dyn Searcher, field: &Field, dir: &Path) -> std::io::Result<()> {
+/// `moves_file`), à des tables variées si `field` en donne.
+pub fn run(cfg: &Config, az: &Az, field: &Field, dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let next = AtomicUsize::new(0);
     let positions = AtomicUsize::new(0);
@@ -568,7 +454,7 @@ pub fn run_with(cfg: &Config, searcher: &dyn Searcher, field: &Field, dir: &Path
                     let table = Table::new(n, map_seed);
                     let mut rng = Rng::new(mix(deal, 99));
                     let seats = field.seats(n, &mut Rng::new(mix(deal, 98)));
-                    let played = play(&table, seed, searcher, field, &seats, cfg.opts, &mut rng, &mut out)?;
+                    let played = play(&table, seed, az, field, &seats, cfg.opts, &mut rng, &mut out)?;
                     let count = played.positions;
                     games.write_all(&(count as u32).to_le_bytes())?;
                     writeln!(logs, "{}", GameLog::new(deal, map_seed, seed, &table, &played).line())?;
@@ -593,11 +479,9 @@ pub fn run_with(cfg: &Config, searcher: &dyn Searcher, field: &Field, dir: &Path
     })
 }
 
-/// Relit un enregistrement : la position encodée et les voisines de chaque région. Les entrées des
-/// versions plus récentes que celle de l'enregistrement restent nulles ; la place du joueur qui agit
-/// est inconnue (0).
+/// Relit un enregistrement : la position encodée et les voisines de chaque région.
 pub fn read_record(rec: &[u8]) -> (Encoded, Vec<Vec<u8>>) {
-    assert!([RECORD_V1, RECORD_V2, RECORD_V3, RECORD_V4, RECORD].contains(&rec.len()));
+    assert_eq!(rec.len(), RECORD);
     let players = rec[0] as usize;
     let regions = rec[1] as usize;
     let mut at = 4 + 20 + 20 + KEYS * 2;
@@ -609,16 +493,11 @@ pub fn read_record(rec: &[u8]) -> (Encoded, Vec<Vec<u8>>) {
             adj.push((0..64u8).filter(|&b| bits >> b & 1 == 1).collect());
         }
     }
-    let mut e = Encoded { regions, players, seat: 0, node: [[0; NODE]; REGIONS], global: [0; GLOBAL] };
+    let mut e = Encoded { regions, players, node: [[0; NODE]; REGIONS], global: [0; GLOBAL] };
     for row in e.node.iter_mut() {
         row.copy_from_slice(&rec[at..at + NODE]);
         at += NODE;
     }
-    let global = match rec.len() {
-        RECORD => GLOBAL,
-        RECORD_V4 => GLOBAL_V2,
-        _ => GLOBAL_V1,
-    };
-    e.global[..global].copy_from_slice(&rec[at..at + global]);
+    e.global.copy_from_slice(&rec[at..at + GLOBAL]);
     (e, adj)
 }

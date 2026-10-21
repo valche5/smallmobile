@@ -19,6 +19,16 @@ use smallmobile_lab::moves;
 use smallmobile_lab::rand::Rng;
 use smallmobile_lab::table::Table;
 
+/// Le réseau du labo (`lab/nets/gen11.bin`).
+fn net_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nets/gen11.bin")
+}
+
+/// L'Expert du labo, à `n` itérations (très peu : des parties d'essai rapides).
+fn expert(n: usize) -> smallmobile_lab::az::Az {
+    smallmobile_lab::agent::az_named(&format!("az:net={},n={n}", net_path().display())).unwrap()
+}
+
 #[test]
 fn every_legal_move_can_be_played() {
     let mut rng = Rng::new(7);
@@ -114,165 +124,66 @@ fn the_network_sees_only_what_the_player_knows() {
 fn varied_tables_record_only_the_learner() {
     use smallmobile_kernel::Level;
     use smallmobile_lab::agent::{Agent, KernelAi};
-    use smallmobile_lab::selfplay::{self, Field, GameLog, RECORD};
-    let dir = std::env::temp_dir().join(format!("smallmobile-field-{}", std::process::id()));
-    let (easy, hard) = (KernelAi::new(Level::Easy), KernelAi::new(Level::Hard));
-    let field = Field { agents: vec![&easy as &dyn Agent, &hard], share: 0.5 };
-    let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1, observe: false };
-    let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 16, threads: 2, seed: 12, opts };
-    selfplay::run_with(&cfg, &KernelAi::new(Level::Normal), &field, &dir).unwrap();
-    let (mut mixed, mut plain) = (0, 0);
-    for entry in std::fs::read_dir(&dir).unwrap() {
-        let path = entry.unwrap().path();
-        if !path.to_string_lossy().ends_with(selfplay::SUFFIX) {
-            continue;
-        }
-        let logs: Vec<GameLog> = std::fs::read_to_string(selfplay::moves_file(&path))
-            .unwrap()
-            .lines()
-            .map(|l| GameLog::parse(l).unwrap())
-            .collect();
-        let bytes = std::fs::read(&path).unwrap();
-        let mut records = bytes.chunks(RECORD);
-        for log in &logs {
-            // une position par décision de l'IA qui apprend, marquée « table variée » s'il y a lieu
-            let table = log.table();
-            log.replay(&table, |g, _| {
-                let me = g.state.actor().unwrap();
-                if moves::legal(g).len() > 1 && log.seats.get(me).is_none_or(|&s| s < 0) {
-                    assert_eq!(records.next().unwrap()[3], !log.seats.is_empty() as u8);
-                }
-            })
-            .unwrap();
-            if log.seats.is_empty() {
-                plain += 1;
-            } else {
-                assert!(log.seats.contains(&-1) && log.seats.iter().any(|&s| s >= 0));
-                mixed += 1;
-            }
-            assert_eq!(GameLog::parse(&log.line()).unwrap(), *log);
-        }
-        assert!(records.next().is_none());
-    }
-    assert!(mixed > 0 && plain > 0, "{mixed} tables variées, {plain} autres");
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn old_positions_can_be_reencoded() {
-    use smallmobile_kernel::Level;
-    use smallmobile_lab::agent::{Agent, KernelAi};
-    use smallmobile_lab::encode::{GLOBAL, GLOBAL_V1, GLOBAL_V2, NODE, REGIONS};
-    use smallmobile_lab::moves::{FINISH, KEYS};
     use smallmobile_lab::selfplay::{self, Field, GameLog, ILLEGAL, RECORD};
-    let dir = std::env::temp_dir().join(format!("smallmobile-reencode-{}", std::process::id()));
-    // des positions d'aujourd'hui (Diplomates compris, tables variées comprises), sans puis avec
-    // les coups observés des autres joueurs
     let (easy, hard) = (KernelAi::new(Level::Easy), KernelAi::new(Level::Hard));
     let field = Field { agents: vec![&easy as &dyn Agent, &hard], share: 0.5 };
+    let az = expert(2);
     for observe in [false, true] {
-        // un seul fil : chaque fichier reçoit les mêmes parties d'une fois à l'autre
+        let dir = std::env::temp_dir().join(format!("smallmobile-field-{}-{observe}", std::process::id()));
         let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1, observe };
-        let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 24, threads: 1, seed: 9, opts };
-        let out = dir.join(if observe { "observed" } else { "new" });
-        selfplay::run_with(&cfg, &KernelAi::new(Level::Normal), &field, &out).unwrap();
-    }
-    // … remises aux formats des versions 3 (entrées de la version 1, clés de paix par place absolue)
-    // et 4 (entrées de la version 2), sans le coup joué
-    let (keys_at, node_at) = (44, 44 + KEYS * 2 + REGIONS * 8);
-    let global_at = node_at + REGIONS * NODE;
-    let mut logs = Vec::new();
-    let mut originals = Vec::new();
-    let (mut peaces, mut played, mut observed) = (0, 0, 0);
-    for old in ["old3", "old4"] {
-        std::fs::create_dir_all(dir.join(old)).unwrap();
-    }
-    for entry in std::fs::read_dir(dir.join("new")).unwrap() {
-        let path = entry.unwrap().path();
-        if !path.to_string_lossy().ends_with(selfplay::SUFFIX) {
-            continue;
-        }
-        let games: Vec<GameLog> = std::fs::read_to_string(selfplay::moves_file(&path))
-            .unwrap()
-            .lines()
-            .map(|l| GameLog::parse(l).unwrap())
-            .collect();
-        let bytes = std::fs::read(&path).unwrap();
-        let mut records = bytes.chunks(RECORD);
-        let (mut v3s, mut v4s) = (Vec::new(), Vec::new());
-        for log in &games {
-            let table = log.table();
-            log.replay(&table, |g, _| {
-                let me = g.state.actor().unwrap();
-                if moves::legal(g).len() < 2 || log.seats.get(me).is_some_and(|&s| s >= 0) {
-                    return;
-                }
-                let rec = records.next().unwrap();
-                played += (rec[RECORD - 2..] != ILLEGAL.to_le_bytes()) as usize;
-                let (seat, n) = (g.state.actor().unwrap(), g.state.player_count());
-                let mut v3 = rec[..node_at].to_vec();
-                for plan in 0..6 {
-                    let base = keys_at + 2 * (FINISH as usize + plan * 12);
-                    let relative = rec[base..base + 24].to_vec();
-                    peaces += relative[4..].chunks(2).filter(|v| v != &ILLEGAL.to_le_bytes()).count();
-                    for slot in 1..6 {
-                        for stout in 0..2 {
-                            let target = (slot + n - 1 - seat) % n;
-                            let from = if slot <= n && target != 0 { 2 * (target * 2 + stout) } else { usize::MAX };
-                            let at = base + 2 * (slot * 2 + stout);
-                            let v = if from == usize::MAX {
-                                ILLEGAL.to_le_bytes()
-                            } else {
-                                [relative[from], relative[from + 1]]
-                            };
-                            v3[at..at + 2].copy_from_slice(&v);
+        let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 12, threads: 2, seed: 12, opts };
+        selfplay::run(&cfg, &az, &field, &dir).unwrap();
+        let (mut mixed, mut plain, mut observed) = (0, 0, 0);
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if !path.to_string_lossy().ends_with(selfplay::SUFFIX) {
+                continue;
+            }
+            let logs: Vec<GameLog> = std::fs::read_to_string(selfplay::moves_file(&path))
+                .unwrap()
+                .lines()
+                .map(|l| GameLog::parse(l).unwrap())
+                .collect();
+            let bytes = std::fs::read(&path).unwrap();
+            let mut records = bytes.chunks(RECORD);
+            for log in &logs {
+                // une position par décision de l'IA qui apprend, marquée « table variée » s'il y a
+                // lieu ; avec `observe`, une par coup d'un autre joueur qui est l'un de ses coups,
+                // marquée « observé », avec la clé du coup joué
+                let table = log.table();
+                let mut step = 0;
+                log.replay(&table, |g, _| {
+                    let me = g.state.actor().unwrap();
+                    let legal = moves::legal(g);
+                    if legal.len() > 1 {
+                        let learner = log.seats.get(me).is_none_or(|&s| s < 0);
+                        let played = log.played(step, g, &legal, &table);
+                        if learner || (observe && played != ILLEGAL) {
+                            let rec = records.next().unwrap();
+                            assert_eq!(rec[3], !log.seats.is_empty() as u8 | (!learner as u8) << 1);
+                            if !learner {
+                                assert_eq!(u16::from_le_bytes([rec[RECORD - 2], rec[RECORD - 1]]), played);
+                                observed += 1;
+                            }
                         }
                     }
+                    step += 1;
+                })
+                .unwrap();
+                if log.seats.is_empty() {
+                    plain += 1;
+                } else {
+                    assert!(log.seats.contains(&-1) && log.seats.iter().any(|&s| s >= 0));
+                    mixed += 1;
                 }
-                v3.extend_from_slice(&rec[node_at..global_at + GLOBAL_V1]);
-                v3.extend_from_slice(&rec[global_at + GLOBAL..RECORD - 2]);
-                v3s.extend(v3);
-                v4s.extend_from_slice(&rec[..global_at + GLOBAL_V2]);
-                v4s.extend_from_slice(&rec[global_at + GLOBAL..RECORD - 2]);
-            })
-            .unwrap();
+                assert_eq!(GameLog::parse(&log.line()).unwrap(), *log);
+            }
+            assert!(records.next().is_none());
         }
-        assert!(records.next().is_none(), "une position par décision de l'IA qui apprend");
-        let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        for (old, suffix, bytes) in [("old3", ".v3.bin", v3s), ("old4", ".v4.bin", v4s)] {
-            let target = dir.join(old).join(name.replace(selfplay::SUFFIX, suffix));
-            std::fs::write(&target, bytes).unwrap();
-            std::fs::copy(selfplay::games_file(&path), selfplay::games_file(&target)).unwrap();
-            std::fs::copy(selfplay::moves_file(&path), selfplay::moves_file(&target)).unwrap();
-        }
-        logs.extend(games);
-        let with = std::fs::read(dir.join("observed").join(&name)).unwrap();
-        observed += with.chunks(RECORD).filter(|r| r[3] & 2 != 0).count();
-        originals.push((name, bytes, with));
+        assert!(mixed > 0 && plain > 0, "{mixed} tables variées, {plain} autres");
+        assert_eq!(observed > 0, observe, "{observed} coups observés");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
-    // le réencodage redonne les positions d'aujourd'hui, octet pour octet : sans les coups observés
-    // depuis la version 3, avec depuis la version 4
-    let reencode = |from: &str, to: &str, observe: bool| {
-        smallmobile_lab::reencode::run(&logs, &dir.join(from), &dir.join(to), 2, observe).unwrap()
-    };
-    let (files, positions) = reencode("old3", "again3", false);
-    assert_eq!(files, originals.len());
-    let (_, with_observed) = reencode("old4", "again4", true);
-    assert!(
-        positions > 100 && peaces > 0 && played > 100,
-        "{positions} positions, {peaces} clés de paix, {played} coups"
-    );
-    assert!(
-        with_observed == positions + observed && observed > 50,
-        "{with_observed} positions, {observed} coups observés"
-    );
-    for (name, bytes, with) in originals {
-        assert!(std::fs::read(dir.join("again3").join(&name)).unwrap() == bytes, "{name}");
-        assert!(std::fs::read(dir.join("again4").join(&name)).unwrap() == with, "{name} (coups observés)");
-        let counts = |d: &str| std::fs::read(selfplay::games_file(&dir.join(d).join(&name))).unwrap();
-        assert_eq!(counts("again4"), counts("observed"));
-    }
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -305,8 +216,7 @@ fn peace_keys_name_the_target_relative_to_the_player() {
 #[test]
 fn the_fast_network_computes_like_the_simple_one() {
     use smallmobile_lab::encode::encode;
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nets/gen8.bin");
-    let net = smallmobile_lab::net::Net::load(&path).unwrap();
+    let net = smallmobile_lab::net::Net::load(&net_path()).unwrap();
     let close = |a: f32, b: f32| a == b || (a - b).abs() <= 1e-3 * (1.0 + b.abs());
     let mut rng = Rng::new(31);
     let mut checked = 0;
@@ -335,11 +245,7 @@ fn the_fast_network_computes_like_the_simple_one() {
 fn the_search_sees_only_what_the_player_knows() {
     use smallmobile_kernel::Level;
     use smallmobile_lab::agent::{Agent, KernelAi};
-    use smallmobile_lab::az::{Az, Config};
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nets/gen8.bin");
-    let net = std::sync::Arc::new(smallmobile_lab::net::Net::load(&path).unwrap());
-    let shipped = Az::new(smallmobile_brain::expert::config(30), net.clone(), "gen8".into());
-    let alone = Az::new(Config { rollout: 0.0, ..shipped.cfg }, net, "gen8".into());
+    let az = expert(30);
     let hard = KernelAi::new(Level::Hard);
     let mut rng = Rng::new(23);
     let mut checked = 0;
@@ -353,12 +259,10 @@ fn the_search_sees_only_what_the_player_knows() {
                 // la même partie vue par le joueur, mais d'autres pioches et d'autres dés cachés :
                 // à graine égale, chaque joueur doit y faire exactement la même chose
                 let other = determinize(&g, &k, &mut rng);
-                for az in [&shipped, &alone] {
-                    let a = az.search(&g, &k, &mut Rng::new(checked));
-                    let b = az.search(&other, &k, &mut Rng::new(checked));
-                    assert_eq!(a.visits, b.visits, "{} voit ce qui est caché", az.describe());
-                    assert_eq!(a.value.to_bits(), b.value.to_bits(), "{}", az.describe());
-                }
+                let a = az.search(&g, &k, &mut Rng::new(checked));
+                let b = az.search(&other, &k, &mut Rng::new(checked));
+                assert_eq!(a.visits, b.visits, "l'Expert voit ce qui est caché");
+                assert_eq!(a.value.to_bits(), b.value.to_bits());
                 let a = hard.act(&g, &k, &mut Rng::new(checked));
                 assert_eq!(a, hard.act(&other, &k, &mut Rng::new(checked)), "l'IA Difficile voit ce qui est caché");
                 checked += 1;
@@ -429,29 +333,25 @@ fn a_clear_arena_stops_early_and_keeps_its_first_deals() {
 
 #[test]
 fn position_files_say_how_many_positions_each_game_has() {
-    use smallmobile_kernel::Level;
-    use smallmobile_lab::agent::KernelAi;
-    use smallmobile_lab::{label, selfplay};
+    use smallmobile_lab::selfplay::{self, Field, GameLog};
     let dir = std::env::temp_dir().join(format!("smallmobile-games-{}", std::process::id()));
     let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1, observe: false };
     let cfg = selfplay::Config { players: vec![2, 3], games: 5, threads: 2, seed: 3, opts };
-    selfplay::run(&cfg, &KernelAi::new(Level::Normal), &dir.join("play")).unwrap();
-    let cfg = label::Config {
-        players: vec![2, 5],
-        games: 4,
-        threads: 2,
-        seed: 3,
-        share: 0.1,
-        rollouts: 2,
-        random: 0.1,
-        judge: label::Judge::Normal,
-    };
-    label::run(&cfg, None, &dir.join("label")).unwrap();
-    for (sub, games) in [("play", 5), ("label", 4)] {
+    let az = expert(2);
+    selfplay::run(&cfg, &az, &Field::none(), &dir.join("play")).unwrap();
+    let mut logs = Vec::new();
+    for entry in std::fs::read_dir(dir.join("play")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.to_string_lossy().ends_with(".moves") {
+            logs.extend(std::fs::read_to_string(&path).unwrap().lines().map(|l| GameLog::parse(l).unwrap()));
+        }
+    }
+    smallmobile_lab::judge::rejudge(&logs, 0.2, 2, &az, 1, 2, &dir.join("judged")).unwrap();
+    for sub in ["play", "judged"] {
         let (mut total, mut positions) = (0, 0);
         for entry in std::fs::read_dir(dir.join(sub)).unwrap() {
             let path = entry.unwrap().path();
-            if path.extension().is_some_and(|e| e == "bin") {
+            if path.to_string_lossy().ends_with(selfplay::SUFFIX) {
                 let counts: Vec<u32> = std::fs::read(selfplay::games_file(&path))
                     .unwrap()
                     .as_chunks::<4>()
@@ -465,7 +365,7 @@ fn position_files_say_how_many_positions_each_game_has() {
                 positions += size / selfplay::RECORD;
             }
         }
-        assert_eq!(total, games, "{sub} : une ligne par partie");
+        assert_eq!(total, 5, "{sub} : une ligne par partie");
         assert!(positions > 0);
     }
     std::fs::remove_dir_all(&dir).unwrap();
@@ -473,18 +373,16 @@ fn position_files_say_how_many_positions_each_game_has() {
 
 #[test]
 fn self_play_games_can_be_replayed() {
-    use smallmobile_kernel::Level;
-    use smallmobile_lab::agent::KernelAi;
-    use smallmobile_lab::selfplay::{self, GameLog};
+    use smallmobile_lab::selfplay::{self, Field, GameLog};
     use smallmobile_lab::table::Outcome;
     let dir = std::env::temp_dir().join(format!("smallmobile-replay-{}", std::process::id()));
     let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1, observe: false };
     let cfg = selfplay::Config { players: vec![2, 4], games: 4, threads: 2, seed: 5, opts };
-    selfplay::run(&cfg, &KernelAi::new(Level::Normal), &dir).unwrap();
+    selfplay::run(&cfg, &expert(2), &Field::none(), &dir).unwrap();
     let mut games = 0;
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
-        if path.extension().is_none_or(|e| e != "bin") {
+        if !path.to_string_lossy().ends_with(selfplay::SUFFIX) {
             continue;
         }
         let counts: Vec<u32> = std::fs::read(selfplay::games_file(&path))
@@ -514,14 +412,12 @@ fn self_play_games_can_be_replayed() {
 
 #[test]
 fn played_games_can_be_judged_again_by_the_network() {
-    use smallmobile_kernel::Level;
-    use smallmobile_lab::agent::{KernelAi, az_named};
-    use smallmobile_lab::label::{self, Judge};
-    use smallmobile_lab::selfplay::{self, GameLog};
+    use smallmobile_lab::selfplay::{self, Field, GameLog};
     let dir = std::env::temp_dir().join(format!("smallmobile-judge-{}", std::process::id()));
     let opts = selfplay::Options { sample_rounds: 2, full_share: 1.0, fast: 1, observe: false };
     let cfg = selfplay::Config { players: vec![3, 5], games: 2, threads: 1, seed: 8, opts };
-    selfplay::run(&cfg, &KernelAi::new(Level::Normal), &dir.join("play")).unwrap();
+    let az = expert(2);
+    selfplay::run(&cfg, &az, &Field::none(), &dir.join("play")).unwrap();
     let mut logs = Vec::new();
     for entry in std::fs::read_dir(dir.join("play")).unwrap() {
         let path = entry.unwrap().path();
@@ -529,13 +425,11 @@ fn played_games_can_be_judged_again_by_the_network() {
             logs.extend(std::fs::read_to_string(&path).unwrap().lines().map(|l| GameLog::parse(l).unwrap()));
         }
     }
-    let net = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nets/gen8.bin");
-    let judge = Judge::Net(Box::new(az_named(&format!("az:net={}", net.display())).unwrap()));
-    label::rejudge(&logs, 0.1, 2, &judge, 1, 2, &dir.join("judged")).unwrap();
+    smallmobile_lab::judge::rejudge(&logs, 0.1, 2, &az, 1, 2, &dir.join("judged")).unwrap();
     let mut positions = 0;
     for entry in std::fs::read_dir(dir.join("judged")).unwrap() {
         let path = entry.unwrap().path();
-        if path.extension().is_some_and(|e| e == "bin") {
+        if path.to_string_lossy().ends_with(selfplay::SUFFIX) {
             for rec in std::fs::read(&path).unwrap().as_chunks::<{ selfplay::RECORD }>().0 {
                 // la part de victoire de chaque joueur, d'après des fins jouées jusqu'au bout
                 let win: f32 = (0..rec[0] as usize)
@@ -548,16 +442,6 @@ fn played_games_can_be_judged_again_by_the_network() {
     }
     assert!(positions > 0);
     std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn known_seats_give_certain_beliefs() {
-    use smallmobile_brain::opponents::{Beliefs, Model};
-    let b = Beliefs::known(&[Model::Net, Model::Normal, Model::Net]);
-    let mut rng = Rng::new(1);
-    for (q, model) in [Model::Net, Model::Normal, Model::Net].into_iter().enumerate() {
-        assert!((0..50).all(|_| b.sample(q, &mut rng) == model));
-    }
 }
 
 #[test]
@@ -587,8 +471,7 @@ fn a_move_cut_into_actions_plays_the_same() {
 fn the_expert_plays_whole_games() {
     use smallmobile_brain::expert::Expert;
     use smallmobile_kernel::Level;
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nets/gen8.bin");
-    let net = std::sync::Arc::new(smallmobile_lab::net::Net::load(&path).unwrap());
+    let net = std::sync::Arc::new(smallmobile_lab::net::Net::load(&net_path()).unwrap());
     let expert = Expert::new(net, 8);
     for players in [2, 5] {
         let table = Table::new(players, 2100 + players as u64);

@@ -1,13 +1,8 @@
-//! Positions jugées par des fins de partie simulées : beaucoup de positions variées, chacune suivie
-//! de `rollouts` fins jouées par le juge (l'IA Normal, ou le réseau : `Judge`), chacune dans un
-//! monde possible honnête. La moyenne donne, presque sans bruit, la chance de victoire et les
-//! pièces finales de chaque joueur : ce que les simulations de la recherche mesurent une à une. Un
-//! réseau qui l'apprend vaut une infinité de simulations, pour le prix d'une évaluation.
-//!
-//! Les parties qui fournissent les positions sont jouées par l'IA Normal (ou un autre joueur, pour
-//! voir les positions d'un jeu plus fort), avec une part de coups au hasard pour couvrir aussi les
-//! positions étranges que la recherche visite. `rejudge` juge plutôt les positions de parties déjà
-//! jouées (`selfplay::GameLog`).
+//! Positions rejugées par des fins de partie simulées : des positions de parties déjà jouées
+//! (`selfplay::GameLog`), chacune suivie de `rollouts` fins où le réseau joue pour tous
+//! (`Az::play_out`), chacune dans un monde possible honnête. La moyenne donne, presque sans bruit,
+//! la chance de victoire et les pièces finales de chaque joueur : des cibles de valeur bien moins
+//! bruitées que le résultat d'une seule partie.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -16,62 +11,23 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use smallmobile_kernel::ids::MAX_PLAYERS;
-use smallmobile_kernel::{Ai, Game, Level, Phase, Tuning};
+use smallmobile_kernel::Game;
 
-use crate::agent::{Agent, KernelAi};
 use crate::az::Az;
 use crate::encode::encode;
 use crate::know::{Knowledge, determinize};
 use crate::moves::{self, KEYS};
 use crate::rand::{Rng, mix};
 use crate::selfplay::{GameLog, ILLEGAL, Record, games_file};
-use crate::table::{Outcome, Table};
-
-/// Qui joue les fins de partie qui jugent une position.
-pub enum Judge {
-    /// L'IA Normal pour tous.
-    Normal,
-    /// Le réseau pour tous (`Az::play_out` : son coup préféré, ou tiré selon `rt`).
-    Net(Box<Az>),
-}
-
-pub struct Config {
-    pub players: Vec<usize>,
-    pub games: usize,
-    pub threads: usize,
-    pub seed: u64,
-    /// Part des positions jugées (les autres sont seulement jouées).
-    pub share: f64,
-    pub rollouts: usize,
-    /// Part des coups joués au hasard dans les parties qui fournissent les positions.
-    pub random: f64,
-    pub judge: Judge,
-}
+use crate::table::Outcome;
 
 /// Moyenne de `count` fins de partie : part de victoire et pièces finales de chaque joueur réel.
-pub fn judge(
-    g: &Game,
-    k: &Knowledge,
-    count: usize,
-    by: &Judge,
-    rng: &mut Rng,
-) -> ([f32; MAX_PLAYERS], [f32; MAX_PLAYERS]) {
-    let tuning = Tuning::default();
-    let ai = Ai::new(&tuning);
+pub fn judge(g: &Game, k: &Knowledge, count: usize, az: &Az, rng: &mut Rng) -> ([f32; MAX_PLAYERS], [f32; MAX_PLAYERS]) {
     let (mut win, mut coins) = ([0.0f32; MAX_PLAYERS], [0.0f32; MAX_PLAYERS]);
     let mut evals = crate::az::Evals::default();
     for _ in 0..count {
-        let mut w = determinize(g, k, rng);
-        let end = match by {
-            Judge::Normal => {
-                for p in w.state.players.as_mut_slice() {
-                    p.level = Level::Normal;
-                }
-                ai.play(&mut w, 50_000).expect("l'IA du jeu finit la partie");
-                w
-            }
-            Judge::Net(az) => az.play_out(&mut evals, &w, k, rng),
-        };
+        let w = determinize(g, k, rng);
+        let end = az.play_out(&mut evals, &w, k, rng);
         let o = Outcome::of(&end);
         for q in 0..o.players {
             win[q] += o.win[q] as f32 / count as f32;
@@ -83,8 +39,8 @@ pub fn judge(
 
 /// L'enregistrement d'une position jugée : cibles de valeur (aucun coup visité), et le coup joué
 /// ensuite dans la partie s'il est connu (`ILLEGAL` sinon).
-fn judged(g: &Game, k: &Knowledge, count: usize, by: &Judge, played: u16, rng: &mut Rng) -> Vec<u8> {
-    let (win, finals) = judge(g, k, count, by, rng);
+fn judged(g: &Game, k: &Knowledge, count: usize, az: &Az, played: u16, rng: &mut Rng) -> Vec<u8> {
+    let (win, finals) = judge(g, k, count, az, rng);
     let s = &g.state;
     let n = s.player_count();
     let me = s.actor().expect("un joueur doit agir");
@@ -93,12 +49,10 @@ fn judged(g: &Game, k: &Knowledge, count: usize, by: &Judge, played: u16, rng: &
         visits[c.key as usize] = 0;
     }
     let (mut w, mut gain) = ([0.0; MAX_PLAYERS], [0.0; MAX_PLAYERS]);
-    let mut qgain = [f32::NAN; MAX_PLAYERS];
     for r in 0..n {
         let q = (me + r) % n;
         w[r] = win[q];
         gain[r] = finals[q] - s.players[q].coins as f32;
-        qgain[r] = gain[r];
     }
     let enc = encode(g, k);
     Record {
@@ -110,34 +64,8 @@ fn judged(g: &Game, k: &Knowledge, count: usize, by: &Judge, played: u16, rng: &
         win: w,
         gain,
         visits: &visits,
-        qgain,
-        qwin: w,
     }
     .bytes()
-}
-
-/// Une partie qui fournit des positions : `random` de coups au hasard, le reste par `agent`.
-fn label_game(
-    table: &Table,
-    seed: u32,
-    cfg: &Config,
-    agent: &dyn Agent,
-    rng: &mut Rng,
-    out: &mut impl Write,
-) -> std::io::Result<usize> {
-    let mut g = table.game(seed);
-    let mut k = Knowledge::default();
-    let mut count = 0;
-    while g.state.phase != Phase::GameOver {
-        let legal = moves::legal(&g);
-        if legal.len() > 1 && rng.unit() < cfg.share {
-            out.write_all(&judged(&g, &k, cfg.rollouts, &cfg.judge, ILLEGAL, rng))?;
-            count += 1;
-        }
-        let mv = if rng.unit() < cfg.random { legal[rng.below(legal.len())].mv } else { agent.act(&g, &k, rng) };
-        k.play(&mut g, &mv).expect("coup possible");
-    }
-    Ok(count)
 }
 
 /// Écrit des positions jugées en parallèle, un fichier par fil dans `dir` (et son `games_file`) :
@@ -193,26 +121,13 @@ fn write_games(
     })
 }
 
-/// `agent` : qui joue les parties d'où viennent les positions (l'IA Normal si `None`).
-pub fn run(cfg: &Config, agent: Option<&dyn Agent>, dir: &Path) -> std::io::Result<()> {
-    let normal = KernelAi::new(Level::Normal);
-    let agent = agent.unwrap_or(&normal);
-    write_games(dir, "l", cfg.seed, cfg.threads, cfg.games, &|i, out| {
-        let n = cfg.players[i % cfg.players.len()];
-        let deal = mix(cfg.seed, i as u64);
-        let table = Table::new(n, deal % 1_000_000_007);
-        let mut rng = Rng::new(mix(deal, 77));
-        label_game(&table, mix(deal, 1) as u32, cfg, agent, &mut rng, out)
-    })
-}
-
-/// Juge les positions de parties déjà jouées (`GameLog`, d'un jeu fort par exemple) : une part
-/// `share` des positions où le joueur avait le choix, chacune par `rollouts` fins de `by`.
+/// Juge les positions de parties déjà jouées (`GameLog`) : une part `share` des positions où le
+/// joueur avait le choix, chacune par `rollouts` fins jouées par `az`.
 pub fn rejudge(
     logs: &[GameLog],
     share: f64,
     rollouts: usize,
-    by: &Judge,
+    az: &Az,
     seed: u64,
     threads: usize,
     dir: &Path,
@@ -227,7 +142,7 @@ pub fn rejudge(
             let legal = moves::legal(g);
             if legal.len() > 1 && rng.unit() < share {
                 let played = log.played(step, g, &legal, &table);
-                out.extend(judged(g, k, rollouts, by, played, &mut rng));
+                out.extend(judged(g, k, rollouts, az, played, &mut rng));
                 count += 1;
             }
             step += 1;

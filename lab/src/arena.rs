@@ -5,9 +5,9 @@
 //! occupe chaque place une fois. La chance de la donne et de la place s'annule ainsi en grande
 //! partie. Le cas courant : le joueur testé (`hero`) face au reste de la table (`field`).
 //!
-//! Chaque joueur connaît le type des autres places (`Agent::model`), comme dans le jeu où l'on voit
-//! quelles places sont des IA. Le résultat de chaque place de chaque partie peut être écrit
-//! (`write`) pour `lab/py/score.py`, qui calcule le score et ses intervalles par donne.
+//! Aucun joueur ne sait qui occupe les autres places. Le résultat de chaque place de chaque partie
+//! peut être écrit (`write`) pour `lab/py/score.py`, qui calcule le score et ses intervalles par
+//! donne.
 //!
 //! Une arène peut s'arrêter dès que son résultat est clair (`Sequential`) : elle garde alors les
 //! premières donnes, les mêmes que dans l'arène complète.
@@ -17,7 +17,6 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use smallmobile_brain::opponents::Model;
 use smallmobile_kernel::Phase;
 
 use crate::agent::Agent;
@@ -42,7 +41,6 @@ pub fn play_game(table: &Table, seed: u32, seats: &[&dyn Agent], rng_seed: u64) 
     let mut g = table.game(seed);
     let mut k = Knowledge::default();
     let mut rng = Rng::new(rng_seed);
-    let models: Vec<Model> = seats.iter().map(|a| a.model()).collect();
     let mut times = vec![Vec::new(); seats.len()];
     let mut count = 0;
     while g.state.phase != Phase::GameOver {
@@ -50,7 +48,7 @@ pub fn play_game(table: &Table, seed: u32, seats: &[&dyn Agent], rng_seed: u64) 
         let pid = g.state.actor().expect("un joueur doit agir");
         let choice = moves::legal(&g).len() > 1;
         let start = Instant::now();
-        let m = seats[pid].act_at(&g, &k, &models, &mut rng.fork());
+        let m = seats[pid].act(&g, &k, &mut rng.fork());
         if choice {
             times[pid].push(start.elapsed().as_secs_f32());
         }
