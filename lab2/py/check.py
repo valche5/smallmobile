@@ -12,7 +12,7 @@ import numpy as np
 import torch
 
 from data import RECORD, load
-from model import Net, export, load, unpack_adj
+from model import Net, export, load as load_net, unpack_adj
 
 torch.manual_seed(0)
 net = Net(hidden=32, layers=3)
@@ -21,7 +21,7 @@ with torch.no_grad():
         p.add_(torch.randn_like(p) * 0.1)  # aucune branche nulle : tout le calcul compte
 export(net, "/tmp/smallmobile-check.bin")
 # relu : mêmes poids
-for name, w in load("/tmp/smallmobile-check.bin").state_dict().items():
+for name, w in load_net("/tmp/smallmobile-check.bin").state_dict().items():
     assert torch.equal(w, net.state_dict()[name]), f"{name} relu différent"
 
 recs = load([sys.argv[1]])[0][:5]
