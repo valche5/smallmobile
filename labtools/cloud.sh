@@ -163,7 +163,7 @@ systemctl enable --now smallai-guard
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
-apt-get install -y -q build-essential pkg-config python3-venv rsync curl unzip
+apt-get install -y -q build-essential pkg-config python3-venv python3-dev rsync curl unzip
 curl -sS https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscli.zip
 unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install
 sudo -u admin bash -c 'curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal'

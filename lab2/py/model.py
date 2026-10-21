@@ -114,22 +114,33 @@ class Net(nn.Module):
         neg = (1 - mask[..., None]) * -1e9
         for layer in self.layers:
             agg = torch.bmm(adj, h) / deg
-            u = torch.cat([h, agg, g[:, None].expand(B, R, -1)], -1)
-            h = (h + layer.n2(F.relu(layer.n1(u)))) * mask[..., None]
+            h = (h + layer.n2(F.relu(joined(layer.n1, [h, agg], g)))) * mask[..., None]
             mean = h.sum(1) / count
             mx = (h + neg).max(1).values
             g = g + layer.g2(F.relu(layer.g1(torch.cat([g, mean, mx], -1))))
-        hg = torch.cat([h, g[:, None].expand(B, R, -1)], -1)
 
         logits = torch.full((B, KEYS), -1e9, device=node.device)
         logits[:, :GLOBAL_KEYS] = self.glob_pol2(F.relu(self.glob_pol1(g)))
-        per_region = self.node_pol(hg)  # (B, R, REGION_KINDS)
+        per_region = joined(self.node_pol, [h], g)  # (B, R, REGION_KINDS)
         for kind in range(REGION_KINDS):
             start = GLOBAL_KEYS + kind * 64
             logits[:, start : start + R] = per_region[:, :, kind]
         mean = h.sum(1) / count
         value = self.val2(F.relu(self.val1(torch.cat([g, mean], -1))))
-        return logits, value, self.own(hg)
+        return logits, value, joined(self.own, [h], g)
+
+
+def joined(lin, rows, glob):
+    """`lin` sur la concaténation de `rows` (B, R, ·) et de `glob` (B, ·) répété à chaque région,
+    sans la former : chaque partie multiplie sa tranche des poids, et celle de `glob`, la même pour
+    toutes les régions, n'est calculée qu'une fois par position (comme lab2/brain/src/net.rs)."""
+    w = lin.weight
+    out = F.linear(glob, w[:, w.shape[1] - glob.shape[-1] :], lin.bias)[:, None, :]
+    at = 0
+    for x in rows:
+        out = out + F.linear(x, w[:, at : at + x.shape[-1]])
+        at += x.shape[-1]
+    return out
 
 
 def unpack_adj(bits, R=REGIONS):

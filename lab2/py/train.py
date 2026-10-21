@@ -16,7 +16,9 @@ qu'une par partie). Les positions sont vues du joueur qui agit.
 
 AdamW, taux 5e-4 en un cycle (montée puis descente) à chaque pas de la boucle, lots de 512 ; calcul
 en bf16 (`torch.autocast`, poids et optimiseur en 32 bits, comme AlphaZero sur TPU) : 1,3 fois plus
-rapide sur les processeurs qui ont AVX-512 BF16. Validation en 32 bits.
+rapide sur les processeurs qui ont AVX-512 BF16. Réseau compilé pour l'entraînement (`torch.compile` :
+opérations fusionnées, moins d'attente entre les cœurs ; demande un compilateur C++ et les en-têtes
+de Python). Validation en 32 bits, sans compilation.
 """
 
 import argparse
@@ -154,6 +156,7 @@ def main():
     )
 
     net = load_net(args.init).to(device)
+    model = torch.compile(net)
     opt = torch.optim.AdamW(net.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=LR, total_steps=steps, pct_start=0.1)
     # tirage avec remise, en proportion des poids
@@ -164,7 +167,7 @@ def main():
     sums = np.zeros(len(METRICS))
     for b in batches(recs, order, BATCH, device):
         with torch.autocast("cpu", dtype=torch.bfloat16):
-            out = losses(net, b)
+            out = losses(model, b)
             pol, val, gain, owners = out[:4]
             loss = pol + val + GAIN_WEIGHT * gain + OWN_WEIGHT * owners
         opt.zero_grad(set_to_none=True)
