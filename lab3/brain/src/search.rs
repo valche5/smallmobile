@@ -193,26 +193,40 @@ fn gumbel(rng: &mut Rng) -> f32 {
     -(-(rng.unit().max(1e-12)).ln()).ln() as f32
 }
 
-/// Les évaluations du réseau déjà faites pendant une recherche. Une même position peut revenir
-/// (coups joués dans un autre ordre) ; le réseau répond toujours pareil à la même entrée sur la
-/// même carte : reprendre sa réponse ne change rien à la recherche, au bit près. Sur une autre
-/// carte, tout est oublié.
+/// Les évaluations du réseau déjà faites, gardées d'une recherche à la suivante : un `Evals` par
+/// partie (ou par décision). Une même position revient, dans une recherche (coups joués dans un
+/// autre ordre) comme d'une recherche à la suivante (la décision d'après repasse par les positions
+/// que la précédente a explorées) ; le réseau répond toujours pareil à la même entrée sur la même
+/// carte : reprendre sa réponse ne change rien à la recherche, au bit près. Restent celles de la
+/// recherche en cours et de la précédente ; sur une autre carte ou avec un autre réseau, tout est
+/// oublié.
 #[derive(Default)]
 pub struct Evals {
-    map: usize,
+    /// la carte et le réseau des évaluations gardées (adresses)
+    owner: (usize, usize),
     known: HashMap<u64, Vec<Known>>,
+    /// celles de la recherche précédente, pas encore reprises par la recherche en cours
+    older: HashMap<u64, Vec<Known>>,
 }
 
 /// Une position déjà évaluée : son entrée (`Evals::get`) et la réponse du réseau.
 type Known = (Box<[u8]>, Rc<Eval>);
 
 impl Evals {
-    fn get(&mut self, net: &Net, e: &Encoded, map: &Map) -> Rc<Eval> {
-        let at = std::ptr::from_ref(map) as usize;
-        if at != self.map {
+    /// Une recherche commence : les évaluations de la précédente restent, les plus vieilles s'en
+    /// vont.
+    fn next(&mut self, net: &Net, map: &Map) {
+        let owner = (std::ptr::from_ref(map) as usize, std::ptr::from_ref(net) as usize);
+        if owner != self.owner {
+            self.owner = owner;
             self.known.clear();
-            self.map = at;
+            self.older.clear();
+        } else {
+            self.older = std::mem::take(&mut self.known);
         }
+    }
+
+    fn get(&mut self, net: &Net, e: &Encoded, map: &Map) -> Rc<Eval> {
         // ce que lit le réseau
         let mut key = Vec::with_capacity(2 + e.regions * NODE + GLOBAL);
         key.extend_from_slice(&[e.regions as u8, e.players as u8]);
@@ -227,6 +241,15 @@ impl Evals {
         let same = self.known.entry(hash).or_default();
         if let Some((_, eval)) = same.iter().find(|(k, _)| **k == *key) {
             return eval.clone();
+        }
+        // reprise de la recherche précédente : l'évaluation passe dans celles de la recherche en cours
+        if let Some(old) = self.older.get_mut(&hash)
+            && let Some(i) = old.iter().position(|(k, _)| **k == *key)
+        {
+            let found = old.swap_remove(i);
+            let eval = found.1.clone();
+            same.push(found);
+            return eval;
         }
         let eval = Rc::new(net.eval(e, map));
         same.push((key.into_boxed_slice(), eval.clone()));
@@ -341,11 +364,20 @@ impl Az {
 
     /// Une recherche de `cfg.iterations` itérations. `explore` : bruit de Gumbel à la racine
     /// (auto-apprentissage) ; sans lui, la recherche ne dépend du hasard que par les mondes possibles.
-    pub fn search(&self, root: &Game, k: &Knowledge, rng: &mut Rng, explore: bool) -> Searched {
-        self.search_with(root, k, rng, self.cfg.iterations, explore)
+    /// `evals` : les évaluations gardées de la partie (ou de la décision).
+    pub fn search(&self, root: &Game, k: &Knowledge, rng: &mut Rng, explore: bool, evals: &mut Evals) -> Searched {
+        self.search_with(root, k, rng, self.cfg.iterations, explore, evals)
     }
 
-    pub fn search_with(&self, root: &Game, k: &Knowledge, rng: &mut Rng, iterations: usize, explore: bool) -> Searched {
+    pub fn search_with(
+        &self,
+        root: &Game,
+        k: &Knowledge,
+        rng: &mut Rng,
+        iterations: usize,
+        explore: bool,
+        evals: &mut Evals,
+    ) -> Searched {
         let legal = moves::legal(root, k);
         if legal.len() == 1 {
             return Searched {
@@ -358,8 +390,8 @@ impl Az {
                 value: f32::NAN,
             };
         }
-        let mut evals = Evals::default();
-        let (root_node, _) = self.expand(&mut evals, root, k, &legal);
+        evals.next(&self.net, root.map);
+        let (root_node, _) = self.expand(evals, root, k, &legal);
         let mut nodes = vec![root_node];
         let noise: Vec<f32> = legal.iter().map(|_| if explore { gumbel(rng) } else { 0.0 }).collect();
         let schedule = considered_visits(CONSIDERED.min(legal.len()), iterations);
@@ -403,7 +435,7 @@ impl Az {
                     node = child;
                     continue;
                 }
-                let (child, value) = self.expand(&mut evals, &w, &kw, &legal);
+                let (child, value) = self.expand(evals, &w, &kw, &legal);
                 let id = nodes.len() as u32;
                 nodes.push(child);
                 nodes[node as usize].edges[e].children.push((hash, id));

@@ -32,7 +32,7 @@ use smallmobile_kernel::state::Occupant;
 use smallmobile_kernel::wire::{self, Writer};
 use smallmobile_kernel::{Action, Game, Phase};
 
-use crate::az::{Az, Searched};
+use crate::az::{Az, Evals, Searched};
 use crate::encode::{Encoded, GLOBAL, NODE, REGIONS, encode, relative};
 use crate::know::Knowledge;
 use crate::moves::{self, KEYS};
@@ -139,15 +139,16 @@ pub fn play(
     let mut k = Knowledge::default();
     let mut pending: Vec<Pending> = Vec::new();
     let mut played = Vec::new();
+    let mut evals = Evals::default();
     while g.state.phase != Phase::GameOver {
         let actor = g.state.actor().expect("un joueur doit agir");
         let legal = moves::legal(&g, &k);
         let mv = if legal.len() == 1 {
             legal[0].mv
         } else if rng.unit() >= opts.full_share {
-            az.search_with(&g, &k, rng, opts.fast, true).mv
+            az.search_with(&g, &k, rng, opts.fast, true, &mut evals).mv
         } else {
-            let s = az.search(&g, &k, rng, true);
+            let s = az.search(&g, &k, rng, true, &mut evals);
             let mut policy = [ILLEGAL; KEYS];
             for &(key, p) in &s.policy {
                 policy[key as usize] = (p * PROBABILITY).round() as u16;

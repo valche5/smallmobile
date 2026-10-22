@@ -206,7 +206,7 @@ fn speed_cmd(opts: &HashMap<String, String>) {
         }
         let start = Instant::now();
         for (i, (g, k)) in positions.iter().enumerate() {
-            let s = az.search(g, k, &mut Rng::new(mix(seed, (100 * n + i) as u64)), false);
+            let s = az.search(g, k, &mut Rng::new(mix(seed, (100 * n + i) as u64)), false, &mut Default::default());
             decisions = fnv(decisions, format!("{:?}{:?}", s.mv, s.visits).as_bytes());
             for v in [s.value].iter().chain(&s.finals).chain(&s.wins) {
                 values = fnv(values, &v.to_bits().to_le_bytes());
@@ -350,7 +350,7 @@ fn analyze_cmd(opts: &HashMap<String, String>) {
     }
     let mut rng = smallmobile_lab3::rand::Rng::new(get(opts, "seed", 1));
     let start = Instant::now();
-    let s = az.search(&g, &k, &mut rng, false);
+    let s = az.search(&g, &k, &mut rng, false, &mut Default::default());
     let legal = moves::legal(&g, &k);
     println!(
         "Joueur {} à jouer, manche {}/{} ({:.0} s de recherche)",

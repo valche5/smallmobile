@@ -9,7 +9,7 @@ use crate::know::Knowledge;
 use crate::moves;
 use crate::net::Net;
 use crate::rand::{Rng, mix};
-use crate::search::{Az, Config};
+use crate::search::{Az, Config, Evals};
 
 pub struct Expert {
     search: Az,
@@ -40,8 +40,9 @@ impl Expert {
         let k = Knowledge::of(&g.state);
         let mut rng = Rng::new(mix(seed, g.state.seq as u64));
         let (mut value, mut iterations) = (f32::NAN, 0);
+        let mut evals = Evals::default();
         let (actions, _) = moves::decision(g, &k, |w, kw| {
-            let found = self.search.search(w, kw, &mut rng, false);
+            let found = self.search.search(w, kw, &mut rng, false, &mut evals);
             if !found.value.is_nan() {
                 value = found.value;
                 iterations += self.search.cfg.iterations;

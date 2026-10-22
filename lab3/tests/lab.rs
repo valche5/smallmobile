@@ -371,8 +371,8 @@ fn the_search_sees_only_what_the_player_knows() {
                 // à graine égale, chaque joueur doit y faire exactement la même chose
                 let other = determinize(g, k, &mut other_rng);
                 for explore in [false, true] {
-                    let a = az.search(g, k, &mut Rng::new(checked), explore);
-                    let b = az.search(&other, k, &mut Rng::new(checked), explore);
+                    let a = az.search(g, k, &mut Rng::new(checked), explore, &mut Default::default());
+                    let b = az.search(&other, k, &mut Rng::new(checked), explore, &mut Default::default());
                     assert_eq!(a.visits, b.visits, "l'Expert voit ce qui est caché");
                     assert_eq!(a.value.to_bits(), b.value.to_bits());
                 }
@@ -383,6 +383,31 @@ fn the_search_sees_only_what_the_player_knows() {
         });
     }
     assert!(checked > 10, "trop peu de positions vérifiées : {checked}");
+}
+
+#[test]
+fn evaluations_kept_from_search_to_search_change_nothing() {
+    use smallmobile_lab3::az::{Az, Config, Evals};
+    // un réseau dont les réponses varient d'une position à l'autre
+    let az = Az::new(Config { iterations: 30 }, std::sync::Arc::new(random_net()), "hasard".into());
+    let mut rng = Rng::new(31);
+    let mut checked = 0;
+    for game in 0..4u64 {
+        let table = Table::new(2 + game as usize % 4, 3100 + game);
+        let (mut g, mut k) = (table.game(game as u32), Knowledge::default());
+        // une partie, une mémoire : celle d'une partie d'auto-apprentissage
+        let mut kept = Evals::default();
+        random_game(&mut g, &mut k, &mut rng.fork(), |g, k, legal| {
+            if legal.len() > 1 {
+                let a = az.search(g, k, &mut Rng::new(checked), true, &mut kept);
+                let b = az.search(g, k, &mut Rng::new(checked), true, &mut Evals::default());
+                assert_eq!(a.visits, b.visits, "la mémoire change la recherche");
+                assert_eq!(a.value.to_bits(), b.value.to_bits());
+                checked += 1;
+            }
+        });
+    }
+    assert!(checked > 100, "trop peu de positions vérifiées : {checked}");
 }
 
 #[test]

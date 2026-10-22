@@ -16,6 +16,7 @@ impl Agent for Az {
     }
 
     fn act(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Vec<Action> {
-        moves::decision(g, k, |w, kw| self.search(w, kw, rng, false).mv).expect("coup de la recherche").0
+        let mut evals = Evals::default();
+        moves::decision(g, k, |w, kw| self.search(w, kw, rng, false, &mut evals).mv).expect("coup de la recherche").0
     }
 }

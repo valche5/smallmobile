@@ -36,6 +36,10 @@ Celui de lab2 (voir son journal), sauf :
 - **Cœurs** : 48 de parties et 16 d'entraînement en même temps (mesures de lab2 pour 64x4).
 - **Témoin de l'arène** : l'Expert de lab2 (`lab2:net=lab2/nets/….bin,n=…`, `lab2/brain`), tel
   qu'il joue dans le jeu ; plus de témoin lab1.
+- **Évaluations gardées d'une recherche à la suivante** (`search::Evals`, une par partie
+  d'auto-jeu, une par décision ailleurs) : la décision d'après repasse par les positions que la
+  précédente a explorées. Mêmes parties à l'octet près ; sur un cœur de mini, 4 parties à 4
+  joueurs avec le c060 de lab2 : 21,0 s → 14,8 s (22 octobre).
 - Retiré : `size.py` (mesure des tailles de réseau de lab2).
 
 ## Mesure
