@@ -411,6 +411,72 @@ fn evaluations_kept_from_search_to_search_change_nothing() {
 }
 
 #[test]
+fn a_batch_of_positions_evaluates_like_each_alone() {
+    use smallmobile_lab3::encode::encode;
+    let net = random_net();
+    let tables: Vec<Table> = (0..4).map(|i| Table::new(2 + i, 4100 + i as u64)).collect();
+    let mut positions = Vec::new();
+    let mut rng = Rng::new(41);
+    for (t, table) in tables.iter().enumerate() {
+        let (mut g, mut k) = (table.game(t as u32), Knowledge::default());
+        random_game(&mut g, &mut k, &mut rng.fork(), |g, k, legal| {
+            if legal.len() > 1 && rng.below(4) == 0 {
+                positions.push((encode(g, k), t));
+            }
+        });
+    }
+    let items: Vec<_> = positions.iter().map(|(e, t)| (e, &tables[*t].map)).collect();
+    let bits = |x: &smallmobile_lab3::net::Eval| -> Vec<u32> {
+        [&x.win[..], &x.gain[..], &x.logits[..]].concat().iter().map(|v| v.to_bits()).collect()
+    };
+    let batch = net.eval_batch(&items);
+    assert_eq!(batch.len(), positions.len());
+    for ((e, t), together) in positions.iter().zip(&batch) {
+        assert_eq!(bits(together), bits(&net.eval(e, &tables[*t].map)), "groupée, une position change");
+    }
+    assert!(positions.len() > 40, "trop peu de positions : {}", positions.len());
+}
+
+#[test]
+fn the_engine_plays_each_game_as_if_alone() {
+    use smallmobile_lab3::az::{Az, Config, Direct, now};
+    use smallmobile_lab3::selfplay::{self, Options};
+    let az = Az::new(Config { iterations: 12 }, std::sync::Arc::new(random_net()), "hasard".into());
+    let dir = std::env::temp_dir().join(format!("smallmobile-engine-{}", std::process::id()));
+    let opts = Options { full_share: 0.5, fast: 4 };
+    let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 12, threads: 2, seed: 17, opts };
+    selfplay::run(&cfg, &az, &dir).unwrap();
+    // chaque partie écrite : sa ligne de journal et ses enregistrements
+    let mut written = std::collections::HashMap::new();
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if !path.to_string_lossy().ends_with(selfplay::SUFFIX) {
+            continue;
+        }
+        let counts: Vec<u32> = std::fs::read(selfplay::games_file(&path))
+            .unwrap()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|&b| u32::from_le_bytes(b))
+            .collect();
+        let lines = std::fs::read_to_string(selfplay::moves_file(&path)).unwrap();
+        let mut bytes = &std::fs::read(&path).unwrap()[..];
+        for (&count, line) in counts.iter().zip(lines.lines()) {
+            let (records, rest) = bytes.split_at(count as usize * selfplay::RECORD);
+            written.insert(line.to_string(), records.to_vec());
+            bytes = rest;
+        }
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(written.len(), cfg.games);
+    for i in 0..cfg.games {
+        let alone = now(selfplay::game(i, &cfg, &az, &Direct)).unwrap();
+        assert_eq!(written.get(&alone.line), Some(&alone.records), "la partie {i} n'est pas celle jouée seule");
+    }
+}
+
+#[test]
 fn a_pick_tells_every_card_that_enters_the_market() {
     // un marché réduit (pioche des peuples vidée, puis des cartes rendues par des déclins) : un choix
     // de peuple le remplit de plusieurs cartes, aux pouvoirs cachés ; deux mondes qui en tirent

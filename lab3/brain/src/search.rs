@@ -22,11 +22,12 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::task::{Context, Poll, Waker};
 
 use smallmobile_kernel::ids::MAX_PLAYERS;
 use smallmobile_kernel::{Game, Map, Phase};
 
-use crate::encode::{Encoded, GLOBAL, NODE, encode};
+use crate::encode::{Encoded, encode};
 use crate::know::{Knowledge, determinize};
 use crate::moves::{self, Choice, Key, Move};
 use crate::net::{Eval, Net};
@@ -193,24 +194,55 @@ fn gumbel(rng: &mut Rng) -> f32 {
     -(-(rng.unit().max(1e-12)).ln()).ln() as f32
 }
 
+/// D'où viennent les évaluations du réseau : tout de suite (`Direct` : le jeu, l'arène), ou
+/// groupées avec celles d'autres parties (la génération de parties du labo) ; la recherche attend
+/// la sienne.
+pub trait Oracle {
+    fn eval(&self, net: &Net, e: &Encoded, map: &Map) -> impl Future<Output = Eval>;
+}
+
+/// Chaque évaluation tout de suite, seule.
+pub struct Direct;
+
+impl Oracle for Direct {
+    fn eval(&self, net: &Net, e: &Encoded, map: &Map) -> impl Future<Output = Eval> {
+        std::future::ready(net.eval(e, map))
+    }
+}
+
+/// Le résultat d'un calcul qui n'attend jamais (évaluations `Direct`).
+pub fn now<F: Future>(f: F) -> F::Output {
+    let mut f = std::pin::pin!(f);
+    match f.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+        Poll::Ready(out) => out,
+        Poll::Pending => unreachable!("une évaluation directe n'attend pas"),
+    }
+}
+
 /// Les évaluations du réseau déjà faites, gardées d'une recherche à la suivante : un `Evals` par
 /// partie (ou par décision). Une même position revient, dans une recherche (coups joués dans un
 /// autre ordre) comme d'une recherche à la suivante (la décision d'après repasse par les positions
 /// que la précédente a explorées) ; le réseau répond toujours pareil à la même entrée sur la même
 /// carte : reprendre sa réponse ne change rien à la recherche, au bit près. Restent celles de la
 /// recherche en cours et de la précédente ; sur une autre carte ou avec un autre réseau, tout est
-/// oublié.
+/// oublié. Chacune tient en quelques centaines d'octets (`Judged`, `fingerprint`) : celles de
+/// plusieurs parties tiennent ensemble dans le cache d'un cœur.
 #[derive(Default)]
 pub struct Evals {
     /// la carte et le réseau des évaluations gardées (adresses)
     owner: (usize, usize),
-    known: HashMap<u64, Vec<Known>>,
+    known: HashMap<u128, Rc<Judged>>,
     /// celles de la recherche précédente, pas encore reprises par la recherche en cours
-    older: HashMap<u64, Vec<Known>>,
+    older: HashMap<u128, Rc<Judged>>,
 }
 
-/// Une position déjà évaluée : son entrée (`Evals::get`) et la réponse du réseau.
-type Known = (Box<[u8]>, Rc<Eval>);
+/// Ce que la recherche garde d'une évaluation : la valeur, et les logits des coups possibles dans
+/// l'ordre de `moves::legal`.
+struct Judged {
+    win: [f32; 5],
+    gain: [f32; 5],
+    logits: Box<[f32]>,
+}
 
 impl Evals {
     /// Une recherche commence : les évaluations de la précédente restent, les plus vieilles s'en
@@ -226,35 +258,57 @@ impl Evals {
         }
     }
 
-    fn get(&mut self, net: &Net, e: &Encoded, map: &Map) -> Rc<Eval> {
-        // ce que lit le réseau
-        let mut key = Vec::with_capacity(2 + e.regions * NODE + GLOBAL);
-        key.extend_from_slice(&[e.regions as u8, e.players as u8]);
-        e.node[..e.regions].iter().for_each(|row| key.extend_from_slice(row));
-        key.extend_from_slice(&e.global);
-        // une empreinte rapide pour trouver la place ; l'entrée entière pour reconnaître la position
-        let hash = key.chunks(8).fold(0u64, |h, c| {
-            let mut w = [0u8; 8];
-            w[..c.len()].copy_from_slice(c);
-            (h.rotate_left(5) ^ u64::from_le_bytes(w)).wrapping_mul(0x517c_c1b7_2722_0a95)
-        });
-        let same = self.known.entry(hash).or_default();
-        if let Some((_, eval)) = same.iter().find(|(k, _)| **k == *key) {
-            return eval.clone();
+    async fn get(&mut self, net: &Net, e: &Encoded, map: &Map, legal: &[Choice], oracle: &impl Oracle) -> Rc<Judged> {
+        let key = fingerprint(e, legal);
+        if let Some(judged) = self.known.get(&key) {
+            return judged.clone();
         }
         // reprise de la recherche précédente : l'évaluation passe dans celles de la recherche en cours
-        if let Some(old) = self.older.get_mut(&hash)
-            && let Some(i) = old.iter().position(|(k, _)| **k == *key)
-        {
-            let found = old.swap_remove(i);
-            let eval = found.1.clone();
-            same.push(found);
-            return eval;
+        if let Some(judged) = self.older.remove(&key) {
+            self.known.insert(key, judged.clone());
+            return judged;
         }
-        let eval = Rc::new(net.eval(e, map));
-        same.push((key.into_boxed_slice(), eval.clone()));
-        eval
+        let eval = oracle.eval(net, e, map).await;
+        let logits = legal.iter().map(|c| eval.logits[c.key as usize]).collect();
+        let judged = Rc::new(Judged { win: eval.win, gain: eval.gain, logits });
+        self.known.insert(key, judged.clone());
+        judged
     }
+}
+
+/// L'empreinte de 128 bits de ce que lit le réseau et des coups possibles : deux hachages à la
+/// façon de wyhash (produits de 128 bits repliés), de graines différentes. Deux positions
+/// différentes ont la même avec une chance de l'ordre de 2⁻¹²⁸.
+fn fingerprint(e: &Encoded, legal: &[Choice]) -> u128 {
+    const SECRET: [u64; 4] = [0xa076_1d64_78bd_642f, 0xe703_7ed1_a0b4_28db, 0x8ebc_6af0_9c88_c6e3, 0x5899_65cc_7537_4cc3];
+    fn mum(a: u64, b: u64) -> u64 {
+        let r = u128::from(a) * u128::from(b);
+        (r as u64) ^ ((r >> 64) as u64)
+    }
+    let mut lanes = [SECRET[0], SECRET[1]];
+    let mut pair = |w0: u64, w1: u64| {
+        lanes[0] = mum(w0 ^ SECRET[2], w1 ^ lanes[0]);
+        lanes[1] = mum(w1 ^ SECRET[3], w0 ^ lanes[1]);
+    };
+    let mut bytes = |bytes: &[u8]| {
+        let (pairs, rest) = bytes.as_chunks::<16>();
+        for p in pairs {
+            let (w0, w1) = p.split_at(8);
+            pair(u64::from_le_bytes(w0.try_into().unwrap()), u64::from_le_bytes(w1.try_into().unwrap()));
+        }
+        if !rest.is_empty() {
+            let mut t = [0u8; 16];
+            t[..rest.len()].copy_from_slice(rest);
+            let (w0, w1) = t.split_at(8);
+            pair(u64::from_le_bytes(w0.try_into().unwrap()), u64::from_le_bytes(w1.try_into().unwrap()) ^ rest.len() as u64);
+        }
+    };
+    bytes(&[e.regions as u8, e.players as u8]);
+    e.node[..e.regions].iter().for_each(|row| bytes(row));
+    bytes(&e.global);
+    let keys: Vec<u8> = legal.iter().flat_map(|c| c.key.to_le_bytes()).collect();
+    bytes(&keys);
+    (u128::from(mum(lanes[0], SECRET[1])) << 64) | u128::from(mum(lanes[1], SECRET[0]))
 }
 
 /// Le résultat d'une recherche.
@@ -306,15 +360,23 @@ impl Az {
     }
 
     /// Une position nouvelle : ses coups et leurs logits, et la valeur que lui donne le réseau.
-    fn expand(&self, evals: &mut Evals, w: &Game, k: &Knowledge, legal: &[Choice]) -> (Node, Value) {
-        let eval = evals.get(&self.net, &encode(w, k), w.map);
-        let value = self.judge(w, &eval);
+    async fn expand(
+        &self,
+        evals: &mut Evals,
+        w: &Game<'_>,
+        k: &Knowledge,
+        legal: &[Choice],
+        oracle: &impl Oracle,
+    ) -> (Node, Value) {
+        let judged = evals.get(&self.net, &encode(w, k), w.map, legal, oracle).await;
+        let value = self.judge(w, &judged);
         let edges = legal
             .iter()
-            .map(|c| Edge {
+            .zip(&judged.logits)
+            .map(|(c, &logit)| Edge {
                 key: c.key,
                 mv: c.mv,
-                logit: eval.logits[c.key as usize],
+                logit,
                 visits: 0,
                 total: [0.0; VALUE],
                 children: Vec::new(),
@@ -326,7 +388,7 @@ impl Az {
     }
 
     /// La valeur que le réseau donne à une position (joueurs réels).
-    fn judge(&self, w: &Game, eval: &Eval) -> Value {
+    fn judge(&self, w: &Game, eval: &Judged) -> Value {
         let s = &w.state;
         let me = s.actor().expect("un joueur doit agir");
         let n = s.player_count();
@@ -364,7 +426,8 @@ impl Az {
 
     /// Une recherche de `cfg.iterations` itérations. `explore` : bruit de Gumbel à la racine
     /// (auto-apprentissage) ; sans lui, la recherche ne dépend du hasard que par les mondes possibles.
-    /// `evals` : les évaluations gardées de la partie (ou de la décision).
+    /// `evals` : les évaluations gardées de la partie (ou de la décision). Chaque évaluation tout de
+    /// suite (`Direct`).
     pub fn search(&self, root: &Game, k: &Knowledge, rng: &mut Rng, explore: bool, evals: &mut Evals) -> Searched {
         self.search_with(root, k, rng, self.cfg.iterations, explore, evals)
     }
@@ -377,6 +440,21 @@ impl Az {
         iterations: usize,
         explore: bool,
         evals: &mut Evals,
+    ) -> Searched {
+        now(self.run(root, k, rng, iterations, explore, evals, &Direct))
+    }
+
+    /// La recherche, qui attend chaque évaluation du réseau de `oracle`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run(
+        &self,
+        root: &Game<'_>,
+        k: &Knowledge,
+        rng: &mut Rng,
+        iterations: usize,
+        explore: bool,
+        evals: &mut Evals,
+        oracle: &impl Oracle,
     ) -> Searched {
         let legal = moves::legal(root, k);
         if legal.len() == 1 {
@@ -391,7 +469,7 @@ impl Az {
             };
         }
         evals.next(&self.net, root.map);
-        let (root_node, _) = self.expand(evals, root, k, &legal);
+        let (root_node, _) = self.expand(evals, root, k, &legal, oracle).await;
         let mut nodes = vec![root_node];
         let noise: Vec<f32> = legal.iter().map(|_| if explore { gumbel(rng) } else { 0.0 }).collect();
         let schedule = considered_visits(CONSIDERED.min(legal.len()), iterations);
@@ -435,7 +513,7 @@ impl Az {
                     node = child;
                     continue;
                 }
-                let (child, value) = self.expand(evals, &w, &kw, &legal);
+                let (child, value) = self.expand(evals, &w, &kw, &legal, oracle).await;
                 let id = nodes.len() as u32;
                 nodes.push(child);
                 nodes[node as usize].edges[e].children.push((hash, id));

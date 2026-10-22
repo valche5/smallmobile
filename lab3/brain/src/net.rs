@@ -224,23 +224,36 @@ impl Net {
     /// Évalue une position encodée ; `adj(i)` : voisines de la région `i`. Le calcul le plus rapide
     /// que permet le processeur : bf16 (`eval_bf16`), sinon `eval_f32`.
     pub fn eval_with<'a>(&self, e: &Encoded, adj: impl Fn(usize) -> &'a [u8]) -> Eval {
+        self.eval_batch(&[One { e, adj }]).pop().expect("une évaluation")
+    }
+
+    /// Évalue plusieurs positions, couche après couche : chaque couche passe sur toutes les
+    /// positions avant la suivante, si bien que ses poids restent dans le cache du cœur d'une
+    /// position à l'autre (le réseau entier n'y tient pas). Chaque position reçoit les mêmes
+    /// opérations, dans le même ordre, qu'évaluée seule : mêmes résultats au bit près. Le calcul le
+    /// plus rapide que permet le processeur, comme `eval_with`.
+    pub fn eval_batch<P: Position>(&self, items: &[P]) -> Vec<Eval> {
         #[cfg(target_arch = "x86_64")]
         if bf16::available() && self.bf16_ready() {
             // SAFETY: le processeur a AVX2, FMA et AVX-512 BF16 (vérifié juste avant)
-            return unsafe { self.eval_avx512_bf16(e, adj) };
+            return unsafe { self.eval_avx512_bf16(items) };
         }
-        self.eval_f32(e, adj)
+        self.eval_f32_batch(items)
     }
 
     /// Le calcul en `f32` : avec AVX2 et FMA si le processeur les a. Celui que `lab3/py/check.py`
     /// compare à PyTorch.
     pub fn eval_f32<'a>(&self, e: &Encoded, adj: impl Fn(usize) -> &'a [u8]) -> Eval {
+        self.eval_f32_batch(&[One { e, adj }]).pop().expect("une évaluation")
+    }
+
+    fn eval_f32_batch<P: Position>(&self, items: &[P]) -> Vec<Eval> {
         #[cfg(target_arch = "x86_64")]
         if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
             // SAFETY: le processeur a AVX2 et FMA (vérifié juste avant)
-            return unsafe { self.eval_avx2(e, adj) };
+            return unsafe { self.eval_avx2(items) };
         }
-        self.eval_generic::<false, false>(e, adj)
+        self.eval_generic::<false, false, P>(items)
     }
 
     /// Le calcul en bf16 si le processeur le permet (AVX-512 BF16), sinon `None`.
@@ -248,7 +261,7 @@ impl Net {
         #[cfg(target_arch = "x86_64")]
         if bf16::available() && self.bf16_ready() {
             // SAFETY: le processeur a AVX2, FMA et AVX-512 BF16 (vérifié juste avant)
-            return Some(unsafe { self.eval_avx512_bf16(e, adj) });
+            return unsafe { self.eval_avx512_bf16(&[One { e, adj }]) }.pop();
         }
         let _ = (e, adj);
         None
@@ -258,14 +271,14 @@ impl Net {
     /// multiplications matricielles ne fusionnent pas multiplication et addition, d'où de petits
     /// écarts d'arrondi).
     pub fn eval_portable<'a>(&self, e: &Encoded, adj: impl Fn(usize) -> &'a [u8]) -> Eval {
-        self.eval_generic::<false, false>(e, adj)
+        self.eval_generic::<false, false, _>(&[One { e, adj }]).pop().expect("une évaluation")
     }
 
     /// La référence du calcul en bf16, sans instruction spéciale : mêmes arrondis et mêmes sommes,
     /// dans le même ordre (`bf16::gemm_reference`).
     pub fn eval_portable_bf16<'a>(&self, e: &Encoded, adj: impl Fn(usize) -> &'a [u8]) -> Eval {
         assert!(self.bf16_ready(), "réseau sans calcul bf16 (largeur)");
-        self.eval_generic::<false, true>(e, adj)
+        self.eval_generic::<false, true, _>(&[One { e, adj }]).pop().expect("une évaluation")
     }
 
     /// Les produits en bf16 demandent une largeur multiple de 32 (conversion 32 nombres à la fois).
@@ -277,103 +290,148 @@ impl Net {
     /// reçoit les mêmes opérations, dans le même ordre (`avx2`).
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2,fma")]
-    unsafe fn eval_avx2<'a>(&self, e: &Encoded, adj: impl Fn(usize) -> &'a [u8]) -> Eval {
-        self.eval_generic::<true, false>(e, adj)
+    unsafe fn eval_avx2<P: Position>(&self, items: &[P]) -> Vec<Eval> {
+        self.eval_generic::<true, false, P>(items)
     }
 
     /// Le calcul AVX2, avec les grands produits en bf16 (AVX-512 BF16).
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2,fma,avx512f,avx512bf16")]
-    unsafe fn eval_avx512_bf16<'a>(&self, e: &Encoded, adj: impl Fn(usize) -> &'a [u8]) -> Eval {
-        self.eval_generic::<true, true>(e, adj)
+    unsafe fn eval_avx512_bf16<P: Position>(&self, items: &[P]) -> Vec<Eval> {
+        self.eval_generic::<true, true, P>(items)
     }
 
     /// `AVX2` : le processeur a AVX2 et FMA. Les multiplications matricielles des couches utilisent
     /// alors FMA (`gemm_dispatch`), le reste des multiplications et additions séparées, comme sans.
     /// `BF16` : les trois grands produits de chaque couche en bf16 (`product`), avec AVX-512 BF16 si
-    /// `AVX2`, sinon par leur référence.
+    /// `AVX2`, sinon par leur référence. Les positions avancent ensemble, couche après couche
+    /// (`eval_batch`) ; chacune a ses lignes de régions `h` et son vecteur de partie `g`, le reste
+    /// est de la place de travail commune.
     #[inline(always)]
-    fn eval_generic<'a, const AVX2: bool, const BF16: bool>(
-        &self,
-        e: &Encoded,
-        adj: impl Fn(usize) -> &'a [u8],
-    ) -> Eval {
+    fn eval_generic<const AVX2: bool, const BF16: bool, P: Position>(&self, items: &[P]) -> Vec<Eval> {
         let hd = self.hidden;
-        let r = e.regions;
-        let mut h = vec![0.0f32; r * hd];
+        let mut hs = Vec::with_capacity(items.len());
+        let mut gs = Vec::with_capacity(items.len());
         let mut x = [0.0f32; GLOBAL];
-        for i in 0..r {
-            let mut xn = [0.0f32; NODE];
-            for ((x, &v), &sc) in xn.iter_mut().zip(&e.node[i]).zip(&self.node_scale) {
+        for p in items {
+            let (e, r) = (p.encoded(), p.encoded().regions);
+            let mut h = vec![0.0f32; r * hd];
+            for i in 0..r {
+                let mut xn = [0.0f32; NODE];
+                for ((x, &v), &sc) in xn.iter_mut().zip(&e.node[i]).zip(&self.node_scale) {
+                    *x = v as f32 * sc;
+                }
+                self.node_in.apply::<AVX2>(&xn, &mut h[i * hd..(i + 1) * hd]);
+            }
+            for ((x, &v), &sc) in x.iter_mut().zip(&e.global).zip(&self.global_scale) {
                 *x = v as f32 * sc;
             }
-            self.node_in.apply::<AVX2>(&xn, &mut h[i * hd..(i + 1) * hd]);
+            let mut g = vec![0.0f32; hd];
+            self.glob_in.apply::<AVX2>(&x, &mut g);
+            hs.push(h);
+            gs.push(g);
         }
-        for ((x, &v), &sc) in x.iter_mut().zip(&e.global).zip(&self.global_scale) {
-            *x = v as f32 * sc;
-        }
-        let mut g = vec![0.0f32; hd];
-        self.glob_in.apply::<AVX2>(&x, &mut g);
 
-        let mut agg = vec![0.0f32; r * hd];
-        let mut mid = vec![0.0f32; r * hd];
-        let mut add = vec![0.0f32; r * hd];
+        let mut agg = vec![0.0f32; REGIONS * hd];
+        let mut mid = vec![0.0f32; REGIONS * hd];
+        let mut add = vec![0.0f32; REGIONS * hd];
         let mut cat = vec![0.0f32; 3 * hd];
         let mut gmid = vec![0.0f32; hd];
         let mut gadd = vec![0.0f32; hd];
         let mut gpart = vec![0.0f32; hd];
         let mut packed = Vec::new();
         for layer in &self.layers {
-            // moyenne des voisines
-            for i in 0..r {
-                neighbours::<AVX2>(&h, hd, adj(i), &mut agg[i * hd..(i + 1) * hd]);
+            for ((p, h), g) in items.iter().zip(&mut hs).zip(&mut gs) {
+                let r = p.encoded().regions;
+                let (agg, mid, add) = (&mut agg[..r * hd], &mut mid[..r * hd], &mut add[..r * hd]);
+                // moyenne des voisines
+                for i in 0..r {
+                    neighbours::<AVX2>(h, hd, p.adj(i), &mut agg[i * hd..(i + 1) * hd]);
+                }
+                // n1([h, a, g]) : la part de g est la même pour toutes les régions
+                gpart.copy_from_slice(&layer.n1.b);
+                accumulate_rows::<AVX2>(&layer.n1, 2 * hd, g, &mut gpart);
+                for i in 0..r {
+                    mid[i * hd..(i + 1) * hd].copy_from_slice(&gpart);
+                }
+                product::<AVX2, BF16>(h, r, hd, &layer.n1, 0, mid, &mut packed);
+                product::<AVX2, BF16>(agg, r, hd, &layer.n1, hd, mid, &mut packed);
+                relu(mid);
+                for i in 0..r {
+                    add[i * hd..(i + 1) * hd].copy_from_slice(&layer.n2.b);
+                }
+                product::<AVX2, BF16>(mid, r, hd, &layer.n2, 0, add, &mut packed);
+                h.iter_mut().zip(add.iter()).for_each(|(a, b)| *a += b);
+                cat[..hd].copy_from_slice(g);
+                let (mean, max) = cat[hd..].split_at_mut(hd);
+                pool(h, r, hd, mean, max);
+                layer.g1.apply::<AVX2>(&cat, &mut gmid);
+                relu(&mut gmid);
+                layer.g2.apply::<AVX2>(&gmid, &mut gadd);
+                g.iter_mut().zip(&gadd).for_each(|(a, b)| *a += b);
             }
-            // n1([h, a, g]) : la part de g est la même pour toutes les régions
-            gpart.copy_from_slice(&layer.n1.b);
-            accumulate_rows::<AVX2>(&layer.n1, 2 * hd, &g, &mut gpart);
-            for i in 0..r {
-                mid[i * hd..(i + 1) * hd].copy_from_slice(&gpart);
-            }
-            product::<AVX2, BF16>(&h, r, hd, &layer.n1, 0, &mut mid, &mut packed);
-            product::<AVX2, BF16>(&agg, r, hd, &layer.n1, hd, &mut mid, &mut packed);
-            relu(&mut mid);
-            for i in 0..r {
-                add[i * hd..(i + 1) * hd].copy_from_slice(&layer.n2.b);
-            }
-            product::<AVX2, BF16>(&mid, r, hd, &layer.n2, 0, &mut add, &mut packed);
-            h.iter_mut().zip(&add).for_each(|(a, b)| *a += b);
-            cat[..hd].copy_from_slice(&g);
+        }
+
+        let mut evals = Vec::with_capacity(items.len());
+        for ((p, h), g) in items.iter().zip(&hs).zip(&gs) {
+            let (e, r) = (p.encoded(), p.encoded().regions);
+            let logits = self.policy.logits::<AVX2>(g, h, r, hd);
+
+            cat[..hd].copy_from_slice(g);
             let (mean, max) = cat[hd..].split_at_mut(hd);
-            pool(&h, r, hd, mean, max);
-            layer.g1.apply::<AVX2>(&cat, &mut gmid);
+            pool(h, r, hd, mean, max);
+            self.val1.apply::<AVX2>(&cat[..2 * hd], &mut gmid);
             relu(&mut gmid);
-            layer.g2.apply::<AVX2>(&gmid, &mut gadd);
-            g.iter_mut().zip(&gadd).for_each(|(a, b)| *a += b);
+            let mut v = [0.0f32; 10];
+            self.val2.apply::<AVX2>(&gmid, &mut v);
+            let mut win = [0.0f32; 5];
+            let top = v[..e.players].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let mut sum = 0.0;
+            for q in 0..e.players {
+                win[q] = (v[q] - top).exp();
+                sum += win[q];
+            }
+            win.iter_mut().for_each(|w| *w /= sum);
+            let mut gain = [0.0f32; 5];
+            for q in 0..e.players {
+                gain[q] = v[5 + q] * GAIN_SCALE;
+            }
+            evals.push(Eval { win, gain, logits });
         }
-        let mut mid = gmid;
+        evals
+    }
+}
 
-        let logits = self.policy.logits::<AVX2>(&g, &h, r, hd);
+/// Une position à évaluer (`Net::eval_batch`) : son encodage et les voisines de chaque région.
+pub trait Position {
+    fn encoded(&self) -> &Encoded;
+    fn adj(&self, region: usize) -> &[u8];
+}
 
-        cat[..hd].copy_from_slice(&g);
-        let (mean, max) = cat[hd..].split_at_mut(hd);
-        pool(&h, r, hd, mean, max);
-        self.val1.apply::<AVX2>(&cat[..2 * hd], &mut mid);
-        relu(&mut mid);
-        let mut v = [0.0f32; 10];
-        self.val2.apply::<AVX2>(&mid, &mut v);
-        let mut win = [0.0f32; 5];
-        let top = v[..e.players].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        let mut sum = 0.0;
-        for q in 0..e.players {
-            win[q] = (v[q] - top).exp();
-            sum += win[q];
-        }
-        win.iter_mut().for_each(|w| *w /= sum);
-        let mut gain = [0.0f32; 5];
-        for q in 0..e.players {
-            gain[q] = v[5 + q] * GAIN_SCALE;
-        }
-        Eval { win, gain, logits }
+/// Une position et la carte où elle se joue.
+impl Position for (&Encoded, &Map) {
+    fn encoded(&self) -> &Encoded {
+        self.0
+    }
+
+    fn adj(&self, region: usize) -> &[u8] {
+        &self.1.regions[region].adj
+    }
+}
+
+/// Une position seule, ses voisines données par une fonction (`eval_with`).
+struct One<'a, 'e, F: Fn(usize) -> &'a [u8]> {
+    e: &'e Encoded,
+    adj: F,
+}
+
+impl<'a, F: Fn(usize) -> &'a [u8]> Position for One<'a, '_, F> {
+    fn encoded(&self) -> &Encoded {
+        self.e
+    }
+
+    fn adj(&self, region: usize) -> &[u8] {
+        (self.adj)(region)
     }
 }
 

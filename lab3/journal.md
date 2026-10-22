@@ -36,10 +36,23 @@ Celui de lab2 (voir son journal), sauf :
 - **Cœurs** : 48 de parties et 16 d'entraînement en même temps (mesures de lab2 pour 64x4).
 - **Témoin de l'arène** : l'Expert de lab2 (`lab2:net=lab2/nets/….bin,n=…`, `lab2/brain`), tel
   qu'il joue dans le jeu ; plus de témoin lab1.
-- **Évaluations gardées d'une recherche à la suivante** (`search::Evals`, une par partie
-  d'auto-jeu, une par décision ailleurs) : la décision d'après repasse par les positions que la
-  précédente a explorées. Mêmes parties à l'octet près ; sur un cœur de mini, 4 parties à 4
-  joueurs avec le c060 de lab2 : 21,0 s → 14,8 s (22 octobre).
+- **Moteur de génération des parties** (`selfplay::run`, `batch`, demande de l'utilisateur :
+  massivement parallèle, attentif aux caches du processeur). Chaque fil mène `CONCURRENT`
+  parties à la fois ; la recherche attend ses évaluations (`search::Oracle`) : chaque partie
+  avance jusqu'à sa prochaine évaluation, puis le fil les évalue toutes ensemble, couche après
+  couche (`Net::eval_batch` : les poids d'une couche restent dans le cache du cœur d'une
+  position à l'autre). Les évaluations sont gardées d'une recherche à la suivante
+  (`search::Evals`, une par partie : la décision d'après repasse par les positions que la
+  précédente a explorées), chacune en quelques centaines d'octets (empreinte de 128 bits,
+  valeur, logits des coups possibles). Tout ce que touche un fil lui appartient ; seuls les
+  poids, en lecture, sont partagés. Chaque partie est la même, à l'octet près, que jouée seule
+  (tests ; 1 024 parties comparées sur AWS). Le jeu et l'arène gardent une évaluation à la
+  fois (`search::Direct`).
+- **Vitesse** (22 octobre, c060 de lab2, n = 200, 4 joueurs, recette de l'auto-jeu ; ancien
+  moteur : celui de lab2) : sur un cœur de mini, 4 parties en 21,0 s → 14,8 s (évaluations
+  gardées seules) → 14,6 s ; sur `c7a.16xlarge`, 16 parties sur un cœur 33,6 s → 24,1 s, 1 024
+  parties sur 64 cœurs 49,9 s → 34,0 s (1,47 fois plus vite). À 64 cœurs, chaque cœur va 1,4 à
+  1,5 fois moins vite que seul : les cœurs se gênent dans les caches et la mémoire partagés.
 - Retiré : `size.py` (mesure des tailles de réseau de lab2).
 
 ## Mesure

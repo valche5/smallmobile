@@ -24,7 +24,9 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll, Waker};
 use std::time::Instant;
 
 use smallmobile_kernel::ids::MAX_PLAYERS;
@@ -32,7 +34,8 @@ use smallmobile_kernel::state::Occupant;
 use smallmobile_kernel::wire::{self, Writer};
 use smallmobile_kernel::{Action, Game, Phase};
 
-use crate::az::{Az, Evals, Searched};
+use crate::az::{Az, Evals, Oracle, Searched};
+use crate::batch::Batch;
 use crate::encode::{Encoded, GLOBAL, NODE, REGIONS, encode, relative};
 use crate::know::Knowledge;
 use crate::moves::{self, KEYS};
@@ -126,14 +129,16 @@ pub struct Played {
 }
 
 /// Joue une partie ; écrit un enregistrement par position cherchée à fond (plus d'un coup
-/// possible).
-pub fn play(
+/// possible). Les évaluations du réseau viennent de `oracle` (`Direct` : une partie seule ; `Batch` :
+/// avec les autres parties du fil, `run`).
+pub async fn play(
     table: &Table,
     seed: u32,
     az: &Az,
     opts: Options,
     rng: &mut Rng,
     out: &mut impl Write,
+    oracle: &impl Oracle,
 ) -> std::io::Result<Played> {
     let mut g = table.game(seed);
     let mut k = Knowledge::default();
@@ -146,9 +151,9 @@ pub fn play(
         let mv = if legal.len() == 1 {
             legal[0].mv
         } else if rng.unit() >= opts.full_share {
-            az.search_with(&g, &k, rng, opts.fast, true, &mut evals).mv
+            az.run(&g, &k, rng, opts.fast, true, &mut evals, oracle).await.mv
         } else {
-            let s = az.search(&g, &k, rng, true, &mut evals);
+            let s = az.run(&g, &k, rng, az.cfg.iterations, true, &mut evals, oracle).await;
             let mut policy = [ILLEGAL; KEYS];
             for &(key, p) in &s.policy {
                 policy[key as usize] = (p * PROBABILITY).round() as u16;
@@ -358,8 +363,37 @@ pub fn moves_file(path: &Path) -> std::path::PathBuf {
     name.into()
 }
 
+/// Parties que mène chaque fil en même temps : leurs positions à évaluer forment un groupe
+/// (`Batch`), évalué couche après couche. Un fil garde tout ce qu'il touche (parties, évaluations
+/// gardées, groupe) : rien de modifiable n'est partagé entre les cœurs, hormis le compteur des
+/// parties (une fois par partie).
+const CONCURRENT: usize = 8;
+
+/// Une partie finie : ses positions (enregistrements) et sa ligne de journal (`GameLog`).
+pub struct Finished {
+    pub players: usize,
+    pub positions: usize,
+    pub records: Vec<u8>,
+    pub line: String,
+}
+
+/// La partie `i` de l'auto-apprentissage `cfg` (donne, carte et hasard tirés de `cfg.seed` et `i`).
+pub async fn game(i: usize, cfg: &Config, az: &Az, oracle: &impl Oracle) -> std::io::Result<Finished> {
+    let players = cfg.players[i % cfg.players.len()];
+    let deal = mix(cfg.seed, i as u64);
+    let (map_seed, seed) = (deal % 1_000_000_007, mix(deal, 1) as u32);
+    let table = Table::new(players, map_seed);
+    let mut rng = Rng::new(mix(deal, 99));
+    let mut records = Vec::new();
+    let played = play(&table, seed, az, cfg.opts, &mut rng, &mut records, oracle).await?;
+    let line = GameLog::new(deal, map_seed, seed, &table, &played).line();
+    Ok(Finished { players, positions: played.positions, records, line })
+}
+
 /// Des parties d'entraînement en parallèle, un fichier par fil dans `dir` (avec `games_file` et
-/// `moves_file`).
+/// `moves_file`). Chaque fil mène `CONCURRENT` parties à la fois : chacune avance jusqu'à sa
+/// prochaine évaluation, puis le fil les évalue toutes ensemble. Chaque partie est la même, au bit
+/// près, que jouée seule (`Direct`).
 pub fn run(cfg: &Config, az: &Az, dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let next = AtomicUsize::new(0);
@@ -374,28 +408,45 @@ pub fn run(cfg: &Config, az: &Az, dir: &Path) -> std::io::Result<()> {
                 let mut out = BufWriter::new(File::create(&path)?);
                 let mut games = BufWriter::new(File::create(games_file(&path))?);
                 let mut logs = BufWriter::new(File::create(moves_file(&path))?);
+                let batch = Batch::new(&az.net);
+                type Game<'a> = Pin<Box<dyn Future<Output = std::io::Result<Finished>> + 'a>>;
+                let mut slots: Vec<Option<(usize, Game)>> = (0..CONCURRENT).map(|_| None).collect();
+                let mut cx = Context::from_waker(Waker::noop());
                 loop {
-                    let i = next.fetch_add(1, Ordering::Relaxed);
-                    if i >= cfg.games {
+                    // chaque partie avance jusqu'à sa prochaine évaluation ; une partie finie laisse
+                    // sa place à la suivante
+                    for slot in &mut slots {
+                        loop {
+                            if slot.is_none() {
+                                let i = next.fetch_add(1, Ordering::Relaxed);
+                                if i >= cfg.games {
+                                    break;
+                                }
+                                *slot = Some((i, Box::pin(game(i, cfg, az, &batch))));
+                            }
+                            let (i, running) = slot.as_mut().expect("une partie");
+                            let Poll::Ready(finished) = running.as_mut().poll(&mut cx) else { break };
+                            let (i, finished) = (*i, finished?);
+                            *slot = None;
+                            out.write_all(&finished.records)?;
+                            games.write_all(&(finished.positions as u32).to_le_bytes())?;
+                            writeln!(logs, "{}", finished.line)?;
+                            let count = finished.positions;
+                            let total = positions.fetch_add(count, Ordering::Relaxed) + count;
+                            let secs = start.elapsed().as_secs_f64();
+                            eprintln!(
+                                "partie {}/{} ({} j.) : {count} positions, {total} en tout, {:.0} positions/s",
+                                i + 1,
+                                cfg.games,
+                                finished.players,
+                                total as f64 / secs
+                            );
+                        }
+                    }
+                    if slots.iter().all(Option::is_none) {
                         break;
                     }
-                    let n = cfg.players[i % cfg.players.len()];
-                    let deal = mix(cfg.seed, i as u64);
-                    let (map_seed, seed) = (deal % 1_000_000_007, mix(deal, 1) as u32);
-                    let table = Table::new(n, map_seed);
-                    let mut rng = Rng::new(mix(deal, 99));
-                    let played = play(&table, seed, az, cfg.opts, &mut rng, &mut out)?;
-                    let count = played.positions;
-                    games.write_all(&(count as u32).to_le_bytes())?;
-                    writeln!(logs, "{}", GameLog::new(deal, map_seed, seed, &table, &played).line())?;
-                    let total = positions.fetch_add(count, Ordering::Relaxed) + count;
-                    let secs = start.elapsed().as_secs_f64();
-                    eprintln!(
-                        "partie {}/{} ({n} j.) : {count} positions, {total} en tout, {:.0} positions/s",
-                        i + 1,
-                        cfg.games,
-                        total as f64 / secs
-                    );
+                    batch.evaluate();
                 }
                 out.flush()?;
                 logs.flush()?;
