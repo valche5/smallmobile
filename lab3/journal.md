@@ -98,8 +98,8 @@ joue qu'à sa taille, et se compare à lab2 à cette taille seulement :
    4 joueurs (voir Résultats).
 2. Spécialiser le généraliste : c060 de lab2 continué sur des parties à 4 joueurs, jusqu'au
    cycle 20, avec le nouveau moteur. Premier essai arrêté au pas 3 le 22 octobre (fenêtre d'un
-   cycle, le réseau baissait : voir Résultats) ; relance avec la fenêtre remplie d'abord par
-   c000 (cycles 1 et 2 de l'essai repris : mêmes parties).
+   cycle, le réseau baissait : voir Résultats) ; relancé le 22 octobre avec la fenêtre remplie
+   d'abord par c000 (cycles 1 et 2 de l'essai repris : mêmes parties).
 3. Selon le résultat : les autres nombres de joueurs, un Expert du jeu qui choisit son réseau
    d'après le nombre de joueurs.
 4. Le réseau sur GPU (demande de l'utilisateur, 22 octobre) : le moteur groupe déjà les positions
@@ -131,9 +131,9 @@ la fenêtre de chaque pas.
   validation. Le c060 apprenait sur 11 cycles (275 000 parties), 0,36 passe par pas.
 - La fenêtre n'aurait pris un deuxième cycle qu'au pas 5, et 5 au pas 20. D'où la relance avec
   la fenêtre remplie avant le premier entraînement (Système actuel).
-- Réseaux et arènes : `lab3/runs/p4-try1`. Les parties des cycles 1 et 2 (jouées par c000)
-  resservent à la relance ; celles des cycles 3 et 4 (c001 et c002) sont à effacer du bucket
-  avant.
+- Réseaux et arènes : `lab3/runs/p4-try1` sur mini. Les parties des cycles 1 et 2 (jouées par
+  c000) resservent à la relance ; celles des cycles 3 et 4 (c001 et c002), périmées, effacées du
+  bucket.
 
 ### Boucle à 4 joueurs depuis zéro (22 octobre)
 
