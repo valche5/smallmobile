@@ -34,8 +34,9 @@
 # calcul relancé reparte de là : écrire chaque morceau ailleurs, le déplacer dans le dossier gardé
 # une fois complet, et sauter les morceaux déjà présents.
 #
-# Machines à GPU NVIDIA (TYPE g4dn, g5, g6… : `gpu_type`) : pilotes, PyTorch pour CUDA et option `gpu` du
-# labo (quota Spot « All G and VT » à demander à AWS, à 0 au départ).
+# Machines à GPU NVIDIA (TYPE g4dn, g5, g6… : `gpu_type`) : pilotes et PyTorch pour l'entraînement
+# CUDA ; compilation Rust avec les options par défaut du labo. L'auto-jeu Vulkan demande aussi un
+# glslc et un chargeur Vulkan compatibles sur l'image (quota Spot « All G and VT » à demander à AWS).
 #
 # Réglages (variables d'environnement) : LAB, TYPE, DISK, MAX_HOURS, IDLE_MIN, MAX_PRICE ($/h), SPOT=1
 # (Spot uniquement, plafond de 1 $/h et durée maximale de 12 h), SAVE, SAVE_MIN (10 min).
@@ -69,8 +70,8 @@ need_lab() { [[ "$LAB" =~ ^lab[0-9]+$ ]] && [ -d "$LAB" ] || die "LAB=labN : le 
 state() { cat "$STATE/$1" 2>/dev/null || true; }
 IP() { state ip; }
 # Les machines à GPU NVIDIA : image d'AWS avec les pilotes (Ubuntu 24.04, utilisateur ubuntu) ; le
-# labo y est compilé avec son option `gpu` s'il en a une, avec PyTorch pour CUDA
-# (`labN/py/setup.sh cuda`).
+# labo y est compilé avec ses options par défaut, avec PyTorch pour l'entraînement CUDA
+# (`labN/py/setup.sh cuda`). Les machines sans GPU désactivent les options par défaut.
 gpu_type() { [[ "$1" =~ ^(g4dn|g5|g6|g6e|gr6|p[0-9]+[a-z]*)\. ]]; }
 # l'utilisateur de la machine en cours (sinon d'une machine du type TYPE)
 login() {
@@ -294,10 +295,10 @@ cmd_push() { # tous les labos (membres de l'espace de travail Rust), sans leurs 
   if compgen -G "$LAB/runs/*.sh" > /dev/null; then
     tar -czf - "$LAB"/runs/*.sh | on 'tar -xzf - -C smallmobile'
   fi
-  local setup=cpu features=""
+  local setup=cpu features="--no-default-features"
   if gpu_type "$(state type)"; then
     setup=cuda
-    if grep -q '^gpu = ' "$LAB/Cargo.toml"; then features="--features gpu"; fi
+    features=""
   fi
   say "compilation de $LAB et environnement Python ($setup)"
   on "cd smallmobile && mkdir -p $LAB/runs $LAB/data &&

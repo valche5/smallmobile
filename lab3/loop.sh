@@ -19,8 +19,8 @@
 # Parties : lab3/data/pP/cNNN ; réseaux : lab3/runs/pP/cNNN.bin ; arènes
 # lab3/runs/pP/arena-cNNN-{hard,normal}.tsv ; journal lab3/runs/pP/log.txt (durée de chaque
 # étape). Sur AWS : --save lab3/data/pP,lab3/runs/pP. Réglages (essais sur mini) : GAMES, DEALS,
-# PLAY, TRAIN ; DEVICE=gpu : le réseau des parties sur GPU (`lab3 selfplay --device gpu`, machine à
-# GPU de labtools/cloud.sh), l'entraînement aussi (train.py prend le GPU quand il y en a un).
+# PLAY, TRAIN ; DEVICE=vulkan : le réseau des parties sur GPU (`lab3 selfplay --device vulkan`).
+# L'entraînement Python prend le GPU quand il y en a un, indépendamment de DEVICE.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 P=${1:?le nombre de joueurs}

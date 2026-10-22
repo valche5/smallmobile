@@ -442,42 +442,6 @@ fn a_batch_of_positions_evaluates_like_each_alone() {
     assert!(positions.len() > 40, "trop peu de positions : {}", positions.len());
 }
 
-#[cfg(feature = "gpu")]
-#[test]
-fn the_gpu_evaluates_like_the_processor() {
-    use smallmobile_lab3::encode::encode;
-    use smallmobile_lab3::gpu::Gpu;
-    let path = std::env::temp_dir().join(format!("smallmobile-gpu-{}.bin", std::process::id()));
-    std::fs::write(&path, random_net_bytes()).unwrap();
-    let net = random_net();
-    let (gpu, device) = Gpu::start(&path).unwrap();
-    std::fs::remove_file(&path).unwrap();
-    // bf16 sur GPU ; f32 sur processeur, sommes dans un autre ordre
-    let tolerance = if device.starts_with("GPU") { 0.1 } else { 1e-3 };
-    let tables: Vec<Table> = (0..4).map(|i| Table::new(2 + i, 4300 + i as u64)).collect();
-    let mut positions = Vec::new();
-    let mut rng = Rng::new(43);
-    for (t, table) in tables.iter().enumerate() {
-        let (mut g, mut k) = (table.game(t as u32), Knowledge::default());
-        random_game(&mut g, &mut k, &mut rng.fork(), |g, k, legal| {
-            if legal.len() > 1 && rng.below(4) == 0 {
-                positions.push((encode(g, k), t, legal.iter().map(|c| c.key as usize).collect::<Vec<_>>()));
-            }
-        });
-    }
-    let items: Vec<_> = positions.iter().map(|(e, t, _)| (e, &tables[*t].map)).collect();
-    let far = gpu.submit(&items, positions.iter().map(|(e, _, _)| e.players)).wait();
-    let near = net.eval_batch(&items);
-    let mut worst = 0.0f32;
-    for ((a, b), (_, _, legal)) in far.iter().zip(&near).zip(&positions) {
-        let pairs = a.win.iter().zip(&b.win).chain(a.gain.iter().zip(&b.gain));
-        let logits = legal.iter().map(|&k| (&a.logits[k], &b.logits[k]));
-        worst = pairs.chain(logits).map(|(x, y)| (x - y).abs()).fold(worst, f32::max);
-    }
-    assert!(worst < tolerance, "{device} : écart {worst}");
-    assert!(positions.len() > 40, "trop peu de positions : {}", positions.len());
-}
-
 #[cfg(feature = "vulkan")]
 #[test]
 fn vulkan_evaluates_like_the_processor() {
@@ -496,7 +460,7 @@ fn vulkan_check(bytes: Vec<u8>, seed: u64) {
     let path = std::env::temp_dir().join(format!("smallmobile-vulkan-{}-{seed}.bin", std::process::id()));
     std::fs::write(&path, &bytes).unwrap();
     let net = smallmobile_lab3::net::Net::from_bytes(&bytes).unwrap();
-    let (gpu, device) = Gpu::start_vulkan(&path).unwrap();
+    let (gpu, device) = Gpu::start(&path).unwrap();
     std::fs::remove_file(&path).unwrap();
     let tables: Vec<Table> = (0..4).map(|i| Table::new(2 + i, 100 * seed + i as u64)).collect();
     let mut positions = Vec::new();

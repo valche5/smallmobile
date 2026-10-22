@@ -1,5 +1,5 @@
-//! Le réseau sur GPU par Vulkan (`lab3 selfplay --device vulkan`, programme compilé avec
-//! `--features vulkan`), sans Python : le calcul de `net.rs` en un shader (`lab3/shaders/net.comp`,
+//! Le réseau sur GPU par Vulkan (`lab3 selfplay --device vulkan`, inclus à la compilation par
+//! défaut), sans Python : le calcul de `net.rs` en un shader (`lab3/shaders/net.comp`,
 //! compilé par `glslc` à la construction), sur n'importe quel GPU qui a Vulkan (AMD, NVIDIA ;
 //! llvmpipe, le Vulkan de Mesa sur processeur, pour les tests sans GPU).
 //!
@@ -963,7 +963,7 @@ fn eval_of(players: usize, out: &[f32]) -> Eval {
     Eval::from_heads(players, out[..KEYS].to_vec(), v)
 }
 
-/// Le service des fils de jeu (`gpu::Gpu::start_vulkan`) : envoi et réception des lots, chacun
+/// Le service des fils de jeu (`gpu::Gpu::start`) : envoi et réception des lots, chacun
 /// sur son fil (voir l'en-tête).
 pub(crate) fn serve(net: &Path, jobs: mpsc::Receiver<Job>, ready: mpsc::Sender<Result<String, String>>) {
     let engine = match Engine::new(net, MAX_BATCH) {

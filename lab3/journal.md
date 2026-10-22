@@ -66,17 +66,14 @@ Celui de lab2 (voir son journal), sauf :
   moteur du jeu environ 6 %. Seul ou à 64, un cœur fait 2,05 instructions par cycle et autant
   d'instructions par partie : les cœurs ne se gênent pas (caches, mémoire) ; à 64, le processeur
   passe de 3,68 à 2,78 GHz (AVX-512 sur tous les cœurs), d'où 1,32 fois moins vite par cœur.
-- **Le réseau sur GPU** (préparé le 22 octobre, pas encore mesuré sur un vrai GPU) : `lab3
-  selfplay --device gpu`, programme compilé avec `--features gpu` (`DEVICE=gpu lab3/loop.sh`). Un
-  fil évaluateur appelle PyTorch (`lab3/py/serve.py`, par pyo3 : CUDA ou ROCm) ; les fils de jeu
-  lui envoient leurs groupes, qu'il évalue tous ensemble ; chaque fil mène deux groupes de 32
-  parties et fait avancer l'un pendant que le GPU évalue l'autre. PyTorch et Rust calculent le
-  même réseau (écart de 5·10⁻⁵ en f32 ; test `the_gpu_evaluates_like_the_processor`), mais les
-  parties ne sont plus identiques au bit près à celles du processeur (autre ordre des sommes,
-  bf16 sur GPU). Machines : `labtools/cloud.sh` lance les types à GPU NVIDIA (g5, g6…) sur l'image
-  d'AWS avec les pilotes, et compile avec l'option `gpu` ; leur quota Spot est à 0 sur le compte
-  (demande à AWS nécessaire). g5.16xlarge (64 vCPU, A10G) à 0,52 $/h à Stockholm le 22 octobre.
-- **Mesuré sur le PC de l'utilisateur** (22 octobre ; i7-12700KF, 20 fils, sans AVX-512 ; RX 9070
+- **Compilation et choix CPU/GPU** : Vulkan est inclus par défaut (`cargo build`,
+  `cargo build --release`) et demande `glslc` à la compilation. `--no-default-features` produit un
+  programme CPU seul, sans outil ni chargeur Vulkan ; les machines AWS CPU utilisent cette option.
+  À l'exécution, `selfplay --device cpu` (défaut) et `--device vulkan` choisissent l'évaluateur ;
+  `--device gpu` est un alias de Vulkan. `DEVICE=vulkan lab3/loop.sh …` utilise le GPU pour les
+  parties. Le pont pyo3 et l'ancien évaluateur PyTorch ont été retirés le 22 octobre : Python
+  et PyTorch ne servent plus qu'aux outils d'entraînement et d'analyse du réseau.
+- **Premières mesures avec l'ancien évaluateur PyTorch sur le PC** (22 octobre ; i7-12700KF, 20 fils, sans AVX-512 ; RX 9070
   XT, ROCm 7.14, PyTorch 2.14) avec le c060 de lab2, n = 200, 2 à 5 joueurs : parties, processeur
   seul 207 positions/s ; GPU 141 (4 fils de jeu), 205 (8 fils), 184 (16 fils). Le GPU plafonne
   dès 8 fils, occupé à 76-83 % pour environ 1 TFLOP/s utile : le coût est fixe, à chaque appel
@@ -87,9 +84,9 @@ Celui de lab2 (voir son journal), sauf :
 - **Plafond sans réseau** (même PC, même recette) : un réseau factice qui répond aussitôt, 20 fils,
   2 356 positions/s, environ 3 400 sans le coût du faux réseau lui-même (31 % du profil) ; une
   simulation coûte environ 17 µs (moteur du jeu ~25 % du profil, encodage 7 %, empreinte 4 %).
-- **Le réseau par Vulkan** (`lab3 selfplay --device vulkan`, option `vulkan`, `src/vulkan.rs`,
+- **Le réseau par Vulkan** (`lab3 selfplay --device vulkan`, option `vulkan` activée par défaut, `src/vulkan.rs`,
   `shaders/`), sans Python : un fil d'envoi recopie les groupes des fils de jeu dans un emplacement
-  que le GPU lit directement (4 emplacements en vol), un fil de réception attend chaque lot
+  que le GPU lit directement (12 emplacements en vol), un fil de réception attend chaque lot
   (sémaphore à compteur) et lit les sorties là où le GPU les a écrites. Un seul calcul par lot, un
   groupe de travail par position, tout le réseau dans sa mémoire partagée (`net.comp`) : les grands
   produits des régions sur les matrices coopératives (16 × 16 × 16, bf16, sommes en f32), le flux

@@ -6,14 +6,13 @@
 //! lab3 arena --table 'az:net=poids.bin|hard|normal' [--deals 100] [--out r.tsv]   (table fixe)
 //! lab3 speed --agent az:net=poids.bin,n=200 [--positions 12] [--seed 1]   (temps et empreinte des recherches)
 //! lab3 selfplay --agent az:net=poids.bin --games 1000 --out lab3/data/gen1 [--players 2,3,4,5]
-//!     [--device gpu]   (le réseau sur GPU, par PyTorch : programme compilé avec `--features gpu`)
-//!     [--device vulkan]   (le réseau sur GPU, par Vulkan : programme compilé avec `--features vulkan`)
+//!     [--device cpu|vulkan]   (CPU par défaut ; Vulkan inclus à la compilation, `gpu` est un alias de `vulkan`)
 //!     (auto-jeu, recette `selfplay::RECIPE`)
 //! lab3 check-net --net poids.bin --data parties.pos [--count 5]   (comparaison avec lab3/py/check.py)
 //! lab3 bench-net --net poids.bin --data parties.pos [--count 5000]   (vitesse et écarts du calcul bf16)
 //! lab3 bench-vulkan --net poids.bin [--regions 40] [--count N] [--rounds 20] [--stream LOTS]   (durée d'un lot sur
 //!     GPU selon sa taille, ou de `rounds` lots de N positions : une capture RGP, `MESA_VK_TRACE=rgp` ; en flux :
-//!     LOTS lots soumis à la suite ; `--features vulkan`)
+//!     LOTS lots soumis à la suite ; Vulkan inclus à la compilation par défaut)
 //! lab3 analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par labtools/export-room.ts)
 //! ```
 
@@ -49,7 +48,7 @@ fn usage() -> ! {
     eprintln!("        lab3 arena --table 'A|B|B' [--deals N] [--threads N] [--seed S] [--out F]");
     eprintln!("        lab3 speed --agent az:… [--players 2,3,4,5] [--positions 12] [--seed S]");
     eprintln!(
-        "        lab3 selfplay --agent az:… --games N --out DIR [--players 2,3,4,5] [--seed S] [--device gpu|vulkan]"
+        "        lab3 selfplay --agent az:… --games N --out DIR [--players 2,3,4,5] [--seed S] [--device cpu|vulkan]"
     );
     eprintln!("        lab3 check-net --net poids.bin --data parties.pos [--count N]");
     eprintln!("        lab3 bench-net --net poids.bin --data parties.pos [--count N]");
@@ -248,21 +247,16 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
         opts: selfplay::RECIPE,
     };
     let out = opts.get("out").unwrap_or_else(|| usage());
-    // le réseau sur GPU (PyTorch) : les mêmes poids que la recherche
+    // Le réseau sur GPU par Vulkan : les mêmes poids que la recherche.
     let gpu = match opts.get("device").map(String::as_str) {
         None | Some("cpu") => None,
-        Some(device @ ("gpu" | "vulkan")) => {
+        Some("gpu" | "vulkan") => {
             let net = name
                 .split(',')
                 .find_map(|p| p.strip_prefix("az:").unwrap_or(p).strip_prefix("net="))
                 .unwrap_or_else(|| usage());
             let net = std::path::Path::new(net);
-            let started = if device == "gpu" {
-                smallmobile_lab3::gpu::Gpu::start(net)
-            } else {
-                smallmobile_lab3::gpu::Gpu::start_vulkan(net)
-            };
-            let (gpu, device) = started.unwrap_or_else(|e| {
+            let (gpu, device) = smallmobile_lab3::gpu::Gpu::start(net).unwrap_or_else(|e| {
                 eprintln!("GPU : {e}");
                 std::process::exit(2)
             });
