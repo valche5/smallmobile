@@ -20,7 +20,11 @@ async function run(cmd: string[]) {
 }
 
 export async function build() {
-  await run([cargo, 'build', '--manifest-path', join(root, 'kernel/Cargo.toml'), '--lib', '--target', 'wasm32-unknown-unknown', '--profile', 'web']);
+  // la bibliothèque en cdylib pour WebAssembly seulement (kernel/Cargo.toml)
+  await run([
+    cargo, 'rustc', '--manifest-path', join(root, 'kernel/Cargo.toml'), '--lib', '--crate-type', 'cdylib',
+    '--target', 'wasm32-unknown-unknown', '--profile', 'web',
+  ]);
   // les labos (labN/) dont le cerveau (labN/brain, paquet smallmobile-brainN) donne un Expert
   const brains = readdirSync(root)
     .filter((d) => /^lab\d+$/.test(d) && existsSync(join(root, d, 'brain/Cargo.toml')))

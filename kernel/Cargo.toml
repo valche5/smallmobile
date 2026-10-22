@@ -6,5 +6,9 @@ description = "Le jeu SmallMobile : règles, IA et cartes, pour le serveur et le
 publish = false
 
 [lib]
-# rlib : les tests ; cdylib : le module WebAssembly.
-crate-type = ["rlib", "cdylib"]
+# rlib seulement : le module WebAssembly (cdylib) est demandé à sa construction
+# (`cargo rustc --crate-type cdylib`, kernel/tools/build.ts). Une cdylib ici donnerait à la bibliothèque
+# un nom sans empreinte : `cargo test --release` la construit deux fois (panic=abort pour les
+# programmes, unwind pour les tests) sous le même nom, en même temps, et la compilation échoue une
+# fois sur deux (« can't find crate »).
+crate-type = ["rlib"]
