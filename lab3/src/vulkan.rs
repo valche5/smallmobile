@@ -301,6 +301,18 @@ impl Engine {
         // SAFETY : appels Vulkan dans l'ordre de la spécification ; chaque objet créé est détruit
         // par `Drop`
         unsafe {
+            // RADV 26.2, gfx1201 : ACO forme des paires d'instructions VOPD qui lisent un registre
+            // avant qu'il ne reçoive la valeur attendue (conversions bf16 → f32 groupées : sommes
+            // fausses, journal du 23 octobre) ; sans ces paires, même vitesse à 1 % près. Lu par le
+            // pilote à la création de l'appareil ; `LAB3_VULKAN_VOPD=1` les garde.
+            if std::env::var_os("LAB3_VULKAN_VOPD").is_none() {
+                let flags = match std::env::var("ACO_DEBUG") {
+                    Ok(f) if !f.is_empty() => format!("{f},nosched-vopd"),
+                    _ => "nosched-vopd".to_string(),
+                };
+                // SAFETY : avant le pilote ; les autres fils ne lisent pas l'environnement
+                std::env::set_var("ACO_DEBUG", flags);
+            }
             let entry = ash::Entry::load().map_err(|e| format!("Vulkan introuvable : {e}"))?;
             let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
             let instance = entry
@@ -650,6 +662,12 @@ impl Engine {
                 (true, false) => NET16_SPV,
                 _ => NET32_SPV,
             };
+            // essais : un autre shader compilé (`LAB3_VULKAN_SPV=fichier.spv`, mêmes entrées et sorties)
+            let other = std::env::var_os("LAB3_VULKAN_SPV")
+                .map(std::fs::read)
+                .transpose()
+                .map_err(|e| format!("SPIR-V : {e}"))?;
+            let code = other.as_deref().unwrap_or(code);
             let words = ash::util::read_spv(&mut std::io::Cursor::new(code)).map_err(|e| format!("SPIR-V : {e}"))?;
             self.module = d
                 .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&words), None)

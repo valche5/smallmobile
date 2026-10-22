@@ -185,6 +185,21 @@ void gemv4(uint source, uint wt, uint bt, uint k, bool relu, uint glob, uint gs)
     sync();
 }
 
+// f32 → bf16 au plus proche (pair en cas d'égalité), comme le processeur : la conversion d'ACO
+// (RADV 26.2, gfx1201) tronque ; arrondi d'abord en f32, elle devient exacte
+float rne(float x) {
+    uint b = floatBitsToUint(x);
+    return uintBitsToFloat((b + 0x7fffu + ((b >> 16) & 1u)) & 0xffff0000u);
+}
+
+bfloat16_t bf(float x) { return bfloat16_t(rne(x)); }
+
+ACC16 bf_acc(ACC c) {
+    for (int i = 0; i < c.length(); i++)
+        c[i] = rne(c[i]);
+    return ACC16(c);
+}
+
 void relu(inout ACC c) {
     for (int i = 0; i < c.length(); i++)
         c[i] = max(c[i], 0.0);
@@ -213,9 +228,9 @@ void main() {
     for (uint e = t; e < R * NODE16; e += THREADS) {
         uint i = e / NODE16, k = e % NODE16;
         float v = i < r && k < NODE ? float(byte_at(p.node_off + (pos * R + i) * NODE + k)) * w[ns + k] : 0.0;
-        bfloat16_t high = bfloat16_t(v);
+        bfloat16_t high = bf(v);
         hb[e] = high;
-        ub[e] = bfloat16_t(v - float(high));
+        ub[e] = bf(v - float(high));
     }
     MARK(0u)
 
@@ -254,7 +269,7 @@ void main() {
     for (uint q = 0u; q < PER; q++) {
         uint idx = sg + SUBGROUPS * q;
         if (idx < TILES)
-            coopMatStore(ACC16(hacc[q]), hb, (idx / NT) * 16u * HS + n * 16u, HS, ROW);
+            coopMatStore(bf_acc(hacc[q]), hb, (idx / NT) * 16u * HS + n * 16u, HS, ROW);
     }
     sync();
     MARK(2u)
@@ -283,8 +298,8 @@ void main() {
             float inv = 1.0 / float(max(bitCount(bits.x) + bitCount(bits.y), 1u));
             uint at = i * HS + o;
             for (uint c = 0u; c < 4u; c++) {
-                ub[at + c] = bfloat16_t(lo[c] * inv);
-                ub[at + 4u + c] = bfloat16_t(hi[c] * inv);
+                ub[at + c] = bf(lo[c] * inv);
+                ub[at + 4u + c] = bf(hi[c] * inv);
             }
         }
         MARK(3u)
@@ -335,7 +350,7 @@ void main() {
         for (uint q = 0u; q < PER; q++) {
             uint idx = sg + SUBGROUPS * q;
             if (idx < TILES)
-                coopMatStore(ACC16(mid[q]), hb, (idx / NT) * 16u * HS + n * 16u, HS, ROW);
+                coopMatStore(bf_acc(mid[q]), hb, (idx / NT) * 16u * HS + n * 16u, HS, ROW);
         }
         sync();
         MARK(5u)
@@ -373,7 +388,7 @@ void main() {
         for (uint q = 0u; q < PER; q++) {
             uint idx = sg + SUBGROUPS * q;
             if (idx < TILES)
-                coopMatStore(ACC16(hacc[q]), hb, (idx / NT) * 16u * HS + n * 16u, HS, ROW);
+                coopMatStore(bf_acc(hacc[q]), hb, (idx / NT) * 16u * HS + n * 16u, HS, ROW);
         }
         sync();
         MARK(6u)

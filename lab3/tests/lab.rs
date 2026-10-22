@@ -495,9 +495,10 @@ fn vulkan_check(bytes: Vec<u8>, seed: u64) {
         let absent = (e.regions..64).map(|r| a.logits[smallmobile_lab3::moves::GLOBAL_KEYS + r]);
         assert!(absent.into_iter().all(|v| v == f32::NEG_INFINITY), "{device} : région absente");
     }
-    // f32 : sommes dans un autre ordre. bf16 (matrices coopératives) : sur le réseau de départ, 0,004,
-    // 0,13 et 0,12 (22 octobre ; le bf16 du processeur, `eval_portable_bf16` : 0,0015, 0,06, 0,04)
-    let tolerance = if device.contains("bf16") { [0.02, 0.4, 0.4] } else { [1e-3; 3] };
+    // f32 : sommes dans un autre ordre. bf16 (matrices coopératives, arrondi au plus proche) : sur le
+    // réseau de départ, 0,002, 0,06 et 0,05 (23 octobre ; le bf16 du processeur,
+    // `eval_portable_bf16` : 0,0015, 0,06, 0,04)
+    let tolerance = if device.contains("bf16") { [0.006, 0.2, 0.2] } else { [1e-3; 3] };
     eprintln!("{device}, largeur {} : écarts {worst:?}", net.hidden);
     assert!(worst.iter().zip(&tolerance).all(|(w, t)| w < t), "{device}, largeur {} : écarts {worst:?}", net.hidden);
     assert!(positions.len() > 40, "trop peu de positions : {}", positions.len());
