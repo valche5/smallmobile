@@ -33,7 +33,12 @@ pub struct Pending(mpsc::Receiver<Reply>);
 
 impl Pending {
     pub fn wait(self) -> Vec<Eval> {
-        self.0.recv().expect("le fil du GPU s'est arrêté")()
+        self.receive()()
+    }
+
+    /// La réponse seule, sans la décoder (pour mesurer à part l'attente et le décodage).
+    pub(crate) fn receive(self) -> Reply {
+        self.0.recv().expect("le fil du GPU s'est arrêté")
     }
 }
 

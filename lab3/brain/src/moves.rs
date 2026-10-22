@@ -250,6 +250,14 @@ pub fn actions(g: &Game, m: &Move) -> Vec<Action> {
     }
 }
 
+/// `actions`, à la suite de `out` (sans allocation pour les coups d'une seule action).
+pub fn actions_into(g: &Game, m: &Move, out: &mut Vec<Action>) {
+    match single(m) {
+        Some(a) => out.push(a),
+        None => out.extend(lift(g)),
+    }
+}
+
 /// L'action d'un coup qui n'en demande qu'une (tous sauf `Move::Lift`).
 fn single(m: &Move) -> Option<Action> {
     Some(match *m {

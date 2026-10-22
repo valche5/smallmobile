@@ -7,6 +7,7 @@
 
 use std::cell::RefCell;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 
 use smallmobile_kernel::Map;
@@ -16,9 +17,17 @@ use crate::encode::{Encoded, REGIONS};
 use crate::gpu::{Gpu, Pending};
 use crate::net::{Eval, Net, Position};
 
-/// Le temps (ns) que les fils de jeu ont passé à attendre leurs évaluations du GPU, tous ensemble
-/// (`collect` ; affiché par `selfplay::run` avec `LAB3_VULKAN_PROFILE`).
-pub static WAITED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Le temps (ns) des fils de jeu, tous ensemble, pour leurs évaluations sur GPU : envoi des groupes
+/// (copie dans un `gpu::Job`), attente de la réponse, décodage des sorties (`TIME_*` ; affiché par
+/// `selfplay::run` avec `LAB3_VULKAN_PROFILE`).
+pub static TIMES: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+pub const TIME_SUBMIT: usize = 0;
+pub const TIME_WAIT: usize = 1;
+pub const TIME_DECODE: usize = 2;
+
+fn count(what: usize, since: std::time::Instant) {
+    TIMES[what].fetch_add(since.elapsed().as_nanos() as u64, Ordering::Relaxed);
+}
 
 pub struct Batch<'a> {
     net: &'a Net,
@@ -30,6 +39,9 @@ pub struct Batch<'a> {
     sent: RefCell<Option<Pending>>,
     /// Les évaluations du dernier envoi, par ticket, chacune prise par sa partie.
     done: RefCell<Vec<Option<Eval>>>,
+    /// Profils (`LAB3_INSTANT=1`) : des évaluations instantanées, sans réseau (`instant`), pour
+    /// mesurer le jeu et la recherche seuls.
+    instant: bool,
 }
 
 /// Une position en attente : son encodage et les voisines de ses régions (copiées : la carte reste
@@ -52,17 +64,24 @@ impl Position for Request {
 
 impl<'a> Batch<'a> {
     pub fn new(net: &'a Net, gpu: Option<&'a Gpu>) -> Self {
-        Batch { net, gpu, waiting: RefCell::default(), sent: RefCell::default(), done: RefCell::default() }
+        let instant = std::env::var_os("LAB3_INSTANT").is_some();
+        Batch { net, gpu, waiting: RefCell::default(), sent: RefCell::default(), done: RefCell::default(), instant }
     }
 
     /// Envoie les positions en attente : le processeur du fil les évalue aussitôt ; le GPU, pendant
     /// que le fil fait autre chose (`collect`).
     pub fn submit(&self) {
         let waiting = std::mem::take(&mut *self.waiting.borrow_mut());
+        if self.instant {
+            *self.done.borrow_mut() = waiting.iter().map(|r| Some(instant(&r.e))).collect();
+            return;
+        }
         match self.gpu {
             Some(gpu) => {
+                let start = std::time::Instant::now();
                 let players = waiting.iter().map(|r| r.e.players);
                 *self.sent.borrow_mut() = Some(gpu.submit(&waiting, players));
+                count(TIME_SUBMIT, start);
             }
             None => *self.done.borrow_mut() = self.net.eval_batch(&waiting).into_iter().map(Some).collect(),
         }
@@ -73,9 +92,11 @@ impl<'a> Batch<'a> {
     pub fn collect(&self) {
         if let Some(pending) = self.sent.borrow_mut().take() {
             let start = std::time::Instant::now();
-            let evals = pending.wait();
-            WAITED.fetch_add(start.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
-            *self.done.borrow_mut() = evals.into_iter().map(Some).collect();
+            let reply = pending.receive();
+            count(TIME_WAIT, start);
+            let start = std::time::Instant::now();
+            *self.done.borrow_mut() = reply().into_iter().map(Some).collect();
+            count(TIME_DECODE, start);
         }
     }
 }
@@ -115,4 +136,23 @@ impl Future for Waiting<'_, '_> {
             None => Poll::Pending,
         }
     }
+}
+
+/// Une évaluation sans réseau (`LAB3_INSTANT`) : logits et valeurs tirés d'une empreinte de la partie,
+/// assez variés pour que la recherche se comporte à peu près comme avec un réseau, et bon marché
+/// (environ 1 µs).
+fn instant(e: &Encoded) -> Eval {
+    let mut h = e.regions as u64 ^ 0x9e37_79b9_7f4a_7c15;
+    for c in e.global.as_chunks::<8>().0 {
+        h = (h ^ u64::from_le_bytes(*c)).wrapping_mul(0x100_0000_01b3);
+    }
+    let mut next = || {
+        h ^= h << 13;
+        h ^= h >> 7;
+        h ^= h << 17;
+        (h >> 40) as f32 / (1u64 << 24) as f32
+    };
+    let logits = (0..crate::moves::KEYS).map(|_| 2.0 * next()).collect();
+    let v: [f32; 10] = std::array::from_fn(|_| next());
+    Eval::from_heads(e.players, logits, &v)
 }

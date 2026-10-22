@@ -92,9 +92,9 @@ Celui de lab2 (voir son journal), sauf :
   produits des régions sur les matrices coopératives (16 × 16 × 16, bf16, sommes en f32), le flux
   résiduel en f32 dans les registres, moins de 32 Ko de mémoire partagée (deux positions à la fois
   par unité de calcul). Mêmes arrondis bf16 que le processeur pour h, la moyenne des voisines et
-  relu(n1) ; node_in et node_pol en deux parties bf16, presque f32. Écarts au calcul f32 sur le c060
-  (test `vulkan_evaluates_like_the_processor`) : victoire 0,006, pièces 0,26, logits 0,19 (le bf16
-  du processeur : 0,0015, 0,06, 0,04). `net32.comp`, tout en f32 (écart 2·10⁻⁴), sert de secours
+  relu(n1), au plus proche ; node_in et node_pol en deux parties bf16, presque f32. Écarts au
+  calcul f32 sur le c060 (test `vulkan_evaluates_like_the_processor`) : victoire 0,002, pièces 0,06,
+  logits 0,05 (le bf16 du processeur : 0,0015, 0,06, 0,04). `net32.comp`, tout en f32 (écart 2·10⁻⁴), sert de secours
   (GPU sans matrices coopératives bf16, llvmpipe pour les tests sans GPU).
 - **Vitesse par Vulkan** (RX 9070 XT, RADV, c060, 20 fils, 2 560 parties) : 1 222 positions/s, 5,9
   fois le processeur seul et 6 fois PyTorch ; lots de 234 positions, GPU occupé 77 %. Étapes : 40
@@ -103,6 +103,44 @@ Celui de lab2 (voir son journal), sauf :
   groupes par fil 1 130, quatre emplacements 1 222. Deux files de calcul : 836. Seul, le calcul
   (`lab3 bench-vulkan`) : 0,22 ms pour une position, 509 000 positions/s par lots de 4 096 ; le
   GPU attend surtout la mémoire (lectures des poids), pas ses unités de calcul.
+- **Le shader, suite** (22-23 octobre ; profils : `LAB3_VULKAN_PHASES=1` donne la durée de chaque
+  étape d'une position, lue sur l'horloge du GPU ; `bench-vulkan --stream` des lots à la suite).
+  Piège : peu chargé, le GPU descend à 60-100 MHz (3,3 GHz en selfplay) ; mesurer sous charge.
+  Lignes de h de 256 octets dans la mémoire partagée : les 16 lignes d'une tuile sur le même banc,
+  lectures 16 fois plus lentes ; écartées de 8 nombres, le débit double (en flux, lots de 256 :
+  433 000 → 900 000 positions/s ; de 2 048 : ~950 000). Deux sommes indépendantes par tuile au lieu
+  d'une : +20 à 40 % (quatre : trop de registres, moins de positions en même temps). Le selfplay ne
+  suit pas (1 250 à 1 290 positions/s) : le GPU n'y calcule plus que 45 % du temps, le reste est
+  du côté du CPU et des allers-retours des lots.
+- **Le trajet d'une position** (23 octobre, `LAB3_VULKAN_PROFILE=1` : temps des fils de jeu ;
+  `LAB3_INSTANT=1` : évaluations instantanées, sans réseau ; `LAB3_GROUPS`, `LAB3_CONCURRENT` :
+  parties menées par fil). En selfplay GPU, les fils de jeu calculent 83 % du temps, attendent 12 %,
+  copient et décodent 4,5 % : ils sont le frein, pas le GPU. Le même jeu coûte deux fois plus de
+  cycles à 128 parties par fil (4 × 32, le réglage GPU) qu'à 8 (mêmes parties, évaluations
+  instantanées ; `perf stat`) : 68 contre 35 millions de cycles par position, 1,02 contre 1,61
+  instruction par cycle, 12 fois plus de défauts du cache L3. Au pic (heaptrack), ~250 Ko par
+  partie, dont ~65 Ko relus à chaque simulation (arbre, évaluations gardées) : 128 parties par fil
+  débordent les caches.
+- **Données réduites, recherche identique au bit près** (empreintes de `lab3 speed`, selfplay
+  d'un fil) : l'arbre gardé par partie et réutilisé (nœuds de 16 octets ; coups en 16 octets lus à
+  chaque passage, logit, a priori calculé une fois, valeur et visites du seul joueur qui agit,
+  plus 24 octets lus pour le coup joué ; premier enfant dans le coup, les autres chaînés) au lieu
+  de 15 valeurs et d'un `Vec` d'enfants par coup ; les évaluations gardées dans une seule table
+  (dernière recherche qui s'en est servie) ; les positions à enregistrer sans les régions absentes
+  ni les 608 clés de politique (~3,5 Ko au lieu de 5,8) ; le journal des coups d'un seul tenant. À
+  128 parties par fil : défauts L3 65 000 → 28 000 par position, ~59 → ~48 millions de cycles.
+  Selfplay GPU (c060, 20 fils) : 1 220 → 1 510 positions/s ; les fils attendent maintenant 23 %
+  du temps, le GPU calcule ~66 % : le prochain frein est l'aller-retour des lots.
+- **Deux défauts du compilateur de RADV** (Mesa 26.2.4, ACO, gfx1201), trouvés en comparant son
+  assembleur (`RADV_DEBUG=shaders`) pour des variantes justes et fausses du shader. (1) En formant
+  des paires d'instructions VOPD, ACO met une addition avec l'instruction qui produit l'une de ses
+  entrées (conversion bf16 → f32 de valeurs lues ensemble) : la paire lit l'ancienne valeur du
+  registre, une colonne de la moyenne des voisines reçoit la valeur d'une autre. Il apparaît ou non
+  selon l'ordre global des instructions (tableau ou `vec4`, écart des lignes, pooling changé
+  ailleurs) ; `ACO_DEBUG=nosched-vopd` le fait disparaître, pour 1 % de vitesse : `src/vulkan.rs`
+  le met avant de charger le pilote. (2) La conversion f32 → bf16 tronque au lieu d'arrondir au
+  plus proche : arrondi fait dans le shader, les écarts au f32 reviennent au niveau du bf16 du
+  processeur (logits 0,19 → 0,05).
 - Retiré : `size.py` (mesure des tailles de réseau de lab2).
 
 ## Mesure

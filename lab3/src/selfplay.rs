@@ -39,7 +39,7 @@ use crate::batch::Batch;
 use crate::encode::{Encoded, GLOBAL, NODE, REGIONS, encode, relative};
 use crate::gpu::Gpu;
 use crate::know::Knowledge;
-use crate::moves::{self, KEYS};
+use crate::moves::{self, KEYS, Key};
 use crate::rand::{Rng, mix};
 use crate::table::{Outcome, Table};
 
@@ -96,14 +96,57 @@ impl Record<'_> {
     }
 }
 
+/// Une position cherchée à fond, gardée jusqu'à la fin de la partie (ses cibles) : son encodage
+/// sans les lignes des régions absentes (toutes à zéro), sa politique sur ses seuls coups possibles
+/// (~3,5 Ko au lieu de 5,8).
 struct Pending {
-    enc: Encoded,
+    regions: u8,
+    players: u8,
+    node: Box<[[u8; NODE]]>,
+    global: Box<[u8; GLOBAL]>,
     actor: usize,
     coins: [i32; MAX_PLAYERS],
-    policy: [u16; KEYS],
+    policy: Box<[(Key, u16)]>,
     owners: Option<[u8; REGIONS]>,
     /// Écart de la politique améliorée à l'a priori du réseau (`surprise`).
     surprise: f32,
+}
+
+impl Pending {
+    fn new(e: &Encoded, actor: usize, coins: [i32; MAX_PLAYERS], policy: Box<[(Key, u16)]>, surprise: f32) -> Pending {
+        Pending {
+            regions: e.regions as u8,
+            players: e.players as u8,
+            node: e.node[..e.regions].into(),
+            global: Box::new(e.global),
+            actor,
+            coins,
+            policy,
+            owners: None,
+            surprise,
+        }
+    }
+
+    /// L'encodage entier, tel que `encode` l'a donné.
+    fn encoded(&self) -> Encoded {
+        let mut e = Encoded {
+            regions: self.regions as usize,
+            players: self.players as usize,
+            node: [[0; NODE]; REGIONS],
+            global: *self.global,
+        };
+        e.node[..self.node.len()].copy_from_slice(&self.node);
+        e
+    }
+
+    /// La politique sur toutes les clés (`ILLEGAL` : coup impossible).
+    fn policy(&self) -> [u16; KEYS] {
+        let mut policy = [ILLEGAL; KEYS];
+        for &(key, p) in &self.policy {
+            policy[key as usize] = p;
+        }
+        policy
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -122,11 +165,21 @@ pub struct Options {
 pub const RECIPE: Options = Options { full_share: 0.125, fast: 50 };
 
 /// Une partie jouée : son résultat, le nombre de positions écrites, les actions du noyau de chaque
-/// coup.
+/// coup (`moves`).
 pub struct Played {
     pub outcome: Outcome,
     pub positions: usize,
-    pub moves: Vec<Vec<Action>>,
+    /// Les actions de toute la partie, à la suite ; la fin de celles de chaque coup.
+    actions: Vec<Action>,
+    ends: Vec<u32>,
+}
+
+impl Played {
+    /// Les actions de chaque coup.
+    pub fn moves(&self) -> impl Iterator<Item = &[Action]> {
+        let starts = std::iter::once(0).chain(self.ends.iter().copied());
+        starts.zip(&self.ends).map(|(a, &b)| &self.actions[a as usize..b as usize])
+    }
 }
 
 /// Joue une partie ; écrit un enregistrement par position cherchée à fond (plus d'un coup
@@ -144,7 +197,7 @@ pub async fn play(
     let mut g = table.game(seed);
     let mut k = Knowledge::default();
     let mut pending: Vec<Pending> = Vec::new();
-    let mut played = Vec::new();
+    let (mut actions, mut ends) = (Vec::new(), Vec::new());
     let mut evals = Evals::default();
     while g.state.phase != Phase::GameOver {
         let actor = g.state.actor().expect("un joueur doit agir");
@@ -155,15 +208,12 @@ pub async fn play(
             az.run(&g, &k, rng, opts.fast, true, &mut evals, oracle).await.mv
         } else {
             let s = az.run(&g, &k, rng, az.cfg.iterations, true, &mut evals, oracle).await;
-            let mut policy = [ILLEGAL; KEYS];
-            for &(key, p) in &s.policy {
-                policy[key as usize] = (p * PROBABILITY).round() as u16;
-            }
-            let surprise = surprise(&s);
-            pending.push(Pending { enc: encode(&g, &k), actor, coins: coins(&g), policy, owners: None, surprise });
+            let policy = s.policy.iter().map(|&(key, p)| (key, (p * PROBABILITY).round() as u16)).collect();
+            pending.push(Pending::new(&encode(&g, &k), actor, coins(&g), policy, surprise(&s)));
             s.mv
         };
-        played.push(moves::actions(&g, &mv));
+        moves::actions_into(&g, &mv, &mut actions);
+        ends.push(actions.len() as u32);
         let current = g.state.current;
         k.play(&mut g, &mv).expect("coup possible");
         // le tour passe : les positions de ce joueur qui attendaient son prochain tour l'ont
@@ -189,10 +239,11 @@ pub async fn play(
             gain[r] = (o.coins[q] - p.coins[q]) as f32;
         }
         let owners = p.owners.expect("propriétaires");
-        let rec = Record { enc: &p.enc, map: &table.map, weight, win, gain, owners, policy: &p.policy };
+        let (enc, policy) = (p.encoded(), p.policy());
+        let rec = Record { enc: &enc, map: &table.map, weight, win, gain, owners, policy: &policy };
         out.write_all(&rec.bytes())?;
     }
-    Ok(Played { outcome: o, positions: pending.len(), moves: played })
+    Ok(Played { outcome: o, positions: pending.len(), actions, ends })
 }
 
 /// La surprise d'une recherche : divergence de Kullback-Leibler de sa politique améliorée (la
@@ -262,8 +313,7 @@ impl GameLog {
         let regions = table.map.len();
         let mut buffer = vec![0u32; 8 + regions];
         let moves = played
-            .moves
-            .iter()
+            .moves()
             .map(|actions| {
                 actions
                     .iter()
@@ -402,7 +452,11 @@ pub async fn game(i: usize, cfg: &Config, az: &Az, oracle: &impl Oracle) -> std:
 /// prochaine évaluation, puis le groupe est évalué d'un coup, par le processeur du fil ou par `gpu`.
 /// Sans GPU, chaque partie est la même, au bit près, que jouée seule (`Direct`).
 pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Result<()> {
-    let (groups, concurrent) = if gpu.is_some() { (GPU_GROUPS, GPU_CONCURRENT) } else { (1, CONCURRENT) };
+    let (mut groups, mut concurrent) = if gpu.is_some() { (GPU_GROUPS, GPU_CONCURRENT) } else { (1, CONCURRENT) };
+    // essais et profils : `LAB3_GROUPS`, `LAB3_CONCURRENT`
+    let env = |key: &str| std::env::var(key).ok().and_then(|v| v.parse().ok());
+    groups = env("LAB3_GROUPS").unwrap_or(groups);
+    concurrent = env("LAB3_CONCURRENT").unwrap_or(concurrent);
     std::fs::create_dir_all(dir)?;
     let next = AtomicUsize::new(0);
     let positions = AtomicUsize::new(0);
@@ -475,9 +529,14 @@ pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Res
             h.join().expect("fil d'auto-apprentissage")?;
         }
         if gpu.is_some() && std::env::var_os("LAB3_VULKAN_PROFILE").is_some() {
-            let waited = crate::batch::WAITED.load(Ordering::Relaxed) as f64 / 1e9;
+            use crate::batch::{TIME_DECODE, TIME_SUBMIT, TIME_WAIT, TIMES};
             let all = start.elapsed().as_secs_f64() * cfg.threads as f64;
-            eprintln!("fils de jeu : {:.0} % du temps à attendre le GPU", 100.0 * waited / all);
+            let share = |what: usize| 100.0 * TIMES[what].load(Ordering::Relaxed) as f64 / 1e9 / all;
+            let (submit, wait, decode) = (share(TIME_SUBMIT), share(TIME_WAIT), share(TIME_DECODE));
+            eprintln!(
+                "fils de jeu : jeu et recherche {:.0} %, envoi {submit:.1} %, attente {wait:.0} %, décodage {decode:.1} %",
+                100.0 - submit - wait - decode
+            );
         }
         Ok(())
     })

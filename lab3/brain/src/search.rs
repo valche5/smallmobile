@@ -20,7 +20,7 @@
 //! politique de l'auto-apprentissage. Le réseau ne voit que ce que sait le joueur (`encode`).
 
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
@@ -82,99 +82,173 @@ const COINS: usize = MAX_PLAYERS;
 const WINS: usize = 2 * MAX_PLAYERS;
 type PerPlayer = [f32; MAX_PLAYERS];
 
-struct Edge {
-    key: Key,
-    mv: Move,
+/// Pas de position : une arête jamais suivie, la fin d'une liste de `Chance`.
+const NONE: u32 = u32::MAX;
+
+/// Ce que la sélection lit de chaque coup d'un nœud, à chaque passage (`Tree::stats`, 16 octets) :
+/// son logit, sa probabilité a priori (la softmax des logits du nœud, calculée une fois), ses
+/// visites et la somme de leurs valeurs pour le joueur qui agit au nœud (seule valeur qui compte
+/// pour ses coups).
+#[derive(Clone, Copy)]
+struct Stat {
     logit: f32,
+    prior: f32,
+    value: f32,
     visits: u32,
-    total: Value,
-    /// Les positions atteintes, par résultat du hasard du coup et des coups forcés qui suivent
-    /// (`moves::chance`) ; une seule pour un coup sans hasard. Aucune si la partie s'y termine.
-    children: Vec<(u64, u32)>,
 }
 
+/// Le reste d'un coup, lu seulement quand il est joué (`Tree::edges`). Les positions atteintes se
+/// rangent par résultat du hasard du coup et des coups forcés qui suivent (`moves::chance`,
+/// empreinte `hash`) : la première dans l'arête, les autres (coups à hasard seulement) dans
+/// `Tree::chances`, à partir de `more`. Aucune si la partie s'y termine.
+struct Edge {
+    hash: u64,
+    child: u32,
+    more: u32,
+    key: Key,
+    mv: Move,
+}
+
+/// Un autre résultat du hasard d'un coup : sa position, et le suivant (`NONE` : le dernier).
+struct Chance {
+    hash: u64,
+    child: u32,
+    next: u32,
+}
+
+/// Une position de l'arbre : ses coups (`Tree::stats` et `Tree::edges`, `first..first + len`), le
+/// joueur qui agit, et la valeur que lui donne le réseau. Les visites et les valeurs de toute la position ne servent
+/// qu'à la racine (`Az::run`).
+#[derive(Clone, Copy)]
 struct Node {
-    /// Le joueur qui agit.
-    actor: usize,
-    /// La valeur que le réseau donne à la position, pour chaque joueur.
-    raw: PerPlayer,
-    visits: u32,
-    total: Value,
+    first: u32,
+    len: u32,
+    /// La valeur du réseau pour le joueur qui agit.
+    raw: f32,
+    actor: u8,
+}
+
+/// L'arbre d'une recherche, et ses tampons, gardés d'une recherche à la suivante (dans `Evals`, un
+/// par partie) : plus d'allocation une fois assez grands. Nœuds de 16 octets, coups en 16 octets
+/// lus à chaque passage plus 24 lus seulement pour le coup joué, rangés à la suite : ceux de
+/// plusieurs dizaines de parties tiennent dans le cache d'un cœur.
+#[derive(Default)]
+struct Tree {
+    nodes: Vec<Node>,
+    stats: Vec<Stat>,
     edges: Vec<Edge>,
+    chances: Vec<Chance>,
+    /// Le chemin d'une itération : (nœud, coup dans `edges`).
+    path: Vec<(u32, u32)>,
+    scratch: Scratch,
+}
+
+impl Tree {
+    fn clear(&mut self) {
+        self.nodes.clear();
+        self.stats.clear();
+        self.edges.clear();
+        self.chances.clear();
+    }
+
+    fn stats(&self, n: Node) -> &[Stat] {
+        &self.stats[n.first as usize..(n.first + n.len) as usize]
+    }
+
+    fn edges(&self, n: Node) -> &[Edge] {
+        &self.edges[n.first as usize..(n.first + n.len) as usize]
+    }
+
+    /// La position atteinte par le coup `e` (indice dans `edges`) avec ce résultat du hasard.
+    fn child(&self, e: usize, hash: u64) -> Option<u32> {
+        let edge = &self.edges[e];
+        if edge.child == NONE {
+            return None;
+        }
+        if edge.hash == hash {
+            return Some(edge.child);
+        }
+        let mut at = edge.more;
+        while at != NONE {
+            let c = &self.chances[at as usize];
+            if c.hash == hash {
+                return Some(c.child);
+            }
+            at = c.next;
+        }
+        None
+    }
+
+    fn add_child(&mut self, e: usize, hash: u64, child: u32) {
+        let more = self.edges[e].more;
+        let edge = &mut self.edges[e];
+        if edge.child == NONE {
+            (edge.child, edge.hash) = (child, hash);
+        } else {
+            edge.more = self.chances.len() as u32;
+            self.chances.push(Chance { hash, child, next: more });
+        }
+    }
+}
+
+/// La valeur moyenne d'un coup pour le joueur qui agit ; `None` s'il n'a jamais été essayé.
+fn q(e: &Stat) -> Option<f32> {
+    (e.visits > 0).then(|| e.value / e.visits as f32)
 }
 
 impl Node {
-    /// La valeur moyenne d'un coup pour le joueur qui agit ; `None` s'il n'a jamais été essayé.
-    fn q(&self, e: &Edge) -> Option<f32> {
-        (e.visits > 0).then(|| e.total[self.actor] / e.visits as f32)
-    }
-
-    /// Les probabilités a priori des coups (softmax des logits).
-    fn priors(&self) -> Vec<f32> {
-        let mut out = Vec::new();
-        self.priors_into(&mut out);
-        out
-    }
-
-    /// `priors`, dans `out` (sans allocation une fois `out` assez grand).
-    fn priors_into(&self, out: &mut Vec<f32>) {
-        softmax_into(self.edges.iter().map(|e| e.logit), out);
-    }
-
     /// Les valeurs complétées des coups, transformées pour s'ajouter aux logits : un coup jamais
     /// essayé reçoit la valeur mêlée du nœud (valeur du réseau et valeurs des coups essayés,
     /// pondérées par leur probabilité a priori) ; puis toutes sont ramenées entre 0 et 1 et
     /// multipliées par `(VISIT_INIT + visites du coup le plus vu) × VALUE_SCALE`.
-    /// Dans `s.values` (`s.priors` : les probabilités a priori).
-    fn completed_into(&self, s: &mut Scratch) {
-        self.priors_into(&mut s.priors);
-        let priors = &s.priors;
-        let visits: u32 = self.edges.iter().map(|e| e.visits).sum();
-        let raw = self.raw[self.actor];
+    /// Dans `s.values`.
+    fn completed_into(self, edges: &[Stat], s: &mut Scratch) {
+        let visits: u32 = edges.iter().map(|e| e.visits).sum();
+        let raw = self.raw;
         let mixed = if visits == 0 {
             raw
         } else {
             let (mut mass, mut weighted) = (0.0f32, 0.0f32);
-            for (e, &p) in self.edges.iter().zip(priors) {
-                if let Some(q) = self.q(e) {
-                    mass += p;
-                    weighted += p * q;
+            for e in edges {
+                if let Some(q) = q(e) {
+                    mass += e.prior;
+                    weighted += e.prior * q;
                 }
             }
             (raw + visits as f32 * weighted / mass.max(f32::MIN_POSITIVE)) / (visits as f32 + 1.0)
         };
         let values = &mut s.values;
         values.clear();
-        values.extend(self.edges.iter().map(|e| self.q(e).unwrap_or(mixed)));
+        values.extend(edges.iter().map(|e| q(e).unwrap_or(mixed)));
         let lo = values.iter().copied().fold(f32::INFINITY, f32::min);
         let hi = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        let most = self.edges.iter().map(|e| e.visits).max().unwrap_or(0);
+        let most = edges.iter().map(|e| e.visits).max().unwrap_or(0);
         let scale = (VISIT_INIT + most as f32) * VALUE_SCALE;
         values.iter_mut().for_each(|v| *v = scale * (*v - lo) / (hi - lo).max(1e-8));
     }
 
     /// La politique améliorée : softmax des logits plus les valeurs complétées.
-    fn improved(&self) -> Vec<f32> {
+    fn improved(self, edges: &[Stat]) -> Vec<f32> {
         let mut s = Scratch::default();
-        self.improved_into(&mut s);
+        self.improved_into(edges, &mut s);
         s.values
     }
 
     /// `improved`, dans `s.values`.
-    fn improved_into(&self, s: &mut Scratch) {
-        self.completed_into(s);
-        s.values.iter_mut().zip(&self.edges).for_each(|(c, e)| *c += e.logit);
+    fn improved_into(self, edges: &[Stat], s: &mut Scratch) {
+        self.completed_into(edges, s);
+        s.values.iter_mut().zip(edges).for_each(|(c, e)| *c += e.logit);
         softmax_in_place(&mut s.values);
     }
 
     /// Le coup à suivre hors de la racine : celui dont la part des visites est la plus en retard
     /// sur la politique améliorée.
-    fn select(&self, s: &mut Scratch) -> usize {
-        let visits: u32 = self.edges.iter().map(|e| e.visits).sum();
-        self.improved_into(s);
+    fn select(self, edges: &[Stat], s: &mut Scratch) -> usize {
+        let visits: u32 = edges.iter().map(|e| e.visits).sum();
+        self.improved_into(edges, s);
         let improved = &s.values;
-        let score = |i: usize| improved[i] - self.edges[i].visits as f32 / (1.0 + visits as f32);
-        (0..self.edges.len()).fold(0, |best, i| if score(i) > score(best) { i } else { best })
+        let score = |i: usize| improved[i] - edges[i].visits as f32 / (1.0 + visits as f32);
+        (0..edges.len()).fold(0, |best, i| if score(i) > score(best) { i } else { best })
     }
 }
 
@@ -182,15 +256,7 @@ impl Node {
 /// calculs ne demandent plus d'allocation (une dizaine par nœud traversé auparavant).
 #[derive(Default)]
 struct Scratch {
-    priors: Vec<f32>,
     values: Vec<f32>,
-}
-
-/// La softmax des `xs`, dans `out`.
-fn softmax_into(xs: impl Iterator<Item = f32>, out: &mut Vec<f32>) {
-    out.clear();
-    out.extend(xs);
-    softmax_in_place(out);
 }
 
 /// La softmax de `xs`, à sa place : le maximum, les exponentielles, leur somme, puis chacune divisée
@@ -262,15 +328,24 @@ pub fn now<F: Future>(f: F) -> F::Output {
 /// que la précédente a explorées) ; le réseau répond toujours pareil à la même entrée sur la même
 /// carte : reprendre sa réponse ne change rien à la recherche, au bit près. Restent celles de la
 /// recherche en cours et de la précédente ; sur une autre carte ou avec un autre réseau, tout est
-/// oublié. Chacune tient en quelques centaines d'octets (`Judged`, `fingerprint`) : celles de
-/// plusieurs parties tiennent ensemble dans le cache d'un cœur.
+/// oublié. Chacune tient en quelques centaines d'octets (`Judged`, `fingerprint`), dans une seule
+/// table, une seule allocation (ses logits) : celles de plusieurs parties tiennent ensemble dans le
+/// cache d'un cœur.
 #[derive(Default)]
 pub struct Evals {
     /// la carte et le réseau des évaluations gardées (adresses)
     owner: (usize, usize),
-    known: HashMap<u128, Rc<Judged>>,
-    /// celles de la recherche précédente, pas encore reprises par la recherche en cours
-    older: HashMap<u128, Rc<Judged>>,
+    /// chacune avec la dernière recherche qui s'en est servie (`search`)
+    known: HashMap<u128, Kept>,
+    /// le numéro de la recherche en cours
+    search: u32,
+    /// l'arbre des recherches de la partie, réutilisé de l'une à la suivante
+    tree: Tree,
+}
+
+struct Kept {
+    search: u32,
+    judged: Judged,
 }
 
 /// Ce que la recherche garde d'une évaluation : la valeur, et les logits des coups possibles dans
@@ -282,34 +357,36 @@ struct Judged {
 }
 
 impl Evals {
-    /// Une recherche commence : les évaluations de la précédente restent, les plus vieilles s'en
-    /// vont.
+    /// Une recherche commence : les évaluations dont la précédente s'est servie restent, les plus
+    /// vieilles s'en vont.
     fn next(&mut self, net: &Net, map: &Map) {
         let owner = (std::ptr::from_ref(map) as usize, std::ptr::from_ref(net) as usize);
+        self.search += 1;
         if owner != self.owner {
             self.owner = owner;
             self.known.clear();
-            self.older.clear();
         } else {
-            self.older = std::mem::take(&mut self.known);
+            let search = self.search;
+            self.known.retain(|_, k| k.search + 1 >= search);
         }
     }
 
-    async fn get(&mut self, net: &Net, e: &Encoded, map: &Map, legal: &[Choice], oracle: &impl Oracle) -> Rc<Judged> {
-        let key = fingerprint(e, legal);
-        if let Some(judged) = self.known.get(&key) {
-            return judged.clone();
+    /// L'évaluation de la position : gardée (elle sert alors à la recherche en cours), ou demandée à
+    /// `oracle`.
+    async fn get(&mut self, net: &Net, e: &Encoded, map: &Map, legal: &[Choice], oracle: &impl Oracle) -> &Judged {
+        let search = self.search;
+        match self.known.entry(fingerprint(e, legal)) {
+            Entry::Occupied(kept) => {
+                let kept = kept.into_mut();
+                kept.search = search;
+                &kept.judged
+            }
+            Entry::Vacant(place) => {
+                let eval = oracle.eval(net, e, map).await;
+                let logits = legal.iter().map(|c| eval.logits[c.key as usize]).collect();
+                &place.insert(Kept { search, judged: Judged { win: eval.win, gain: eval.gain, logits } }).judged
+            }
         }
-        // reprise de la recherche précédente : l'évaluation passe dans celles de la recherche en cours
-        if let Some(judged) = self.older.remove(&key) {
-            self.known.insert(key, judged.clone());
-            return judged;
-        }
-        let eval = oracle.eval(net, e, map).await;
-        let logits = legal.iter().map(|c| eval.logits[c.key as usize]).collect();
-        let judged = Rc::new(Judged { win: eval.win, gain: eval.gain, logits });
-        self.known.insert(key, judged.clone());
-        judged
     }
 }
 
@@ -401,31 +478,35 @@ impl Az {
     }
 
     /// Une position nouvelle : ses coups et leurs logits, et la valeur que lui donne le réseau.
+    /// Ses coups vont à la suite de ceux de `tree`, le nœud à la fin de ses nœuds.
     async fn expand(
         &self,
         evals: &mut Evals,
+        tree: &mut Tree,
         w: &Game<'_>,
         k: &Knowledge,
         legal: &[Choice],
         oracle: &impl Oracle,
-    ) -> (Node, Value) {
+    ) -> Value {
         let judged = evals.get(&self.net, &encode(w, k), w.map, legal, oracle).await;
-        let value = self.judge(w, &judged);
-        let edges = legal
-            .iter()
-            .zip(&judged.logits)
-            .map(|(c, &logit)| Edge {
-                key: c.key,
-                mv: c.mv,
-                logit,
-                visits: 0,
-                total: [0.0; VALUE],
-                children: Vec::new(),
-            })
-            .collect();
+        let value = self.judge(w, judged);
+        let first = tree.edges.len() as u32;
+        // les probabilités a priori : la softmax des logits, une fois pour toutes
+        let mut priors = std::mem::take(&mut tree.scratch.values);
+        priors.clear();
+        priors.extend_from_slice(&judged.logits);
+        softmax_in_place(&mut priors);
+        tree.stats.extend(judged.logits.iter().zip(&priors).map(|(&logit, &prior)| Stat {
+            logit,
+            prior,
+            value: 0.0,
+            visits: 0,
+        }));
+        tree.scratch.values = priors;
+        tree.edges.extend(legal.iter().map(|c| Edge { hash: 0, child: NONE, more: NONE, key: c.key, mv: c.mv }));
         let actor = w.state.actor().expect("un joueur doit agir");
-        let node = Node { actor, raw: std::array::from_fn(|q| value[q]), visits: 1, total: value, edges };
-        (node, value)
+        tree.nodes.push(Node { first, len: legal.len() as u32, raw: value[actor], actor: actor as u8 });
+        value
     }
 
     /// La valeur que le réseau donne à une position (joueurs réels).
@@ -510,32 +591,40 @@ impl Az {
             };
         }
         evals.next(&self.net, root.map);
-        let (root_node, _) = self.expand(evals, root, k, &legal, oracle).await;
-        let mut nodes = vec![root_node];
+        // l'arbre de la partie, sorti de `evals` le temps de la recherche
+        let mut tree = std::mem::take(&mut evals.tree);
+        tree.clear();
+        // la racine : ses visites et ses valeurs, pour le résultat
+        let mut root_total = self.expand(evals, &mut tree, root, k, &legal, oracle).await;
+        let mut root_visits = 1u32;
         let noise: Vec<f32> = legal.iter().map(|_| if explore { gumbel(rng) } else { 0.0 }).collect();
         let schedule = considered_visits(CONSIDERED.min(legal.len()), iterations);
         // le score d'un coup de la racine parmi ceux qui ont `visits` visites
-        let mut scratch = Scratch::default();
-        let root_pick = |root: &Node, visits: u32, s: &mut Scratch| -> usize {
-            root.completed_into(s);
+        let root_pick = |root: Node, edges: &[Stat], visits: u32, s: &mut Scratch| -> usize {
+            root.completed_into(edges, s);
             let completed = &s.values;
-            let score = |i: usize| noise[i] + root.edges[i].logit + completed[i];
-            (0..root.edges.len())
-                .filter(|&i| root.edges[i].visits == visits)
+            let score = |i: usize| noise[i] + edges[i].logit + completed[i];
+            (0..edges.len())
+                .filter(|&i| edges[i].visits == visits)
                 .max_by(|&a, &b| score(a).total_cmp(&score(b)))
                 .expect("un coup retenu")
         };
-        let mut path: Vec<(u32, usize)> = Vec::new();
         for &considered in &schedule {
             let mut w = determinize(root, k, rng);
             let mut kw = *k;
-            path.clear();
+            tree.path.clear();
             let mut node = 0u32;
             let value: Value = loop {
-                let n = &nodes[node as usize];
-                let e = if node == 0 { root_pick(n, considered, &mut scratch) } else { n.select(&mut scratch) };
-                let mv = n.edges[e].mv;
-                path.push((node, e));
+                let n = tree.nodes[node as usize];
+                let stats = &tree.stats[n.first as usize..(n.first + n.len) as usize];
+                let i = if node == 0 {
+                    root_pick(n, stats, considered, &mut tree.scratch)
+                } else {
+                    n.select(stats, &mut tree.scratch)
+                };
+                let e = n.first as usize + i;
+                let mv = tree.edges[e].mv;
+                tree.path.push((node, e as u32));
                 // le coup, puis les coups forcés qui suivent, et le résultat de leur hasard
                 kw.play(&mut w, &mv).expect("coup possible");
                 let mut hash = fold(0, moves::chance(&w, &mv));
@@ -551,47 +640,55 @@ impl Az {
                     hash = fold(hash, moves::chance(&w, &legal[0].mv));
                 };
                 let Some(legal) = legal else { break self.terminal(&w) };
-                let known = nodes[node as usize].edges[e].children.iter().find(|&&(h, _)| h == hash);
-                if let Some(&(_, child)) = known {
+                if let Some(child) = tree.child(e, hash) {
                     node = child;
                     continue;
                 }
-                let (child, value) = self.expand(evals, &w, &kw, &legal, oracle).await;
-                let id = nodes.len() as u32;
-                nodes.push(child);
-                nodes[node as usize].edges[e].children.push((hash, id));
+                let id = tree.nodes.len() as u32;
+                let value = self.expand(evals, &mut tree, &w, &kw, &legal, oracle).await;
+                tree.add_child(e, hash, id);
                 break value;
             };
-            for &(nd, e) in &path {
-                let n = &mut nodes[nd as usize];
-                n.visits += 1;
-                n.total.iter_mut().zip(value).for_each(|(t, v)| *t += v);
-                let edge = &mut n.edges[e];
-                edge.visits += 1;
-                edge.total.iter_mut().zip(value).for_each(|(t, v)| *t += v);
+            for &(nd, e) in &tree.path {
+                if nd == 0 {
+                    root_visits += 1;
+                    root_total.iter_mut().zip(value).for_each(|(t, v)| *t += v);
+                }
+                let actor = tree.nodes[nd as usize].actor as usize;
+                let stat = &mut tree.stats[e as usize];
+                stat.visits += 1;
+                stat.value += value[actor];
             }
         }
-        let root_node = &nodes[0];
-        let most = root_node.edges.iter().map(|e| e.visits).max().unwrap_or(0);
-        let chosen = root_pick(root_node, most, &mut scratch);
-        let me = root_node.actor;
-        let priors = root_node.priors();
-        let policy = root_node.edges.iter().zip(root_node.improved()).map(|(e, p)| (e.key, p)).collect();
-        let visits = root_node.edges.iter().map(|e| (e.key, e.visits)).collect();
-        let details =
-            root_node.edges.iter().zip(&priors).map(|(e, &p)| (e.key, p, root_node.q(e).unwrap_or(f32::NAN))).collect();
-        let average = |at: usize| -> [f32; MAX_PLAYERS] {
-            std::array::from_fn(|q| root_node.total[at + q] / root_node.visits as f32)
-        };
+        let root_node = tree.nodes[0];
+        let (stats, edges) = (tree.stats(root_node), tree.edges(root_node));
+        let most = stats.iter().map(|e| e.visits).max().unwrap_or(0);
+        let chosen = root_pick(root_node, stats, most, &mut Scratch::default());
+        let me = root_node.actor as usize;
+        let policy = edges.iter().zip(root_node.improved(stats)).map(|(e, p)| (e.key, p)).collect();
+        let visits = edges.iter().zip(stats).map(|(e, s)| (e.key, s.visits)).collect();
+        let details = edges.iter().zip(stats).map(|(e, s)| (e.key, s.prior, q(s).unwrap_or(f32::NAN))).collect();
+        let average =
+            |at: usize| -> [f32; MAX_PLAYERS] { std::array::from_fn(|q| root_total[at + q] / root_visits as f32) };
         let (finals, wins) = (average(COINS), average(WINS));
-        let value = root_node.total[me] / root_node.visits as f32;
-        Searched { mv: root_node.edges[chosen].mv, policy, visits, finals, wins, details, value }
+        let value = root_total[me] / root_visits as f32;
+        let mv = edges[chosen].mv;
+        evals.tree = tree;
+        Searched { mv, policy, visits, finals, wins, details, value }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// L'arbre tient dans le cache : nœuds de 16 octets, coups en 16 + 24 octets (`Tree`).
+    #[test]
+    fn the_tree_stays_small() {
+        assert_eq!(std::mem::size_of::<Node>(), 16);
+        assert_eq!(std::mem::size_of::<Stat>(), 16);
+        assert!(std::mem::size_of::<Edge>() <= 24, "{} octets", std::mem::size_of::<Edge>());
+    }
 
     /// Le calendrier de mctx : 4 coups, 10 itérations → chacun une fois, puis les 2 meilleurs.
     #[test]
