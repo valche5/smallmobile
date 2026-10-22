@@ -1,0 +1,16 @@
+[package]
+name = "smallmobile-lab3"
+version = "0.1.0"
+edition = "2024"
+description = "Laboratoire 3 : un réseau par nombre de joueurs, sur la recherche de lab2 (journal.md)."
+publish = false
+
+[[bin]]
+name = "lab3"
+path = "src/bin/lab.rs"
+
+[dependencies]
+smallmobile-kernel = { path = "../kernel" }
+smallmobile-brain3 = { path = "brain" }
+# l'Expert de lab2, adversaire témoin de l'arène (`lab2:net=…`)
+smallmobile-brain2 = { path = "../lab2/brain" }

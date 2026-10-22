@@ -17,6 +17,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "smallmobile-brain3"
+version = "0.1.0"
+dependencies = [
+ "smallmobile-kernel",
+]
+
+[[package]]
 name = "smallmobile-kernel"
 version = "0.1.0"
 
@@ -34,5 +41,14 @@ version = "0.1.0"
 dependencies = [
  "smallmobile-brain1",
  "smallmobile-brain2",
+ "smallmobile-kernel",
+]
+
+[[package]]
+name = "smallmobile-lab3"
+version = "0.1.0"
+dependencies = [
+ "smallmobile-brain2",
+ "smallmobile-brain3",
  "smallmobile-kernel",
 ]

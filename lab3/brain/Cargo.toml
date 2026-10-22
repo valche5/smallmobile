@@ -1,0 +1,13 @@
+[package]
+name = "smallmobile-brain3"
+version = "0.1.0"
+edition = "2024"
+description = "L'IA Expert du labo 3 : Gumbel AlphaZero avec nœuds de hasard, un réseau par nombre de joueurs, pour le jeu et pour le labo."
+publish = false
+
+[[bin]]
+name = "lab3-expert"
+path = "src/bin/expert.rs"
+
+[dependencies]
+smallmobile-kernel = { path = "../../kernel" }
