@@ -41,7 +41,8 @@ Celui de lab2 (voir son journal), sauf :
   parties à la fois ; la recherche attend ses évaluations (`search::Oracle`) : chaque partie
   avance jusqu'à sa prochaine évaluation, puis le fil les évalue toutes ensemble, couche après
   couche (`Net::eval_batch` : les poids d'une couche restent dans le cache du cœur d'une
-  position à l'autre). Les évaluations sont gardées d'une recherche à la suivante
+  position à l'autre ; les vecteurs de partie de toutes les positions passent ensemble dans les
+  couches qui les lisent, trois à la fois avec AVX-512). Les évaluations sont gardées d'une recherche à la suivante
   (`search::Evals`, une par partie : la décision d'après repasse par les positions que la
   précédente a explorées), chacune en quelques centaines d'octets (empreinte de 128 bits,
   valeur, logits des coups possibles). Tout ce que touche un fil lui appartient ; seuls les
@@ -51,7 +52,8 @@ Celui de lab2 (voir son journal), sauf :
 - **Vitesse** (22 octobre, c060 de lab2, n = 200, 4 joueurs, recette de l'auto-jeu ; ancien
   moteur : celui de lab2) : sur un cœur de mini, 4 parties en 21,0 s → 14,8 s (évaluations
   gardées seules) → 14,6 s ; sur `c7a.16xlarge`, 16 parties sur un cœur 33,6 s → 24,1 s, 1 024
-  parties sur 64 cœurs 49,9 s → 34,0 s (1,47 fois plus vite). À 64 cœurs, chaque cœur va 1,4 à
+  parties sur 64 cœurs 49,9 s → 34,0 s → 30,9 s avec les vecteurs de partie groupés (1,61 fois
+  plus vite). À 64 cœurs, chaque cœur va 1,4 à
   1,5 fois moins vite que seul : les cœurs se gênent dans les caches et la mémoire partagés.
 - Retiré : `size.py` (mesure des tailles de réseau de lab2).
 

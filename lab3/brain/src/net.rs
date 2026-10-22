@@ -62,12 +62,14 @@ impl Linear {
         Ok(Linear { inp, out, w: wt, b, wp })
     }
 
-    /// `y = b + x · W` (y de taille `out`).
+    /// `y = b + x · W` pour chacune des `rows` lignes `x` de `xs` (`inp` nombres), dans les lignes `y`
+    /// de `ys` (`out` nombres).
     #[inline(always)]
-    fn apply<const AVX2: bool>(&self, x: &[f32], y: &mut [f32]) {
-        debug_assert_eq!(x.len(), self.inp);
-        y.copy_from_slice(&self.b);
-        accumulate_rows::<AVX2>(self, 0, x, y);
+    fn apply_many<const AVX2: bool, const WIDE: bool>(&self, xs: &[f32], rows: usize, ys: &mut [f32]) {
+        for y in ys[..rows * self.out].chunks_exact_mut(self.out) {
+            y.copy_from_slice(&self.b);
+        }
+        accumulate_many::<AVX2, WIDE>(self, 0, xs, self.inp, rows, ys);
     }
 }
 
@@ -104,22 +106,33 @@ impl Policy {
         })
     }
 
-    /// Les logits des clés (`-inf` pour les régions absentes) : `g` le vecteur de la partie, `h` les
-    /// `r` lignes des régions.
+    /// Les logits des clés de chaque position (`-inf` pour les régions absentes) : `g` leurs vecteurs
+    /// de partie (`hd` nombres chacun), `hs` leurs lignes de régions.
     #[inline(always)]
-    fn logits<const AVX2: bool>(&self, g: &[f32], h: &[f32], r: usize, hd: usize) -> Vec<f32> {
-        let mut logits = vec![f32::NEG_INFINITY; KEYS];
-        let mut gp = vec![0.0f32; hd];
-        self.glob1.apply::<AVX2>(g, &mut gp);
+    fn logits_many<const AVX2: bool, const WIDE: bool, P: Position>(
+        &self,
+        g: &[f32],
+        hs: &[Vec<f32>],
+        items: &[P],
+        hd: usize,
+    ) -> Vec<Vec<f32>> {
+        let n = items.len();
+        let mut gp = vec![0.0f32; n * hd];
+        self.glob1.apply_many::<AVX2, WIDE>(g, n, &mut gp);
         relu(&mut gp);
-        let mut gl = vec![0.0f32; GLOBAL_KEYS];
-        self.glob2.apply::<AVX2>(&gp, &mut gl);
-        logits[..GLOBAL_KEYS].copy_from_slice(&gl);
-        let mut gpol = [0.0f32; REGION_KINDS];
-        gpol.copy_from_slice(&self.node.b);
-        accumulate_rows::<AVX2>(&self.node, hd, g, &mut gpol);
-        region_policy::<AVX2>(&self.node, h, r, hd, &gpol, &mut logits);
-        logits
+        let mut gl = vec![0.0f32; n * GLOBAL_KEYS];
+        self.glob2.apply_many::<AVX2, WIDE>(&gp, n, &mut gl);
+        let mut all = Vec::with_capacity(n);
+        for (k, (p, h)) in items.iter().zip(hs).enumerate() {
+            let mut logits = vec![f32::NEG_INFINITY; KEYS];
+            logits[..GLOBAL_KEYS].copy_from_slice(&gl[k * GLOBAL_KEYS..(k + 1) * GLOBAL_KEYS]);
+            let mut gpol = [0.0f32; REGION_KINDS];
+            gpol.copy_from_slice(&self.node.b);
+            accumulate_rows::<AVX2>(&self.node, hd, &g[k * hd..(k + 1) * hd], &mut gpol);
+            region_policy::<AVX2>(&self.node, h, p.encoded().regions, hd, &gpol, &mut logits);
+            all.push(logits);
+        }
+        all
     }
 }
 
@@ -305,54 +318,57 @@ impl Net {
     /// alors FMA (`gemm_dispatch`), le reste des multiplications et additions séparées, comme sans.
     /// `BF16` : les trois grands produits de chaque couche en bf16 (`product`), avec AVX-512 BF16 si
     /// `AVX2`, sinon par leur référence. Les positions avancent ensemble, couche après couche
-    /// (`eval_batch`) ; chacune a ses lignes de régions `h` et son vecteur de partie `g`, le reste
-    /// est de la place de travail commune.
+    /// (`eval_batch`) : chacune a ses lignes de régions (`hs`) ; les vecteurs de partie de toutes,
+    /// côte à côte (`g`), passent ensemble dans les couches qui les lisent (`apply_many`). Chaque
+    /// position reçoit les mêmes opérations, dans le même ordre, qu'évaluée seule.
     #[inline(always)]
     fn eval_generic<const AVX2: bool, const BF16: bool, P: Position>(&self, items: &[P]) -> Vec<Eval> {
-        let hd = self.hidden;
-        let mut hs = Vec::with_capacity(items.len());
-        let mut gs = Vec::with_capacity(items.len());
-        let mut x = [0.0f32; GLOBAL];
+        let (hd, n) = (self.hidden, items.len());
+        let mut hs = Vec::with_capacity(n);
+        let mut xn = vec![0.0f32; REGIONS * NODE];
         for p in items {
             let (e, r) = (p.encoded(), p.encoded().regions);
-            let mut h = vec![0.0f32; r * hd];
-            for i in 0..r {
-                let mut xn = [0.0f32; NODE];
-                for ((x, &v), &sc) in xn.iter_mut().zip(&e.node[i]).zip(&self.node_scale) {
+            for (xs, row) in xn.chunks_exact_mut(NODE).zip(&e.node[..r]) {
+                for ((x, &v), &sc) in xs.iter_mut().zip(row).zip(&self.node_scale) {
                     *x = v as f32 * sc;
                 }
-                self.node_in.apply::<AVX2>(&xn, &mut h[i * hd..(i + 1) * hd]);
             }
-            for ((x, &v), &sc) in x.iter_mut().zip(&e.global).zip(&self.global_scale) {
+            let mut h = vec![0.0f32; r * hd];
+            self.node_in.apply_many::<AVX2, BF16>(&xn, r, &mut h);
+            hs.push(h);
+        }
+        let mut xg = vec![0.0f32; n * GLOBAL];
+        for (p, xs) in items.iter().zip(xg.chunks_exact_mut(GLOBAL)) {
+            for ((x, &v), &sc) in xs.iter_mut().zip(&p.encoded().global).zip(&self.global_scale) {
                 *x = v as f32 * sc;
             }
-            let mut g = vec![0.0f32; hd];
-            self.glob_in.apply::<AVX2>(&x, &mut g);
-            hs.push(h);
-            gs.push(g);
         }
+        let mut g = vec![0.0f32; n * hd];
+        self.glob_in.apply_many::<AVX2, BF16>(&xg, n, &mut g);
 
         let mut agg = vec![0.0f32; REGIONS * hd];
         let mut mid = vec![0.0f32; REGIONS * hd];
         let mut add = vec![0.0f32; REGIONS * hd];
-        let mut cat = vec![0.0f32; 3 * hd];
-        let mut gmid = vec![0.0f32; hd];
-        let mut gadd = vec![0.0f32; hd];
-        let mut gpart = vec![0.0f32; hd];
+        let mut gpart = vec![0.0f32; n * hd];
+        let mut cat = vec![0.0f32; n * 3 * hd];
+        let mut gmid = vec![0.0f32; n * hd];
+        let mut gadd = vec![0.0f32; n * hd];
         let mut packed = Vec::new();
         for layer in &self.layers {
-            for ((p, h), g) in items.iter().zip(&mut hs).zip(&mut gs) {
+            // n1([h, a, g]) : la part de g est la même pour toutes les régions d'une position
+            for gp in gpart.chunks_exact_mut(hd) {
+                gp.copy_from_slice(&layer.n1.b);
+            }
+            accumulate_many::<AVX2, BF16>(&layer.n1, 2 * hd, &g, hd, n, &mut gpart);
+            for (k, (p, h)) in items.iter().zip(&mut hs).enumerate() {
                 let r = p.encoded().regions;
                 let (agg, mid, add) = (&mut agg[..r * hd], &mut mid[..r * hd], &mut add[..r * hd]);
                 // moyenne des voisines
                 for i in 0..r {
                     neighbours::<AVX2>(h, hd, p.adj(i), &mut agg[i * hd..(i + 1) * hd]);
                 }
-                // n1([h, a, g]) : la part de g est la même pour toutes les régions
-                gpart.copy_from_slice(&layer.n1.b);
-                accumulate_rows::<AVX2>(&layer.n1, 2 * hd, g, &mut gpart);
                 for i in 0..r {
-                    mid[i * hd..(i + 1) * hd].copy_from_slice(&gpart);
+                    mid[i * hd..(i + 1) * hd].copy_from_slice(&gpart[k * hd..(k + 1) * hd]);
                 }
                 product::<AVX2, BF16>(h, r, hd, &layer.n1, 0, mid, &mut packed);
                 product::<AVX2, BF16>(agg, r, hd, &layer.n1, hd, mid, &mut packed);
@@ -362,38 +378,44 @@ impl Net {
                 }
                 product::<AVX2, BF16>(mid, r, hd, &layer.n2, 0, add, &mut packed);
                 h.iter_mut().zip(add.iter()).for_each(|(a, b)| *a += b);
-                cat[..hd].copy_from_slice(g);
+                let cat = &mut cat[k * 3 * hd..(k + 1) * 3 * hd];
+                cat[..hd].copy_from_slice(&g[k * hd..(k + 1) * hd]);
                 let (mean, max) = cat[hd..].split_at_mut(hd);
                 pool(h, r, hd, mean, max);
-                layer.g1.apply::<AVX2>(&cat, &mut gmid);
-                relu(&mut gmid);
-                layer.g2.apply::<AVX2>(&gmid, &mut gadd);
-                g.iter_mut().zip(&gadd).for_each(|(a, b)| *a += b);
             }
+            layer.g1.apply_many::<AVX2, BF16>(&cat, n, &mut gmid);
+            relu(&mut gmid);
+            layer.g2.apply_many::<AVX2, BF16>(&gmid, n, &mut gadd);
+            g.iter_mut().zip(&gadd).for_each(|(a, b)| *a += b);
         }
 
-        let mut evals = Vec::with_capacity(items.len());
-        for ((p, h), g) in items.iter().zip(&hs).zip(&gs) {
-            let (e, r) = (p.encoded(), p.encoded().regions);
-            let logits = self.policy.logits::<AVX2>(g, h, r, hd);
+        let logits = self.policy.logits_many::<AVX2, BF16, P>(&g, &hs, items, hd);
 
-            cat[..hd].copy_from_slice(g);
-            let (mean, max) = cat[hd..].split_at_mut(hd);
-            pool(h, r, hd, mean, max);
-            self.val1.apply::<AVX2>(&cat[..2 * hd], &mut gmid);
-            relu(&mut gmid);
-            let mut v = [0.0f32; 10];
-            self.val2.apply::<AVX2>(&gmid, &mut v);
+        // valeur : val1([g, moyenne h])
+        let mut vin = vec![0.0f32; n * 2 * hd];
+        let mut max = vec![0.0f32; hd];
+        for (k, (p, h)) in items.iter().zip(&hs).enumerate() {
+            let vin = &mut vin[k * 2 * hd..(k + 1) * 2 * hd];
+            vin[..hd].copy_from_slice(&g[k * hd..(k + 1) * hd]);
+            pool(h, p.encoded().regions, hd, &mut vin[hd..], &mut max);
+        }
+        self.val1.apply_many::<AVX2, BF16>(&vin, n, &mut gmid);
+        relu(&mut gmid);
+        let mut v = vec![0.0f32; n * 10];
+        self.val2.apply_many::<AVX2, BF16>(&gmid, n, &mut v);
+        let mut evals = Vec::with_capacity(n);
+        for ((p, v), logits) in items.iter().zip(v.chunks_exact(10)).zip(logits) {
+            let players = p.encoded().players;
             let mut win = [0.0f32; 5];
-            let top = v[..e.players].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let top = v[..players].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
             let mut sum = 0.0;
-            for q in 0..e.players {
+            for q in 0..players {
                 win[q] = (v[q] - top).exp();
                 sum += win[q];
             }
             win.iter_mut().for_each(|w| *w /= sum);
             let mut gain = [0.0f32; 5];
-            for q in 0..e.players {
+            for q in 0..players {
                 gain[q] = v[5 + q] * GAIN_SCALE;
             }
             evals.push(Eval { win, gain, logits });
@@ -453,6 +475,34 @@ fn accumulate_rows<const AVX2: bool>(l: &Linear, from: usize, x: &[f32], y: &mut
                 *yo += xi * wo;
             }
         }
+    }
+}
+
+/// `accumulate_rows` pour `rows` lignes : `ys[r] += xs[r] · W[lignes from..from + len]` (`len`
+/// entrées par ligne de `xs`, `l.out` sorties par ligne de `ys`), chaque ligne comme seule. Avec
+/// AVX-512 (`WIDE`, le calcul bf16), trois lignes à la fois, toutes leurs sorties dans les
+/// registres : chaque ligne de poids, lue une fois, sert aux trois (`avx512::accumulate_many`).
+#[inline(always)]
+fn accumulate_many<const AVX2: bool, const WIDE: bool>(
+    l: &Linear,
+    from: usize,
+    xs: &[f32],
+    len: usize,
+    rows: usize,
+    ys: &mut [f32],
+) {
+    #[cfg(target_arch = "x86_64")]
+    if AVX2 && WIDE && l.out.is_multiple_of(16) && l.out <= 128 {
+        assert!(
+            xs.len() >= rows * len && ys.len() >= rows * l.out && l.w.len() >= (from + len) * l.out,
+            "dimensions"
+        );
+        // SAFETY: AVX-512 vérifié par `eval_batch` (calcul bf16) ; dimensions vérifiées juste avant
+        unsafe { avx512::accumulate_many(&l.w, l.out, from, xs, len, rows, ys) };
+        return;
+    }
+    for r in 0..rows {
+        accumulate_rows::<AVX2>(l, from, &xs[r * len..(r + 1) * len], &mut ys[r * l.out..(r + 1) * l.out]);
     }
 }
 
@@ -841,6 +891,95 @@ mod bf16 {
 #[cfg(target_arch = "x86_64")]
 mod avx512 {
     use std::arch::x86_64::*;
+
+    /// `accumulate_many` : trois lignes à la fois, leurs `out` sorties (`16 V`, au plus 128) dans
+    /// les registres ; pour chaque entrée, la ligne de poids lue sert aux lignes où l'entrée n'est
+    /// pas nulle (multiplication puis addition séparées, comme `avx2::accumulate`).
+    #[target_feature(enable = "avx2,fma,avx512f")]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn accumulate_many(
+        w: &[f32],
+        out: usize,
+        from: usize,
+        xs: &[f32],
+        len: usize,
+        rows: usize,
+        ys: &mut [f32],
+    ) {
+        let (w, xs, ys) = (w[from * out..].as_ptr(), xs.as_ptr(), ys.as_mut_ptr());
+        // SAFETY : `out / 16` vecteurs par ligne, lignes dans les tranches vérifiées par l'appelant
+        unsafe {
+            match out / 16 {
+                8 => rows_wide::<8>(w, out, xs, len, rows, ys),
+                7 => rows_wide::<7>(w, out, xs, len, rows, ys),
+                6 => rows_wide::<6>(w, out, xs, len, rows, ys),
+                5 => rows_wide::<5>(w, out, xs, len, rows, ys),
+                4 => rows_wide::<4>(w, out, xs, len, rows, ys),
+                3 => rows_wide::<3>(w, out, xs, len, rows, ys),
+                2 => rows_wide::<2>(w, out, xs, len, rows, ys),
+                _ => rows_wide::<1>(w, out, xs, len, rows, ys),
+            }
+        }
+    }
+
+    #[target_feature(enable = "avx2,fma,avx512f")]
+    #[inline]
+    unsafe fn rows_wide<const V: usize>(
+        w: *const f32,
+        out: usize,
+        xs: *const f32,
+        len: usize,
+        rows: usize,
+        ys: *mut f32,
+    ) {
+        let mut r = 0;
+        // SAFETY (pour chaque tuile) : lignes `r..r + R` < `rows` (voir `accumulate_many`)
+        unsafe {
+            while r + 3 <= rows {
+                tile_wide::<3, V>(w, out, xs.add(r * len), len, ys.add(r * out));
+                r += 3;
+            }
+            match rows - r {
+                1 => tile_wide::<1, V>(w, out, xs.add(r * len), len, ys.add(r * out)),
+                2 => tile_wide::<2, V>(w, out, xs.add(r * len), len, ys.add(r * out)),
+                _ => {}
+            }
+        }
+    }
+
+    #[target_feature(enable = "avx2,fma,avx512f")]
+    #[inline]
+    unsafe fn tile_wide<const R: usize, const V: usize>(
+        w: *const f32,
+        out: usize,
+        xs: *const f32,
+        len: usize,
+        ys: *mut f32,
+    ) {
+        // SAFETY : `16 V` nombres de chacune des `R` lignes de `ys` et des `len` lignes de `w`, `len`
+        // nombres de chacune des `R` lignes de `xs`
+        unsafe {
+            let mut acc: [[__m512; V]; R] =
+                std::array::from_fn(|r| std::array::from_fn(|v| _mm512_loadu_ps(ys.add(r * out + 16 * v))));
+            for i in 0..len {
+                let row = w.add(i * out);
+                for (r, acc) in acc.iter_mut().enumerate() {
+                    let xi = *xs.add(r * len + i);
+                    if xi != 0.0 {
+                        let xv = _mm512_set1_ps(xi);
+                        for (v, acc) in acc.iter_mut().enumerate() {
+                            *acc = _mm512_add_ps(*acc, _mm512_mul_ps(xv, _mm512_loadu_ps(row.add(16 * v))));
+                        }
+                    }
+                }
+            }
+            for (r, acc) in acc.iter().enumerate() {
+                for (v, acc) in acc.iter().enumerate() {
+                    _mm512_storeu_ps(ys.add(r * out + 16 * v), *acc);
+                }
+            }
+        }
+    }
 
     /// Les `len` premiers nombres de `a` (multiple de 32) arrondis en bf16, deux par nombre de
     /// `out`, dans l'ordre.
