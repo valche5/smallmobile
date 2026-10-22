@@ -97,7 +97,8 @@ Configuration constatée le 19 octobre 2026, à revérifier avant de dépenser :
 - SmallAI `631245464763`, profil `smallai`, région `eu-north-1` (Stockholm). Fonctionnalités
   avancées activées, Spot autorisé, quota Standard Spot 64 vCPU ; une seule `c7a.16xlarge`
   à la fois. Le DryRun a vérifié les permissions, pas la disponibilité réelle. Quota Spot des
-  machines à GPU (« All G and VT Spot Instance Requests ») : 0 au 22 octobre ; `cloud.sh` sait
+  machines à GPU (« All G and VT Spot Instance Requests ») : 0 au 22 octobre, augmentation à 64
+  vCPU demandée le 22 octobre à 17 h 23 (Service Quotas, en attente) ; `cloud.sh` sait
   lancer ces machines (`gpu_type` : image d'AWS avec les pilotes NVIDIA, Ubuntu, utilisateur
   `ubuntu`).
 - `cloud.sh` impose Spot sans repli à la demande (`SPOT=0` refusé). Par défaut :
