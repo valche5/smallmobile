@@ -79,8 +79,8 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
   il joue au hasard. Calcul Rust en `f32` (AVX2) ; sur un processeur qui a AVX-512 BF16 (AWS),
   les grands produits en bf16, choisis automatiquement : mêmes résultats que leur référence
   scalaire, écarts au `f32` de 10⁻⁴ sur la victoire et 0,004 sur les logits (`lab2 bench-net`).
-- **Jeu** : `lab2-expert` avec c040 (`lab2/nets/c040.bin`), n = 800 (`src/shared/experts.ts`),
-  variante par défaut. Arène d'essai sur mini, un cœur, 3 joueurs face à Normale, 20 donnes :
+- **Jeu** : `lab2-expert` avec c060 (`lab2/nets/c060.bin`), n = 800 (`src/shared/experts.ts`).
+  Arène d'essai sur mini avec c040 (même taille), un cœur, 3 joueurs face à Normale, 20 donnes :
   179 ms en moyenne par décision à n = 800, p95 624 ms, fins de tour comprises (c020, 64x4 :
   65 ms, p95 224 ms ; lab1 dans le jeu sur mini : 80 à 250 ms, médiane 170 ms).
 - **Arène** : un joueur rend une décision entière en actions du noyau ; témoin `lab1:net=…,n=…`
@@ -347,3 +347,35 @@ c060 par taille (2, 3, 4, 5 joueurs) : Difficile +40,9, +24,6, +29,3, +27,7 ; No
   (Normale à 3 joueurs : +6,1 pour c040, +22,0 pour c060).
 - La valeur de chaque pas baisse de nouveau (1,028 → 1,014), la politique continue (1,329 →
   1,298).
+
+Mesures de fin (`lab2/runs/final3.sh`, résultats `lab2/runs/final3` ; machine reprise par AWS
+pendant les arènes, faute de place, puis relancée : 11 + 39 min, 0,63 $). Courbe sur les parties
+réservées des cycles 41 et 42 (jouées par c039 et c040 ; 84 443 positions) et 59 et 60 (jouées
+par c057 et c058 ; 83 244 positions) :
+
+| Réseau | Valeur 41-42 | Possession | Politique | Valeur 59-60 | Possession | Politique | Précision |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| c020 (64x4) | 1,054 | 0,590 | 1,484 | 1,050 | 0,603 | 1,507 | 39,7 % |
+| c030 | 1,036 | 0,552 | 1,390 | 1,025 | 0,565 | 1,423 | 43,1 % |
+| c040 | 1,023 | 0,531 | 1,322 | 1,015 | 0,543 | 1,361 | 46,0 % |
+| c045 | 1,018 | 0,526 | 1,320 | 1,010 | 0,536 | 1,339 | 47,4 % |
+| c050 | 1,014 | 0,525 | 1,325 | 1,009 | 0,530 | 1,320 | 48,2 % |
+| c055 | 1,014 | 0,525 | 1,336 | 1,008 | 0,526 | 1,305 | 49,4 % |
+| c060 | 1,011 | 0,527 | 1,345 | 1,006 | 0,523 | 1,296 | 49,7 % |
+
+Arènes de c060, 920 donnes, graine 1004 :
+
+| Face à | Score | 2 joueurs | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- |
+| c050 (n = 200 des deux côtés) | +0,2 ± 1,5 | −0,1 | +1,9 | +2,3 | −3,2 |
+| c040 (n = 200) | +5,3 ± 1,6 | +5,4 | +4,7 | +6,5 | +4,5 |
+| lab1 (c060 à n = 800, gen11 à n = 200) | +0,7 ± 1,6 | +3,6 | +0,5 | +1,0 | −2,3 |
+
+- **À égalité avec lab1** (−2,2 pour c040, −12,6 pour le c020 64x4), toujours sans rien de lab1.
+  132 ms par décision pour c060 sur AWS, p95 452 ms.
+- **Tout le gain de la boucle vient de c041 à c050** : c060 bat c040 de 5,3 points mais pas c050
+  (+0,2, rejoué à l'identique après la reprise de la machine) ; la valeur ne gagne plus que
+  0,003 de c050 à c060 sur les parties récentes. La montée face aux IA du jeu après c050 (vers
+  +30 et +26) ne se retrouve pas face à c050 : de quoi mieux exploiter ces IA, pas de progrès
+  général mesurable.
+- Positions des cycles 1 à 48 effacées du bucket ensuite (`lab2/prune.sh`, 70,5 Go gardés).

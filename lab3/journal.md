@@ -136,4 +136,4 @@ Arènes directes, 920 donnes à 4 joueurs, graine 1004, lab3 c020 face à trois 
   directe, meilleure valeur même sur ces parties qu'il n'a jamais vues).
 - La politique de la courbe avantage lab3 par construction (ses cibles sont les recherches de
   lab3, qui a joué ces parties) ; la valeur, elle, compare des prédictions du vainqueur.
-
+- Positions des cycles 1 à 16 effacées du bucket ensuite (`lab3/prune.sh 4`, 25,8 Go gardés).
