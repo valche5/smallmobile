@@ -26,8 +26,9 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::task::{Context, Poll, Waker};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use smallmobile_kernel::ids::MAX_PLAYERS;
 use smallmobile_kernel::state::Occupant;
@@ -210,6 +211,7 @@ pub async fn play(
             let s = az.run(&g, &k, rng, az.cfg.iterations, true, &mut evals, oracle).await;
             let policy = s.policy.iter().map(|&(key, p)| (key, (p * PROBABILITY).round() as u16)).collect();
             pending.push(Pending::new(&encode(&g, &k), actor, coins(&g), policy, surprise(&s)));
+            SEARCHED.fetch_add(1, Ordering::Relaxed);
             s.mv
         };
         moves::actions_into(&g, &mv, &mut actions);
@@ -447,6 +449,48 @@ pub async fn game(i: usize, cfg: &Config, az: &Az, oracle: &impl Oracle) -> std:
     Ok(Finished { players, positions: played.positions, records, line })
 }
 
+/// Les positions retenues par toutes les parties, comptées dès leur recherche : une partie ne compte
+/// les siennes qu'à sa fin, une à deux minutes après son début en selfplay GPU (`pace`).
+pub static SEARCHED: AtomicUsize = AtomicUsize::new(0);
+
+/// La période de `pace`.
+const PACE: Duration = Duration::from_secs(10);
+
+/// Le rythme du selfplay, toutes les `PACE` jusqu'à `stopped` : positions retenues par seconde sur la
+/// dernière période, pas depuis le départ, pour lire le régime établi en une minute, quel que soit le
+/// nombre de parties ; avec `profile`, la répartition du temps des fils de jeu sur la même période.
+fn pace(stopped: &Receiver<()>, threads: usize, profile: bool) {
+    let now = || {
+        (
+            Instant::now(),
+            SEARCHED.load(Ordering::Relaxed),
+            crate::batch::TIMES.each_ref().map(|t| t.load(Ordering::Relaxed)),
+        )
+    };
+    let mut last = now();
+    while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(PACE) {
+        let next = now();
+        let secs = (next.0 - last.0).as_secs_f64();
+        let spent = std::array::from_fn(|i| next.2[i] - last.2[i]);
+        eprintln!("rythme : {:.0} positions/s sur les {secs:.0} dernières s", (next.1 - last.1) as f64 / secs);
+        if profile {
+            eprintln!("{}", split(spent, secs * threads as f64));
+        }
+        last = next;
+    }
+}
+
+/// La répartition du temps des fils de jeu (`batch::TIMES` : `spent`, ns) sur `all` secondes de fil.
+fn split(spent: [u64; 3], all: f64) -> String {
+    use crate::batch::{TIME_DECODE, TIME_SUBMIT, TIME_WAIT};
+    let share = |what: usize| 100.0 * spent[what] as f64 / 1e9 / all;
+    let (submit, wait, decode) = (share(TIME_SUBMIT), share(TIME_WAIT), share(TIME_DECODE));
+    format!(
+        "fils de jeu : jeu et recherche {:.0} %, envoi {submit:.1} %, attente {wait:.0} %, décodage {decode:.1} %",
+        100.0 - submit - wait - decode
+    )
+}
+
 /// Des parties d'entraînement en parallèle, un fichier par fil dans `dir` (avec `games_file` et
 /// `moves_file`). Chaque fil mène ses parties par groupes (`CONCURRENT`) : chacune avance jusqu'à sa
 /// prochaine évaluation, puis le groupe est évalué d'un coup, par le processeur du fil ou par `gpu`.
@@ -461,7 +505,11 @@ pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Res
     let next = AtomicUsize::new(0);
     let positions = AtomicUsize::new(0);
     let start = Instant::now();
+    let profile = gpu.is_some() && std::env::var_os("LAB3_VULKAN_PROFILE").is_some();
     std::thread::scope(|scope| -> std::io::Result<()> {
+        // `pace` s'arrête quand `stop` disparaît, à la fin de cette fonction
+        let (stop, stopped) = std::sync::mpsc::channel::<()>();
+        scope.spawn(move || pace(&stopped, cfg.threads, profile));
         let mut handles = Vec::new();
         for t in 0..cfg.threads {
             let (next, positions) = (&next, &positions);
@@ -528,15 +576,10 @@ pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Res
         for h in handles {
             h.join().expect("fil d'auto-apprentissage")?;
         }
-        if gpu.is_some() && std::env::var_os("LAB3_VULKAN_PROFILE").is_some() {
-            use crate::batch::{TIME_DECODE, TIME_SUBMIT, TIME_WAIT, TIMES};
-            let all = start.elapsed().as_secs_f64() * cfg.threads as f64;
-            let share = |what: usize| 100.0 * TIMES[what].load(Ordering::Relaxed) as f64 / 1e9 / all;
-            let (submit, wait, decode) = (share(TIME_SUBMIT), share(TIME_WAIT), share(TIME_DECODE));
-            eprintln!(
-                "fils de jeu : jeu et recherche {:.0} %, envoi {submit:.1} %, attente {wait:.0} %, décodage {decode:.1} %",
-                100.0 - submit - wait - decode
-            );
+        drop(stop);
+        if profile {
+            let spent = crate::batch::TIMES.each_ref().map(|t| t.load(Ordering::Relaxed));
+            eprintln!("{}", split(spent, start.elapsed().as_secs_f64() * cfg.threads as f64));
         }
         Ok(())
     })

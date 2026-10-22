@@ -131,6 +131,14 @@ Celui de lab2 (voir son journal), sauf :
   128 parties par fil : défauts L3 65 000 → 28 000 par position, ~59 → ~48 millions de cycles.
   Selfplay GPU (c060, 20 fils) : 1 220 → 1 510 positions/s ; les fils attendent maintenant 23 %
   du temps, le GPU calcule ~66 % : le prochain frein est l'aller-retour des lots.
+- **Mesurer le régime établi** (`selfplay` affiche toutes les 10 s le rythme des 10 dernières
+  secondes, positions comptées dès leur recherche ; le compteur des parties finies retarde d'une
+  durée de partie). Toutes les parties partent ensemble et leurs premiers coups coûtent moins : le
+  rythme est trop haut tant que les parties n'ont pas l'âge d'une partie, ~60 s à 128 par fil,
+  ~110 s à 256. Selfplay GPU (c060, 20 fils), régime établi : 4 × 32 ~1 650 positions/s (attente
+  10 %) ; 8 × 32 ~1 655 (attente 4 %) : doubler les parties par fil ôte l'attente mais le jeu coûte
+  d'autant plus (caches), aucun gain. Les 1 510 et 1 539 des mesures sur un nombre fixe de parties
+  comptent la fin, où les fils n'ont plus assez de parties.
 - **Deux défauts du compilateur de RADV** (Mesa 26.2.4, ACO, gfx1201), trouvés en comparant son
   assembleur (`RADV_DEBUG=shaders`) pour des variantes justes et fausses du shader. (1) En formant
   des paires d'instructions VOPD, ACO met une addition avec l'instruction qui produit l'une de ses
