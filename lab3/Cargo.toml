@@ -9,8 +9,14 @@ publish = false
 name = "lab3"
 path = "src/bin/lab.rs"
 
+[features]
+# le réseau sur GPU pour la génération des parties (`lab3 selfplay --device gpu`, src/gpu.rs) :
+# PyTorch appelé par pyo3
+gpu = ["dep:pyo3"]
+
 [dependencies]
 smallmobile-kernel = { path = "../kernel" }
 smallmobile-brain3 = { path = "brain" }
 # l'Expert de lab2, adversaire témoin de l'arène (`lab2:net=…`)
 smallmobile-brain2 = { path = "../lab2/brain" }
+pyo3 = { version = "0.30", features = ["auto-initialize"], optional = true }

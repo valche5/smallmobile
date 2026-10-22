@@ -2,13 +2,19 @@
 # Environnement Python de l'entraînement.
 #   ./setup.sh       PyTorch pour ROCm, avec les seuls pilotes de la RX 9070 (gfx1201) ; demande uv.
 #   ./setup.sh cpu   PyTorch sur processeur (machine de calcul sans GPU) ; venv et pip suffisent.
+#   ./setup.sh cuda  PyTorch pour CUDA (machine à GPU NVIDIA, labtools/cloud.sh) ; venv et pip suffisent.
 set -e
 cd "$(dirname "$0")"
-if [ "${1:-}" = cpu ]; then
+if [ "${1:-}" = cpu ] || [ "${1:-}" = cuda ]; then
   python3 -m venv --clear .venv
   .venv/bin/pip install --quiet --upgrade pip
-  .venv/bin/pip install --quiet --index-url https://download.pytorch.org/whl/cpu \
-    --extra-index-url https://pypi.org/simple torch numpy
+  if [ "$1" = cpu ]; then
+    .venv/bin/pip install --quiet --index-url https://download.pytorch.org/whl/cpu \
+      --extra-index-url https://pypi.org/simple torch numpy
+  else
+    # les roues de PyTorch sur PyPI sont celles de CUDA
+    .venv/bin/pip install --quiet torch numpy
+  fi
   exit
 fi
 uv venv --clear --python 3.13 .venv

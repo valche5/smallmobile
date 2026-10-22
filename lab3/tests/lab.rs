@@ -35,6 +35,11 @@ fn expert(n: usize) -> smallmobile_lab3::az::Az {
 /// Un réseau dont tous les poids comptent : ceux de gen0, dont les tenseurs nuls (sorties,
 /// branches résiduelles) sont remplis au hasard.
 fn random_net() -> smallmobile_lab3::net::Net {
+    smallmobile_lab3::net::Net::from_bytes(&random_net_bytes()).unwrap()
+}
+
+/// Les poids de `random_net`, au format SMNN1.
+fn random_net_bytes() -> Vec<u8> {
     let bytes = std::fs::read(net_path()).unwrap();
     let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
     let mut rng = Rng::new(77);
@@ -53,7 +58,7 @@ fn random_net() -> smallmobile_lab3::net::Net {
         }
         at = data + 4 * size;
     }
-    smallmobile_lab3::net::Net::from_bytes(&out).unwrap()
+    out
 }
 
 /// Joue au hasard, coup par coup, jusqu'à la fin ; `visit` voit chaque position et ses coups.
@@ -437,6 +442,42 @@ fn a_batch_of_positions_evaluates_like_each_alone() {
     assert!(positions.len() > 40, "trop peu de positions : {}", positions.len());
 }
 
+#[cfg(feature = "gpu")]
+#[test]
+fn the_gpu_evaluates_like_the_processor() {
+    use smallmobile_lab3::encode::encode;
+    use smallmobile_lab3::gpu::Gpu;
+    let path = std::env::temp_dir().join(format!("smallmobile-gpu-{}.bin", std::process::id()));
+    std::fs::write(&path, random_net_bytes()).unwrap();
+    let net = random_net();
+    let (gpu, device) = Gpu::start(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    // bf16 sur GPU ; f32 sur processeur, sommes dans un autre ordre
+    let tolerance = if device.starts_with("GPU") { 0.1 } else { 1e-3 };
+    let tables: Vec<Table> = (0..4).map(|i| Table::new(2 + i, 4300 + i as u64)).collect();
+    let mut positions = Vec::new();
+    let mut rng = Rng::new(43);
+    for (t, table) in tables.iter().enumerate() {
+        let (mut g, mut k) = (table.game(t as u32), Knowledge::default());
+        random_game(&mut g, &mut k, &mut rng.fork(), |g, k, legal| {
+            if legal.len() > 1 && rng.below(4) == 0 {
+                positions.push((encode(g, k), t, legal.iter().map(|c| c.key as usize).collect::<Vec<_>>()));
+            }
+        });
+    }
+    let items: Vec<_> = positions.iter().map(|(e, t, _)| (e, &tables[*t].map)).collect();
+    let far = gpu.submit(&items, positions.iter().map(|(e, _, _)| e.players)).wait();
+    let near = net.eval_batch(&items);
+    let mut worst = 0.0f32;
+    for ((a, b), (_, _, legal)) in far.iter().zip(&near).zip(&positions) {
+        let pairs = a.win.iter().zip(&b.win).chain(a.gain.iter().zip(&b.gain));
+        let logits = legal.iter().map(|&k| (&a.logits[k], &b.logits[k]));
+        worst = pairs.chain(logits).map(|(x, y)| (x - y).abs()).fold(worst, f32::max);
+    }
+    assert!(worst < tolerance, "{device} : écart {worst}");
+    assert!(positions.len() > 40, "trop peu de positions : {}", positions.len());
+}
+
 #[test]
 fn the_engine_plays_each_game_as_if_alone() {
     use smallmobile_lab3::az::{Az, Config, Direct, now};
@@ -445,7 +486,7 @@ fn the_engine_plays_each_game_as_if_alone() {
     let dir = std::env::temp_dir().join(format!("smallmobile-engine-{}", std::process::id()));
     let opts = Options { full_share: 0.5, fast: 4 };
     let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 12, threads: 2, seed: 17, opts };
-    selfplay::run(&cfg, &az, &dir).unwrap();
+    selfplay::run(&cfg, &az, &dir, None).unwrap();
     // chaque partie écrite : sa ligne de journal et ses enregistrements
     let mut written = std::collections::HashMap::new();
     for entry in std::fs::read_dir(&dir).unwrap() {
@@ -668,7 +709,7 @@ fn each_choice_records_the_improved_policy_and_the_next_owners() {
     let dir = std::env::temp_dir().join(format!("smallmobile-policy-{}", std::process::id()));
     let opts = selfplay::Options { full_share: 1.0, fast: 1 };
     let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 8, threads: 2, seed: 12, opts };
-    selfplay::run(&cfg, &expert(2), &dir).unwrap();
+    selfplay::run(&cfg, &expert(2), &dir, None).unwrap();
     // le propriétaire de chaque région (joueur absolu)
     let owners = |g: &smallmobile_kernel::Game| -> Vec<Option<usize>> {
         (0..g.map.len())
@@ -753,7 +794,7 @@ fn position_files_say_how_many_positions_each_game_has() {
     let dir = std::env::temp_dir().join(format!("smallmobile-games-{}", std::process::id()));
     let opts = selfplay::Options { full_share: 1.0, fast: 1 };
     let cfg = selfplay::Config { players: vec![2, 3], games: 5, threads: 2, seed: 3, opts };
-    selfplay::run(&cfg, &expert(2), &dir).unwrap();
+    selfplay::run(&cfg, &expert(2), &dir, None).unwrap();
     let (mut total, mut positions) = (0, 0);
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
@@ -783,7 +824,7 @@ fn self_play_games_can_be_replayed() {
     let dir = std::env::temp_dir().join(format!("smallmobile-replay-{}", std::process::id()));
     let opts = selfplay::Options { full_share: 1.0, fast: 1 };
     let cfg = selfplay::Config { players: vec![2, 4], games: 4, threads: 2, seed: 5, opts };
-    selfplay::run(&cfg, &expert(2), &dir).unwrap();
+    selfplay::run(&cfg, &expert(2), &dir, None).unwrap();
     let mut games = 0;
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();

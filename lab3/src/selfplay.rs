@@ -37,6 +37,7 @@ use smallmobile_kernel::{Action, Game, Phase};
 use crate::az::{Az, Evals, Oracle, Searched};
 use crate::batch::Batch;
 use crate::encode::{Encoded, GLOBAL, NODE, REGIONS, encode, relative};
+use crate::gpu::Gpu;
 use crate::know::Knowledge;
 use crate::moves::{self, KEYS};
 use crate::rand::{Rng, mix};
@@ -363,11 +364,16 @@ pub fn moves_file(path: &Path) -> std::path::PathBuf {
     name.into()
 }
 
-/// Parties que mène chaque fil en même temps : leurs positions à évaluer forment un groupe
-/// (`Batch`), évalué couche après couche. Un fil garde tout ce qu'il touche (parties, évaluations
-/// gardées, groupe) : rien de modifiable n'est partagé entre les cœurs, hormis le compteur des
-/// parties (une fois par partie).
+/// Parties que mène chaque fil en même temps, par groupe : leurs positions à évaluer forment un
+/// groupe (`Batch`). Sur le processeur du fil, un groupe de 8, évalué couche après couche (ses
+/// évaluations gardées et les poids d'une couche tiennent dans le cache du cœur) ; avec le GPU, deux
+/// groupes de 32 : le fil fait avancer l'un pendant que le GPU évalue l'autre, et le GPU reçoit de
+/// grands lots (les groupes de tous les fils). Un fil garde tout ce qu'il touche (parties,
+/// évaluations gardées, groupes) : rien de modifiable n'est partagé entre les cœurs, hormis le
+/// compteur des parties (une fois par partie).
 const CONCURRENT: usize = 8;
+const GPU_GROUPS: usize = 2;
+const GPU_CONCURRENT: usize = 32;
 
 /// Une partie finie : ses positions (enregistrements) et sa ligne de journal (`GameLog`).
 pub struct Finished {
@@ -391,10 +397,11 @@ pub async fn game(i: usize, cfg: &Config, az: &Az, oracle: &impl Oracle) -> std:
 }
 
 /// Des parties d'entraînement en parallèle, un fichier par fil dans `dir` (avec `games_file` et
-/// `moves_file`). Chaque fil mène `CONCURRENT` parties à la fois : chacune avance jusqu'à sa
-/// prochaine évaluation, puis le fil les évalue toutes ensemble. Chaque partie est la même, au bit
-/// près, que jouée seule (`Direct`).
-pub fn run(cfg: &Config, az: &Az, dir: &Path) -> std::io::Result<()> {
+/// `moves_file`). Chaque fil mène ses parties par groupes (`CONCURRENT`) : chacune avance jusqu'à sa
+/// prochaine évaluation, puis le groupe est évalué d'un coup, par le processeur du fil ou par `gpu`.
+/// Sans GPU, chaque partie est la même, au bit près, que jouée seule (`Direct`).
+pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Result<()> {
+    let (groups, concurrent) = if gpu.is_some() { (GPU_GROUPS, GPU_CONCURRENT) } else { (1, CONCURRENT) };
     std::fs::create_dir_all(dir)?;
     let next = AtomicUsize::new(0);
     let positions = AtomicUsize::new(0);
@@ -408,45 +415,53 @@ pub fn run(cfg: &Config, az: &Az, dir: &Path) -> std::io::Result<()> {
                 let mut out = BufWriter::new(File::create(&path)?);
                 let mut games = BufWriter::new(File::create(games_file(&path))?);
                 let mut logs = BufWriter::new(File::create(moves_file(&path))?);
-                let batch = Batch::new(&az.net);
+                let batches: Vec<Batch> = (0..groups).map(|_| Batch::new(&az.net, gpu)).collect();
                 type Game<'a> = Pin<Box<dyn Future<Output = std::io::Result<Finished>> + 'a>>;
-                let mut slots: Vec<Option<(usize, Game)>> = (0..CONCURRENT).map(|_| None).collect();
+                let mut slots: Vec<Vec<Option<(usize, Game)>>> =
+                    (0..groups).map(|_| (0..concurrent).map(|_| None).collect()).collect();
                 let mut cx = Context::from_waker(Waker::noop());
                 loop {
-                    // chaque partie avance jusqu'à sa prochaine évaluation ; une partie finie laisse
-                    // sa place à la suivante
-                    for slot in &mut slots {
-                        loop {
-                            if slot.is_none() {
-                                let i = next.fetch_add(1, Ordering::Relaxed);
-                                if i >= cfg.games {
-                                    break;
+                    let mut live = false;
+                    for (batch, slots) in batches.iter().zip(&mut slots) {
+                        batch.collect();
+                        // chaque partie avance jusqu'à sa prochaine évaluation ; une partie finie laisse
+                        // sa place à la suivante
+                        for slot in slots.iter_mut() {
+                            loop {
+                                if slot.is_none() {
+                                    let i = next.fetch_add(1, Ordering::Relaxed);
+                                    if i >= cfg.games {
+                                        break;
+                                    }
+                                    *slot = Some((i, Box::pin(game(i, cfg, az, batch))));
                                 }
-                                *slot = Some((i, Box::pin(game(i, cfg, az, &batch))));
+                                let (i, running) = slot.as_mut().expect("une partie");
+                                let Poll::Ready(finished) = running.as_mut().poll(&mut cx) else { break };
+                                let (i, finished) = (*i, finished?);
+                                *slot = None;
+                                out.write_all(&finished.records)?;
+                                games.write_all(&(finished.positions as u32).to_le_bytes())?;
+                                writeln!(logs, "{}", finished.line)?;
+                                let count = finished.positions;
+                                let total = positions.fetch_add(count, Ordering::Relaxed) + count;
+                                let secs = start.elapsed().as_secs_f64();
+                                eprintln!(
+                                    "partie {}/{} ({} j.) : {count} positions, {total} en tout, {:.0} positions/s",
+                                    i + 1,
+                                    cfg.games,
+                                    finished.players,
+                                    total as f64 / secs
+                                );
                             }
-                            let (i, running) = slot.as_mut().expect("une partie");
-                            let Poll::Ready(finished) = running.as_mut().poll(&mut cx) else { break };
-                            let (i, finished) = (*i, finished?);
-                            *slot = None;
-                            out.write_all(&finished.records)?;
-                            games.write_all(&(finished.positions as u32).to_le_bytes())?;
-                            writeln!(logs, "{}", finished.line)?;
-                            let count = finished.positions;
-                            let total = positions.fetch_add(count, Ordering::Relaxed) + count;
-                            let secs = start.elapsed().as_secs_f64();
-                            eprintln!(
-                                "partie {}/{} ({} j.) : {count} positions, {total} en tout, {:.0} positions/s",
-                                i + 1,
-                                cfg.games,
-                                finished.players,
-                                total as f64 / secs
-                            );
+                        }
+                        if slots.iter().any(Option::is_some) {
+                            live = true;
+                            batch.submit();
                         }
                     }
-                    if slots.iter().all(Option::is_none) {
+                    if !live {
                         break;
                     }
-                    batch.evaluate();
                 }
                 out.flush()?;
                 logs.flush()?;

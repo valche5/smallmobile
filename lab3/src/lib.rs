@@ -13,12 +13,13 @@
 //! - `encode`, `net`, `az` : ce que voit le réseau, le réseau, la recherche guidée par le réseau ;
 //! - `arena` : des milliers de parties pour comparer deux joueurs ;
 //! - `selfplay` : parties d'entraînement du réseau, plusieurs à la fois par fil, leurs évaluations
-//!   groupées (`batch`).
+//!   groupées (`batch`), par le processeur ou par le GPU (`gpu`).
 
 pub mod agent;
 pub mod arena;
 pub mod az;
 pub mod batch;
+pub mod gpu;
 pub mod selfplay;
 pub mod table;
 

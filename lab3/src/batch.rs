@@ -1,8 +1,9 @@
 //! Les évaluations groupées d'un fil de calcul. Chaque partie que mène le fil dépose sa position et
-//! attend (`Oracle`) ; le fil les évalue toutes ensemble, couche après couche (`Net::eval_batch`),
-//! puis chacune reprend avec la sienne. Le groupe, les parties et leurs évaluations gardées
-//! appartiennent au fil : aucune donnée modifiable n'est partagée entre les cœurs, seuls les poids
-//! du réseau, en lecture.
+//! attend (`Oracle`) ; le fil envoie le groupe (`submit`) : son processeur l'évalue aussitôt,
+//! couche après couche (`Net::eval_batch`), ou le GPU (`gpu::Gpu`) pendant que le fil fait avancer
+//! un autre groupe ; puis chaque partie reprend avec la sienne (`collect`). Le groupe, les parties
+//! et leurs évaluations gardées appartiennent au fil : aucune donnée modifiable n'est partagée
+//! entre les cœurs, seuls les poids du réseau, en lecture.
 
 use std::cell::RefCell;
 use std::pin::Pin;
@@ -12,13 +13,18 @@ use smallmobile_kernel::Map;
 
 use crate::az::Oracle;
 use crate::encode::{Encoded, REGIONS};
+use crate::gpu::{Gpu, Pending};
 use crate::net::{Eval, Net, Position};
 
-pub struct Batch<'n> {
-    net: &'n Net,
-    /// Les positions déposées depuis la dernière évaluation, dans l'ordre des tickets.
+pub struct Batch<'a> {
+    net: &'a Net,
+    /// Le GPU qui évalue le groupe ; sans lui, le processeur du fil.
+    gpu: Option<&'a Gpu>,
+    /// Les positions déposées depuis le dernier envoi, dans l'ordre des tickets.
     waiting: RefCell<Vec<Request>>,
-    /// Les évaluations de la dernière fois, par ticket, chacune prise par sa partie.
+    /// Le groupe envoyé au GPU, pas encore repris.
+    sent: RefCell<Option<Pending>>,
+    /// Les évaluations du dernier envoi, par ticket, chacune prise par sa partie.
     done: RefCell<Vec<Option<Eval>>>,
 }
 
@@ -40,15 +46,30 @@ impl Position for Request {
     }
 }
 
-impl<'n> Batch<'n> {
-    pub fn new(net: &'n Net) -> Self {
-        Batch { net, waiting: RefCell::default(), done: RefCell::default() }
+impl<'a> Batch<'a> {
+    pub fn new(net: &'a Net, gpu: Option<&'a Gpu>) -> Self {
+        Batch { net, gpu, waiting: RefCell::default(), sent: RefCell::default(), done: RefCell::default() }
     }
 
-    /// Évalue toutes les positions en attente ; chaque partie trouvera la sienne en reprenant.
-    pub fn evaluate(&self) {
+    /// Envoie les positions en attente : le processeur du fil les évalue aussitôt ; le GPU, pendant
+    /// que le fil fait autre chose (`collect`).
+    pub fn submit(&self) {
         let waiting = std::mem::take(&mut *self.waiting.borrow_mut());
-        *self.done.borrow_mut() = self.net.eval_batch(&waiting).into_iter().map(Some).collect();
+        match self.gpu {
+            Some(gpu) => {
+                let players = waiting.iter().map(|r| r.e.players);
+                *self.sent.borrow_mut() = Some(gpu.submit(&waiting, players));
+            }
+            None => *self.done.borrow_mut() = self.net.eval_batch(&waiting).into_iter().map(Some).collect(),
+        }
+    }
+
+    /// Les évaluations du dernier envoi au GPU (attend qu'elles arrivent) ; chaque partie trouvera la
+    /// sienne en reprenant. Rien à faire sans GPU.
+    pub fn collect(&self) {
+        if let Some(pending) = self.sent.borrow_mut().take() {
+            *self.done.borrow_mut() = pending.wait().into_iter().map(Some).collect();
+        }
     }
 }
 
@@ -65,9 +86,9 @@ impl Oracle for Batch<'_> {
 }
 
 /// Une évaluation attendue : la position est déposée au premier passage, l'évaluation prise après
-/// `Batch::evaluate`.
-struct Waiting<'b, 'n> {
-    batch: &'b Batch<'n>,
+/// `Batch::submit` (et `collect`).
+struct Waiting<'b, 'a> {
+    batch: &'b Batch<'a>,
     request: Option<Request>,
     ticket: usize,
 }

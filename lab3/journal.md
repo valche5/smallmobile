@@ -62,6 +62,16 @@ Celui de lab2 (voir son journal), sauf :
   moteur du jeu environ 6 %. Seul ou à 64, un cœur fait 2,05 instructions par cycle et autant
   d'instructions par partie : les cœurs ne se gênent pas (caches, mémoire) ; à 64, le processeur
   passe de 3,68 à 2,78 GHz (AVX-512 sur tous les cœurs), d'où 1,32 fois moins vite par cœur.
+- **Le réseau sur GPU** (préparé le 22 octobre, pas encore mesuré sur un vrai GPU) : `lab3
+  selfplay --device gpu`, programme compilé avec `--features gpu` (`DEVICE=gpu lab3/loop.sh`). Un
+  fil évaluateur appelle PyTorch (`lab3/py/serve.py`, par pyo3 : CUDA ou ROCm) ; les fils de jeu
+  lui envoient leurs groupes, qu'il évalue tous ensemble ; chaque fil mène deux groupes de 32
+  parties et fait avancer l'un pendant que le GPU évalue l'autre. PyTorch et Rust calculent le
+  même réseau (écart de 5·10⁻⁵ en f32 ; test `the_gpu_evaluates_like_the_processor`), mais les
+  parties ne sont plus identiques au bit près à celles du processeur (autre ordre des sommes,
+  bf16 sur GPU). Machines : `labtools/cloud.sh` lance les types à GPU NVIDIA (g5, g6…) sur l'image
+  d'AWS avec les pilotes, et compile avec l'option `gpu` ; leur quota Spot est à 0 sur le compte
+  (demande à AWS nécessaire). g5.16xlarge (64 vCPU, A10G) à 0,52 $/h à Stockholm le 22 octobre.
 - Retiré : `size.py` (mesure des tailles de réseau de lab2).
 
 ## Mesure

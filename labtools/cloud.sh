@@ -34,6 +34,9 @@
 # calcul relancé reparte de là : écrire chaque morceau ailleurs, le déplacer dans le dossier gardé
 # une fois complet, et sauter les morceaux déjà présents.
 #
+# Machines à GPU NVIDIA (TYPE g4dn, g5, g6… : `gpu_type`) : pilotes, PyTorch pour CUDA et option `gpu` du
+# labo (quota Spot « All G and VT » à demander à AWS, à 0 au départ).
+#
 # Réglages (variables d'environnement) : LAB, TYPE, DISK, MAX_HOURS, IDLE_MIN, MAX_PRICE ($/h), SPOT=1
 # (Spot uniquement, plafond de 1 $/h et durée maximale de 12 h), SAVE, SAVE_MIN (10 min).
 set -euo pipefail
@@ -65,6 +68,16 @@ need_lab() { [[ "$LAB" =~ ^lab[0-9]+$ ]] && [ -d "$LAB" ] || die "LAB=labN : le 
 
 state() { cat "$STATE/$1" 2>/dev/null || true; }
 IP() { state ip; }
+# Les machines à GPU NVIDIA : image d'AWS avec les pilotes (Ubuntu 24.04, utilisateur ubuntu) ; le
+# labo y est compilé avec son option `gpu` s'il en a une, avec PyTorch pour CUDA
+# (`labN/py/setup.sh cuda`).
+gpu_type() { [[ "$1" =~ ^(g4dn|g5|g6|g6e|gr6|p[0-9]+[a-z]*)\. ]]; }
+# l'utilisateur de la machine en cours (sinon d'une machine du type TYPE)
+login() {
+  local t
+  t=$(state type)
+  if gpu_type "${t:-$TYPE}"; then echo ubuntu; else echo admin; fi
+}
 ssh_opts() {
   echo -i "$KEY" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$STATE/known_hosts" \
     -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -o LogLevel=ERROR
@@ -72,7 +85,7 @@ ssh_opts() {
 on() {
   [ -n "$(IP)" ] || die "aucune machine (labtools/cloud.sh up)"
   # shellcheck disable=SC2046
-  ssh $(ssh_opts) "admin@$(IP)" "$@"
+  ssh $(ssh_opts) "$(login)@$(IP)" "$@"
 }
 
 zones() { # « zone prix sous-réseau » des zones par défaut, Spot actuel du type $1, la moins chère d'abord
@@ -162,11 +175,12 @@ systemctl daemon-reload
 systemctl enable --now smallai-guard
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -q
-apt-get install -y -q build-essential pkg-config python3-venv python3-dev rsync curl unzip
+# les mises à jour automatiques du démarrage (Ubuntu) tiennent le verrou d'apt un moment
+apt-get -o DPkg::Lock::Timeout=600 update -q
+apt-get -o DPkg::Lock::Timeout=600 install -y -q build-essential pkg-config python3-venv python3-dev rsync curl unzip
 curl -sS https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscli.zip
 unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install
-sudo -u admin bash -c 'curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal'
+sudo -u $(login) bash -c 'curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal'
 touch /var/lib/smallai-ready
 EOF
 }
@@ -183,8 +197,11 @@ cmd_up() {
   [ -n "$offers" ] || die "$TYPE coûte plus que MAX_PRICE=$MAX_PRICE \$/h dans toutes les zones"
   open_ssh
   local ami rootdev market=() id=""
-  ami=$(aws ssm get-parameter --name /aws/service/debian/release/13/latest/amd64 \
-    --query Parameter.Value --output text)
+  local image=/aws/service/debian/release/13/latest/amd64
+  if gpu_type "$TYPE"; then
+    image=/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-24.04/latest/ami-id
+  fi
+  ami=$(aws ssm get-parameter --name "$image" --query Parameter.Value --output text)
   rootdev=$(aws ec2 describe-images --image-ids "$ami" --query 'Images[0].RootDeviceName' --output text)
   if [ "$SPOT" = 1 ]; then
     market=(--instance-market-options "MarketType=spot,SpotOptions={MaxPrice=$SPOT_MAX,SpotInstanceType=one-time,InstanceInterruptionBehavior=terminate}")
@@ -277,10 +294,15 @@ cmd_push() { # tous les labos (membres de l'espace de travail Rust), sans leurs 
   if compgen -G "$LAB/runs/*.sh" > /dev/null; then
     tar -czf - "$LAB"/runs/*.sh | on 'tar -xzf - -C smallmobile'
   fi
-  say "compilation de $LAB et environnement Python"
+  local setup=cpu features=""
+  if gpu_type "$(state type)"; then
+    setup=cuda
+    if grep -q '^gpu = ' "$LAB/Cargo.toml"; then features="--features gpu"; fi
+  fi
+  say "compilation de $LAB et environnement Python ($setup)"
   on "cd smallmobile && mkdir -p $LAB/runs $LAB/data &&
-      ($LAB/py/setup.sh cpu > $LAB/runs/setup-py.log 2>&1 & py=\$!;
-       ~/.cargo/bin/cargo build --release -q -p smallmobile-$LAB 2>&1 | tail -20;
+      ($LAB/py/setup.sh $setup > $LAB/runs/setup-py.log 2>&1 & py=\$!;
+       ~/.cargo/bin/cargo build --release -q -p smallmobile-$LAB $features 2>&1 | tail -20;
        wait \$py || { tail -20 $LAB/runs/setup-py.log; exit 1; })"
 }
 
@@ -387,7 +409,7 @@ cmd_get() { # depuis la machine ; depuis le bucket pour un dossier gardé si ell
   local p
   for p in "$@"; do
     say "rapatriement de $p"
-    rsync -azR -e "ssh $(ssh_opts)" "admin@$(IP):smallmobile/./$p" . && continue
+    rsync -azR -e "ssh $(ssh_opts)" "$(login)@$(IP):smallmobile/./$p" . && continue
     saved | grep -qx "$p" || die "rapatriement de $p impossible"
     say "machine injoignable : $p depuis le bucket"
     aws s3 sync --only-show-errors "s3://$BUCKET/$p" "$p"
@@ -397,7 +419,7 @@ cmd_get() { # depuis la machine ; depuis le bucket pour un dossier gardé si ell
 cmd_ssh() {
   [ -n "$(IP)" ] || die "aucune machine"
   # shellcheck disable=SC2046
-  ssh -t $(ssh_opts) "admin@$(IP)" "$@"
+  ssh -t $(ssh_opts) "$(login)@$(IP)" "$@"
 }
 
 cost_of_run() { # coût estimé de la machine actuelle : calcul + disque + adresse IPv4

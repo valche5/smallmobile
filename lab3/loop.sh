@@ -17,7 +17,8 @@
 # Parties : lab3/data/pP/cNNN ; réseaux : lab3/runs/pP/cNNN.bin ; arènes
 # lab3/runs/pP/arena-cNNN-{hard,normal}.tsv ; journal lab3/runs/pP/log.txt (durée de chaque
 # étape). Sur AWS : --save lab3/data/pP,lab3/runs/pP. Réglages (essais sur mini) : GAMES, DEALS,
-# PLAY, TRAIN.
+# PLAY, TRAIN ; DEVICE=gpu : le réseau des parties sur GPU (`lab3 selfplay --device gpu`, machine à
+# GPU de labtools/cloud.sh), l'entraînement aussi (train.py prend le GPU quand il y en a un).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 P=${1:?le nombre de joueurs}
@@ -29,6 +30,7 @@ DEALS=${DEALS:-460}
 # besoin de 56 cœurs, et l'entraînement en profite (il ne gagne presque plus rien au-delà de 16)
 PLAY=${PLAY:-48}
 TRAIN=${TRAIN:-16}
+DEVICE=${DEVICE:-cpu}
 DATA=lab3/data/p$P
 OUT=lab3/runs/p$P
 TMP=lab3/data/tmp
@@ -46,8 +48,8 @@ games() { # cycle, réseau, cœurs : écrites à part, puis déplacées. Un cycl
   start=$(date +%s)
   rm -rf "${TMP:?}/p$P-$c"
   if ! $LAB selfplay --agent "az:net=$OUT/$net.bin,n=200" --players "$P" --games "$GAMES" \
-    --seed $((30000000 + 10#${c#c})) --threads "$threads" --out "$TMP/p$P-$c" > "$TMP/p$P-$c.txt" \
-    2> "$TMP/p$P-$c.err"; then
+    --seed $((30000000 + 10#${c#c})) --threads "$threads" --device "$DEVICE" --out "$TMP/p$P-$c" \
+    > "$TMP/p$P-$c.txt" 2> "$TMP/p$P-$c.err"; then
     tail -5 "$TMP/p$P-$c.err"
     return 1
   fi

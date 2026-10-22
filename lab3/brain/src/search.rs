@@ -280,7 +280,8 @@ impl Evals {
 /// façon de wyhash (produits de 128 bits repliés), de graines différentes. Deux positions
 /// différentes ont la même avec une chance de l'ordre de 2⁻¹²⁸.
 fn fingerprint(e: &Encoded, legal: &[Choice]) -> u128 {
-    const SECRET: [u64; 4] = [0xa076_1d64_78bd_642f, 0xe703_7ed1_a0b4_28db, 0x8ebc_6af0_9c88_c6e3, 0x5899_65cc_7537_4cc3];
+    const SECRET: [u64; 4] =
+        [0xa076_1d64_78bd_642f, 0xe703_7ed1_a0b4_28db, 0x8ebc_6af0_9c88_c6e3, 0x5899_65cc_7537_4cc3];
     fn mum(a: u64, b: u64) -> u64 {
         let r = u128::from(a) * u128::from(b);
         (r as u64) ^ ((r >> 64) as u64)
@@ -300,7 +301,10 @@ fn fingerprint(e: &Encoded, legal: &[Choice]) -> u128 {
             let mut t = [0u8; 16];
             t[..rest.len()].copy_from_slice(rest);
             let (w0, w1) = t.split_at(8);
-            pair(u64::from_le_bytes(w0.try_into().unwrap()), u64::from_le_bytes(w1.try_into().unwrap()) ^ rest.len() as u64);
+            pair(
+                u64::from_le_bytes(w0.try_into().unwrap()),
+                u64::from_le_bytes(w1.try_into().unwrap()) ^ rest.len() as u64,
+            );
         }
     };
     bytes(&[e.regions as u8, e.players as u8]);

@@ -159,6 +159,26 @@ pub struct Eval {
     pub logits: Vec<f32>,
 }
 
+impl Eval {
+    /// Ce que disent les têtes du réseau d'une position à `players` joueurs : les logits des coups
+    /// et la tête de valeur (5 logits de victoire, 5 gains de pièces ÷ `GAIN_SCALE`).
+    pub fn from_heads(players: usize, logits: Vec<f32>, v: &[f32; 10]) -> Eval {
+        let mut win = [0.0f32; 5];
+        let top = v[..players].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let mut sum = 0.0;
+        for q in 0..players {
+            win[q] = (v[q] - top).exp();
+            sum += win[q];
+        }
+        win.iter_mut().for_each(|w| *w /= sum);
+        let mut gain = [0.0f32; 5];
+        for q in 0..players {
+            gain[q] = v[5 + q] * GAIN_SCALE;
+        }
+        Eval { win, gain, logits }
+    }
+}
+
 fn read_u32(r: &mut impl Read) -> io::Result<u32> {
     let mut b = [0; 4];
     r.read_exact(&mut b)?;
@@ -403,24 +423,12 @@ impl Net {
         relu(&mut gmid);
         let mut v = vec![0.0f32; n * 10];
         self.val2.apply_many::<AVX2, BF16>(&gmid, n, &mut v);
-        let mut evals = Vec::with_capacity(n);
-        for ((p, v), logits) in items.iter().zip(v.as_chunks::<10>().0).zip(logits) {
-            let players = p.encoded().players;
-            let mut win = [0.0f32; 5];
-            let top = v[..players].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-            let mut sum = 0.0;
-            for q in 0..players {
-                win[q] = (v[q] - top).exp();
-                sum += win[q];
-            }
-            win.iter_mut().for_each(|w| *w /= sum);
-            let mut gain = [0.0f32; 5];
-            for q in 0..players {
-                gain[q] = v[5 + q] * GAIN_SCALE;
-            }
-            evals.push(Eval { win, gain, logits });
-        }
-        evals
+        items
+            .iter()
+            .zip(v.as_chunks::<10>().0)
+            .zip(logits)
+            .map(|((p, v), logits)| Eval::from_heads(p.encoded().players, logits, v))
+            .collect()
     }
 }
 
@@ -493,10 +501,7 @@ fn accumulate_many<const AVX2: bool, const WIDE: bool>(
 ) {
     #[cfg(target_arch = "x86_64")]
     if AVX2 && WIDE && l.out.is_multiple_of(16) && l.out <= 128 {
-        assert!(
-            xs.len() >= rows * len && ys.len() >= rows * l.out && l.w.len() >= (from + len) * l.out,
-            "dimensions"
-        );
+        assert!(xs.len() >= rows * len && ys.len() >= rows * l.out && l.w.len() >= (from + len) * l.out, "dimensions");
         // SAFETY: AVX-512 vérifié par `eval_batch` (calcul bf16) ; dimensions vérifiées juste avant
         unsafe { avx512::accumulate_many(&l.w, l.out, from, xs, len, rows, ys) };
         return;
