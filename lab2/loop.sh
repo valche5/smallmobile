@@ -18,10 +18,11 @@ cd "$(dirname "$0")/.."
 LAST=${1:?le nombre de pas}
 GAMES=${GAMES:-25000}
 DEALS=${DEALS:-460}
-# cœurs des parties et de l'entraînement quand ils tournent ensemble (mesures du 21 octobre sur
-# c7a.16xlarge : l'entraînement ne gagne presque plus rien au-delà de 16 cœurs)
-PLAY=${PLAY:-48}
-TRAIN=${TRAIN:-16}
+# cœurs des parties et de l'entraînement quand ils tournent ensemble, sur c7a.16xlarge, pour un
+# réseau 128x4 : 1 065 s de parties et 930 à 1 080 s d'entraînement par pas dans la deuxième boucle
+# (48 et 16 pour le 64x4 de la première)
+PLAY=${PLAY:-56}
+TRAIN=${TRAIN:-8}
 DATA=lab2/data/loop
 OUT=lab2/runs/loop
 TMP=lab2/data/tmp

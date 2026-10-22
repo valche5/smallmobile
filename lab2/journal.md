@@ -70,17 +70,18 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
   sortes × 64 régions (conquérir, dé, dragon, sorcellerie, abandon, héros, forteresse, campement,
   jeton). Une décision entière du jeu (`moves::decision`) se joue en actions groupées : héros et
   campements reposés au même endroit ne bougent pas, les jetons forment un seul placement.
-- **Réseau** (`lab2/brain/src/net.rs`, `lab2/py/model.py`) : graphe des régions, 4 couches de 64 ;
+- **Réseau** (`lab2/brain/src/net.rs`, `lab2/py/model.py`) : graphe des régions, 4 couches de 128
+  depuis la deuxième boucle (64 dans la première) ;
   têtes de politique, de valeur (victoire, pièces gagnées) et, à l'entraînement seulement, de
   possession (à qui appartient chaque région au prochain tour du joueur). gen0
   (`lab2/nets/gen0.bin`, écrit par `python lab2/py/model.py`) est un réseau neuf : sorties à zéro,
   il joue au hasard. Calcul Rust en `f32` (AVX2) ; sur un processeur qui a AVX-512 BF16 (AWS),
   les grands produits en bf16, choisis automatiquement : mêmes résultats que leur référence
   scalaire, écarts au `f32` de 10⁻⁴ sur la victoire et 0,004 sur les logits (`lab2 bench-net`).
-- **Jeu** : `lab2-expert` avec c020 (`lab2/nets/c020.bin`), n = 800 (`src/shared/experts.ts`),
-  variante par défaut. Arène d'essai sur mini, un cœur, 3 joueurs face à Normale :
-  65 ms en moyenne par décision à n = 800, p95 224 ms, fins de tour comprises (lab1 dans le jeu
-  sur mini : 80 à 250 ms, médiane 170 ms).
+- **Jeu** : `lab2-expert` avec c040 (`lab2/nets/c040.bin`), n = 800 (`src/shared/experts.ts`),
+  variante par défaut. Arène d'essai sur mini, un cœur, 3 joueurs face à Normale, 20 donnes :
+  179 ms en moyenne par décision à n = 800, p95 624 ms, fins de tour comprises (c020, 64x4 :
+  65 ms, p95 224 ms ; lab1 dans le jeu sur mini : 80 à 250 ms, médiane 170 ms).
 - **Arène** : un joueur rend une décision entière en actions du noyau ; témoin `lab1:net=…,n=…`
   (l'Expert de lab1 tel qu'il joue dans le jeu).
 - **Auto-jeu** (`lab2 selfplay`) : le réseau joue toutes les places ; bruit de Gumbel dans toutes
@@ -95,12 +96,18 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
   l'a priori du réseau, « policy surprise weighting » de KataGo). Calcul en bf16 (poids en 32
   bits). Erreurs par genre de position : `lab2/py/value.py`.
 - **Boucle** (`lab2/loop.sh`, idées de KataGo) : à chaque pas k, le réseau k s'entraîne depuis le
-  réseau k−1 sur une fenêtre des derniers cycles (toutes les positions jusqu'à 250 000, puis
-  250 000 × (1 + 0,4 × ((total / 250 000)^0,75 − 1) / 0,75)), chaque nouvelle position servant en
-  moyenne 4 fois ; pendant ce temps, le réseau k−1 joue les 25 000 parties du cycle k+1 (un cycle
-  de retard, comme les joueurs d'AlphaZero ou de KataGo pendant l'apprentissage) ; puis arènes
-  du réseau k face à Difficile et Normale (460 donnes chacune, mêmes donnes à chaque pas). Pas de
-  sélection du réseau, comme AlphaZero.
+  réseau k−1 sur une fenêtre des derniers cycles (toutes les positions jusqu'à 1 000 000, puis
+  1 000 000 × (1 + 0,4 × ((total / 1 000 000)^0,75 − 1) / 0,75) ; 250 000 dans la première
+  boucle), chaque nouvelle position servant en moyenne 4 fois ; pendant ce temps, le réseau k−1
+  joue les 25 000 parties du cycle k+1 (un cycle de retard, comme les joueurs d'AlphaZero ou de
+  KataGo pendant l'apprentissage) ; puis arènes du réseau k face à Difficile et Normale (460
+  donnes chacune, mêmes donnes à chaque pas). Pas de sélection du réseau, comme AlphaZero. En
+  fin de boucle (`lab2/runs/final.sh`) : les réseaux sur les mêmes positions de validation
+  (`lab2/py/curve.py` ; celles de chaque pas changent avec la fenêtre), et le dernier réseau face
+  à ceux d'avant et à lab1.
+- **Données** : 5,3 Go de positions par cycle de 25 000 parties (128x4). `lab2/prune.sh` efface
+  du bucket les positions des cycles sortis de la fenêtre (un cycle de marge), sans machine
+  allumée ; les parties (`*.pos.games`, `*.pos.moves`) restent, de quoi les rejouer.
 - **Temps** (`c7a.16xlarge`, mesures du 21 octobre avec un réseau de 3 cycles d'essai) : 124
   parties/s sur 64 cœurs en bf16 (82 en `f32`), 104 sur 48 cœurs, 102 pendant l'entraînement ;
   entraînement 12 800 positions/s sur 16 cœurs en bf16 (9 900 en `f32` ; 10 000 pendant les
@@ -111,7 +118,9 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
   16 cœurs en bf16 pour 9 à 18 s de compilation par cycle, pas gardé. Couches sans concaténation
   (la part de g calculée une fois par position, comme en Rust) : même réseau, 11 % de moins sur
   mini. Un pas de la première boucle : 5,5 à 7,3 min (les parties s'allongent avec le niveau),
-  contre environ 10 min en `f32` sans recouvrement. Sur mini (6 cœurs, AVX2) : l'entraînement
+  contre environ 10 min en `f32` sans recouvrement. Avec 128x4 (deuxième boucle) : 56 cœurs de
+  parties et 8 d'entraînement, 1 060 à 1 075 s de parties et 790 à 1 180 s d'entraînement par
+  pas, environ 20 min par pas. Sur mini (6 cœurs, AVX2) : l'entraînement
   plafonne à 4 cœurs, et le bf16 y est émulé (15 fois plus lent) : aucun entraînement réel sur
   mini.
 
@@ -128,8 +137,9 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
 6. ~~Comparaison avec lab1 dans les conditions du jeu.~~ Faite le 21 octobre : −12,6.
 7. ~~Taille du réseau.~~ Mesurée le 21 octobre : avec assez de parties, plus large aide la valeur,
    la possession et la politique (voir Résultats).
-8. Sortir du plateau (+19 face à Difficile depuis c015, −12,6 face à lab1) : réseau plus large et
-   fenêtre plus large ; taille et recette à choisir avec l'utilisateur.
+8. ~~Sortir du plateau (+19 face à Difficile depuis c015, −12,6 face à lab1) : réseau plus large
+   et fenêtre plus large.~~ Deuxième boucle, 128x4, finie le 22 octobre : −2,2 face à lab1.
+9. Troisième boucle, même recette depuis c040 : pas 41 à 60 (lancée le 22 octobre).
 
 ## Résultats
 
@@ -215,3 +225,84 @@ parties : 1,046, 0,546, 1,381.
   plus larges prennent l'avantage sur la valeur aussi** : 128x4, entraîné une fois depuis zéro sur
   la moitié des parties, rejoint presque c020. 35 min de machine, 0,51 $.
 
+
+### Deuxième boucle (21 et 22 octobre)
+
+Réseau 128x4, fenêtre d'au moins 1 000 000 de positions, et les parties de la première boucle
+(choix de l'utilisateur : repartir de ces parties plutôt que du hasard). c020 y est le 128x4 de
+la mesure de taille (`lab2/runs/size3/128x4.bin`, entraîné depuis zéro sur les cycles 11 à 20),
+qui remplace le c020 64x4 de la première boucle (gardé : `lab2/runs/loop/c020-64x4.bin`) ; puis
+`lab2/loop.sh 40` (script `lab2/runs/loop2.sh`), pas 21 à 40, 56 cœurs de parties et 8
+d'entraînement. Une `c7a.16xlarge` Spot, 413 min, 5,29 $. Fenêtre : 5 cycles au pas 21, 8 au pas 40
+(6,7 millions de positions) ; 33,6 positions par partie.
+
+Arènes de chaque réseau (comme la première boucle), et mesures de validation de chaque pas : sur
+les parties réservées de sa fenêtre, qui change à chaque pas (pas comparables d'un pas à l'autre,
+voir la courbe plus bas).
+
+| Réseau | Difficile | Normale | Valeur | Possession | Politique | Précision |
+| --- | --- | --- | --- | --- | --- | --- |
+| c020 (128x4) | +18,2 ± 2,3 | +17,3 ± 2,1 | | | | |
+| c021 | +17,6 ± 2,3 | +17,9 ± 2,1 | 1,030 | 0,542 | 1,398 | 44,7 % |
+| c022 | +18,6 ± 2,3 | +19,5 ± 2,1 | 1,028 | 0,538 | 1,393 | 45,1 % |
+| c023 | +20,0 ± 2,2 | +19,8 ± 2,2 | 1,024 | 0,536 | 1,390 | 45,3 % |
+| c024 | +20,4 ± 2,2 | +18,0 ± 2,2 | 1,022 | 0,534 | 1,386 | 45,5 % |
+| c025 | +22,2 ± 2,2 | +22,2 ± 2,2 | 1,023 | 0,533 | 1,380 | 45,9 % |
+| c026 | +19,9 ± 2,3 | +21,1 ± 2,1 | 1,023 | 0,530 | 1,374 | 46,3 % |
+| c027 | +23,7 ± 2,2 | +20,2 ± 2,0 | 1,025 | 0,527 | 1,365 | 46,8 % |
+| c028 | +20,6 ± 2,2 | +18,5 ± 2,1 | 1,025 | 0,526 | 1,358 | 47,1 % |
+| c029 | +24,2 ± 2,3 | +20,9 ± 2,1 | 1,028 | 0,526 | 1,355 | 47,3 % |
+| c030 | +23,6 ± 2,3 | +21,3 ± 2,1 | 1,027 | 0,526 | 1,355 | 47,3 % |
+| c031 | +24,1 ± 2,3 | +19,6 ± 2,1 | 1,035 | 0,527 | 1,352 | 47,4 % |
+| c032 | +25,3 ± 2,2 | +22,5 ± 2,1 | 1,037 | 0,528 | 1,349 | 47,4 % |
+| c033 | +26,8 ± 2,2 | +20,3 ± 2,1 | 1,037 | 0,529 | 1,347 | 47,5 % |
+| c034 | +24,3 ± 2,2 | +20,6 ± 2,1 | 1,037 | 0,529 | 1,344 | 47,6 % |
+| c035 | +25,3 ± 2,2 | +19,1 ± 2,0 | 1,040 | 0,530 | 1,341 | 47,8 % |
+| c036 | +25,8 ± 2,2 | +23,2 ± 2,2 | 1,040 | 0,530 | 1,342 | 47,7 % |
+| c037 | +24,1 ± 2,2 | +19,0 ± 2,1 | 1,040 | 0,530 | 1,339 | 47,8 % |
+| c038 | +23,7 ± 2,1 | +21,8 ± 2,1 | 1,038 | 0,530 | 1,336 | 47,9 % |
+| c039 | +24,4 ± 2,3 | +20,3 ± 2,1 | 1,033 | 0,530 | 1,334 | 48,0 % |
+| c040 | +25,9 ± 2,2 | +21,3 ± 2,1 | 1,030 | 0,528 | 1,332 | 47,9 % |
+
+c040 par taille (2, 3, 4, 5 joueurs) : Difficile +41,3, +19,1, +18,0, +25,1 ; Normale +44,3,
++6,1, +17,4, +17,5.
+
+Mesures de fin (`lab2/runs/final.sh`, résultats `lab2/runs/final`, 38 min de machine, 0,47 $).
+Courbe : chaque réseau sur les mêmes positions, celles des parties réservées des cycles 21 et 22
+(jouées par c019 et le c020 64x4 ; 83 869 positions) et des cycles 39 et 40 (jouées par c037 et
+c038 ; 83 276 positions) :
+
+| Réseau | Valeur 21-22 | Possession | Politique | Valeur 39-40 | Possession | Politique | Précision |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| c010 (64x4) | 1,076 | 0,661 | 1,588 | 1,140 | 0,722 | 1,686 | 33,7 % |
+| c015 (64x4) | 1,037 | 0,578 | 1,448 | 1,088 | 0,632 | 1,539 | 38,4 % |
+| c020 (64x4) | 1,020 | 0,551 | 1,404 | 1,065 | 0,591 | 1,481 | 40,6 % |
+| c020 (128x4) | 1,030 | 0,555 | 1,417 | 1,077 | 0,601 | 1,487 | 40,4 % |
+| c025 | 1,007 | 0,533 | 1,390 | 1,060 | 0,568 | 1,432 | 42,9 % |
+| c030 | 1,003 | 0,535 | 1,412 | 1,048 | 0,552 | 1,388 | 45,0 % |
+| c035 | 1,003 | 0,541 | 1,436 | 1,042 | 0,540 | 1,348 | 47,1 % |
+| c040 | 1,003 | 0,545 | 1,454 | 1,037 | 0,533 | 1,330 | 47,8 % |
+
+Arènes de c040, 920 donnes, graine 1004 :
+
+| Face à | Score | 2 joueurs | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- |
+| c030 (n = 200 des deux côtés) | +5,1 ± 1,6 | +4,7 | +5,1 | +5,3 | +5,4 |
+| c020 64x4 (n = 200) | +14,4 ± 1,7 | +13,7 | +13,6 | +13,7 | +16,7 |
+| lab1 (c040 à n = 800, gen11 à n = 200) | −2,2 ± 1,6 | −0,5 | −2,6 | −1,4 | −4,2 |
+
+- **Presque à égalité avec lab1** (−12,6 avec le c020 64x4), toujours sans rien de lab1. 134 ms
+  par décision pour c040 sur AWS (bf16), p95 459 ms ; 179 ms sur un cœur de mini (`f32`).
+- **Les arènes face aux IA du jeu ne mesurent plus les progrès** : plateau vers +25 face à
+  Difficile et +21 face à Normale depuis c029, alors que c040 bat c030 de 5 points. Les mesures
+  de fin (courbe, réseaux précédents, lab1) prennent le relais.
+- **La valeur de validation de chaque pas montait** (1,025 vers 1,040) **parce que les parties
+  deviennent plus difficiles à prédire**, pas parce que le réseau recule : sur des positions
+  fixes, chaque réseau fait mieux que le précédent sur les parties récentes (valeur 1,077 → 1,037,
+  possession 0,601 → 0,533, politique 1,487 → 1,330) ; sur les parties anciennes, la valeur
+  stagne depuis c030 et la politique s'éloigne des recherches des anciens réseaux (cible
+  périmée, pas une erreur).
+- Le pont 128x4 part un peu en dessous du c020 64x4 (sur les deux jeux de positions comme en
+  arène), le dépasse dès c025.
+- Positions des cycles 1 à 31 effacées du bucket ensuite (`lab2/prune.sh`, 193 → 52 Go) : la
+  courbe sur les cycles 21 et 22 ne peut plus être refaite.

@@ -129,7 +129,8 @@ données de gen10 3,46 $, entraînement et arènes de gen10 1,26 $, données de 
 entraînement de gen11 1,43 $ (dont 0,18 $ perdus sur le premier lancement), gen12 abandonné
 0,51 $, premiers essais de lab2 depuis les poids de lab1 (abandonnés, données effacées) 2,49 $,
 lab2 gen1 0,44 $, première boucle de lab2 et mesures 2,58 $, lab2 face à lab1
-0,29 $, tailles de réseau de lab2 1,18 $, soit 25,88 $. **Montants datés : consulter coûts et crédits du compte de gestion
+0,29 $, tailles de réseau de lab2 1,18 $, deuxième boucle de lab2 5,29 $, ses mesures de fin
+0,47 $, soit 31,64 $. **Montants datés : consulter coûts et crédits du compte de gestion
 avant chaque campagne. Les crédits ne se renouvellent pas chaque semaine.**
 
 Pour chaque étape autorisée : mesurer un petit échantillon sur AWS, estimer durée et coût total

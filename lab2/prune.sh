@@ -7,7 +7,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export AWS_PROFILE=${AWS_PROFILE:-smallai}
 BUCKET=s3://smallai-lab-631245464763/lab2/data/loop
-if ! labtools/cloud.sh status 2>&1 | grep -q "aucune machine"; then
+# l'état lu en entier d'abord : avec pipefail, `grep -q` qui s'arrête au premier résultat ferait
+# échouer `status` (écriture dans un tube fermé)
+state=$(labtools/cloud.sh status 2>&1 || true)
+if ! grep -q "aucune machine" <<< "$state"; then
   echo "une machine tourne : rien n'est effacé" >&2
   exit 1
 fi
@@ -15,8 +18,9 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 aws s3 sync --only-show-errors --exclude "*" --include "*.pos.games" "$BUCKET" "$tmp"
 old=$(cd lab2/py && .venv/bin/python -c "from data import outside; print(' '.join(outside('$tmp')))")
+echo "hors de la fenêtre : ${old:-aucun}"
 for c in $old; do
-  if aws s3 ls "$BUCKET/$c/" | grep -q '\.pos$'; then
+  if grep -q '\.pos$' <<< "$(aws s3 ls "$BUCKET/$c/")"; then
     aws s3 rm --recursive --only-show-errors --exclude "*" --include "*.pos" "$BUCKET/$c"
     echo "$c : positions effacées"
   fi

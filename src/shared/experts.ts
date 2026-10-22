@@ -16,8 +16,8 @@ export interface ExpertLab {
 export const EXPERT_LABS: readonly ExpertLab[] = [
   // n=200 : ~0,1 à 0,2 s par décision sur mini (lab1/JOURNAL.md)
   { id: 'lab1', label: 'Labo 1', net: 'gen11', iterations: 200 },
-  // n=800 : 65 ms en moyenne par décision sur mini, fins de tour comprises, p95 224 ms (lab2/journal.md)
-  { id: 'lab2', label: 'Labo 2', net: 'c020', iterations: 800 },
+  // n=800 : 179 ms en moyenne par décision sur mini, fins de tour comprises, p95 624 ms (lab2/journal.md)
+  { id: 'lab2', label: 'Labo 2', net: 'c040', iterations: 800 },
 ];
 
 export const DEFAULT_EXPERT_LAB = EXPERT_LABS[EXPERT_LABS.length - 1]!.id;
