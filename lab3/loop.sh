@@ -8,7 +8,8 @@
 #     KataGo pendant que le réseau apprend ;
 #   - puis les arènes du réseau k face à Difficile et Normale, à P joueurs (mêmes donnes à chaque
 #     pas).
-# Les parties du cycle 1 (et du cycle 2) sont celles de c000, gen0 : le hasard.
+# Le réseau de départ c000 est le généraliste de lab2 (lab3/nets/start.bin, son c060) ; les parties
+# des cycles 1 et 2 sont les siennes.
 #
 #   lab3/loop.sh P N      fait les pas 1 à N du réseau à P joueurs ; une étape déjà faite est
 #                         sautée (reprise)
@@ -23,9 +24,9 @@ P=${1:?le nombre de joueurs}
 LAST=${2:?le nombre de pas}
 GAMES=${GAMES:-25000}
 DEALS=${DEALS:-460}
-# cœurs des parties et de l'entraînement quand ils tournent ensemble, sur c7a.16xlarge, pour un
-# réseau 64x4 (mesures du 21 octobre dans lab2 : l'entraînement ne gagne presque plus rien
-# au-delà de 16 cœurs)
+# cœurs des parties et de l'entraînement quand ils tournent ensemble, sur c7a.16xlarge : avec le
+# moteur de lab3 (1,6 fois plus rapide que celui de lab2), les parties d'un réseau 128x4 n'ont plus
+# besoin de 56 cœurs, et l'entraînement en profite (il ne gagne presque plus rien au-delà de 16)
 PLAY=${PLAY:-48}
 TRAIN=${TRAIN:-16}
 DATA=lab3/data/p$P
@@ -33,7 +34,7 @@ OUT=lab3/runs/p$P
 TMP=lab3/data/tmp
 LAB=./target/release/lab3
 mkdir -p "$DATA" "$OUT" "$TMP"
-[ -f "$OUT/c000.bin" ] || cp lab3/nets/gen0.bin "$OUT/c000.bin"
+[ -f "$OUT/c000.bin" ] || cp lab3/nets/start.bin "$OUT/c000.bin"
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/log.txt"; }
 name() { printf c%03d "$1"; }
 

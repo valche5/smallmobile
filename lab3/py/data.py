@@ -41,9 +41,9 @@ GAMES = ".games"
 
 # fenêtre (en positions) quand `total` positions ont été jouées : tout jusqu'à WINDOW_MIN, puis
 # WINDOW_MIN × (1 + WINDOW_GROWTH × ((total / WINDOW_MIN)^WINDOW_POWER − 1) / WINDOW_POWER) ; la
-# forme de KataGo ; au départ, le petit minimum de la première boucle de lab2 avec son petit réseau
-# (choix de l'utilisateur, lab3/journal.md)
-WINDOW_MIN = 250_000
+# forme de KataGo ; le minimum des boucles de lab2 avec un réseau 128x4 (plus de parties aident la
+# valeur, et un réseau plus large en profite : lab2/journal.md)
+WINDOW_MIN = 1_000_000
 WINDOW_GROWTH = 0.4
 WINDOW_POWER = 0.75
 

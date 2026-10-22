@@ -29,11 +29,14 @@ Celui de lab2 (voir son journal), sauf :
 - **Un nombre de joueurs par réseau** : `lab3/loop.sh P N` joue toutes ses parties
   d'auto-apprentissage et ses arènes à P joueurs ; parties `lab3/data/pP`, réseaux et arènes
   `lab3/runs/pP`. Le réseau garde les entrées et sorties de lab2 (jusqu'à 5 joueurs).
-- **Réseau** : 4 couches de 64 ; gen0 (`lab3/nets/gen0.bin`) est le réseau neuf de lab2 (sorties à
-  zéro : il joue au hasard).
-- **Fenêtre** : toutes les positions jusqu'à 250 000, puis
-  250 000 × (1 + 0,4 × ((total / 250 000)^0,75 − 1) / 0,75), comme la première boucle de lab2.
-- **Cœurs** : 48 de parties et 16 d'entraînement en même temps (mesures de lab2 pour 64x4).
+- **Réseau de départ** : le généraliste de lab2, son c060 (128x4, `lab3/nets/start.bin`), continué
+  à un seul nombre de joueurs (décision de l'utilisateur, 22 octobre, après l'essai depuis zéro).
+  `lab3/nets/gen0.bin`, le réseau neuf de lab2, ne sert plus qu'aux tests.
+- **Fenêtre** : toutes les positions jusqu'à 1 000 000, puis
+  1 000 000 × (1 + 0,4 × ((total / 1 000 000)^0,75 − 1) / 0,75), comme les boucles 128x4 de lab2
+  (250 000 pour l'essai depuis zéro).
+- **Cœurs** : 48 de parties et 16 d'entraînement en même temps : avec le moteur de lab3, les
+  parties d'un 128x4 n'ont plus besoin des 56 cœurs de lab2.
 - **Témoin de l'arène** : l'Expert de lab2 (`lab2:net=lab2/nets/….bin,n=…`, `lab2/brain`), tel
   qu'il joue dans le jeu ; plus de témoin lab1.
 - **Moteur de génération des parties** (`selfplay::run`, `batch`, demande de l'utilisateur :
@@ -69,27 +72,33 @@ joue qu'à sa taille, et se compare à lab2 à cette taille seulement :
 - à chaque pas, arènes à P joueurs face à Difficile (graine 1002) et Normale (1003), 460 donnes ;
   les réseaux de lab2 rejoués sur ces mêmes donnes pour comparer ;
 - en fin de boucle (`lab3/runs/final.sh`), 920 donnes à P joueurs (graine 1004), n = 200 des deux
-  côtés : face au c020 64x4 de lab2 (même taille de réseau, même fenêtre, autant de parties, mais
-  à toutes les tailles : la comparaison directe) et face au meilleur réseau de lab2 ; courbe des
-  réseaux, ceux de lab2 compris, sur les mêmes positions de validation (`lab3/py/curve.py`).
+  côtés, face au réseau de départ (le c060 de lab2) ; courbe des réseaux sur les mêmes positions
+  de validation (`lab3/py/curve.py`). L'essai depuis zéro (`lab3/runs/final-zero.sh`) se mesurait
+  au c020 64x4 de lab2 (même taille de réseau, même fenêtre, autant de parties, mais à toutes les
+  tailles) et à son meilleur réseau.
 
 ## Plan
 
 1. ~~Boucle à 4 joueurs depuis gen0, 20 pas (comme la première boucle de lab2), puis mesures de
    fin.~~ Faite le 22 octobre : à moyens égaux, le spécialiste bat le généraliste de 8,4 points à
    4 joueurs (voir Résultats).
-2. Selon le résultat : les autres nombres de joueurs, un réseau et une fenêtre plus grands, un
-   Expert du jeu qui choisit son réseau d'après le nombre de joueurs.
+2. Spécialiser le généraliste : c060 de lab2 continué sur des parties à 4 joueurs, 20 pas (la
+   fenêtre met plusieurs pas à se remplir), avec le nouveau moteur. Lancé le 22 octobre.
+3. Selon le résultat : les autres nombres de joueurs, un Expert du jeu qui choisit son réseau
+   d'après le nombre de joueurs.
+4. Le réseau sur GPU (demande de l'utilisateur, 22 octobre) : le moteur groupe déjà les positions
+   de toutes ses parties.
 
 ## Résultats
 
 Scores du protocole (`labtools/score.py`), à 4 joueurs seulement : l'écart à une victoire sur
 quatre, de −25 (jamais) à +75 (toujours) ; n = 200.
 
-### Boucle à 4 joueurs (22 octobre)
+### Boucle à 4 joueurs depuis zéro (22 octobre)
 
-`lab3/loop.sh 4 20` depuis gen0, puis `lab3/runs/final.sh` (résultats `lab3/runs/p4`,
-`lab3/runs/p4-final`) : une `c7a.16xlarge` Spot, 172 min, 2,17 $. 25 000 parties par cycle, 11
+`lab3/loop.sh 4 20` depuis gen0 (fenêtre de 250 000 positions, 64x4), puis
+`lab3/runs/final-zero.sh` (résultats `lab3/runs/p4-zero`, `lab3/runs/p4-zero-final`, parties
+`lab3/data/p4-zero` : dossiers renommés ensuite) : une `c7a.16xlarge` Spot, 172 min, 2,17 $. 25 000 parties par cycle, 11
 positions par partie au hasard, 37,5 en fin de boucle ; parties 127 à 471 s, entraînement 145 à
 339 s ; fenêtre de 3 cycles au pas 20 (2,8 millions de positions), comme la première boucle de
 lab2.
@@ -159,4 +168,4 @@ Arènes directes, 920 donnes à 4 joueurs, graine 1004, lab3 c020 face à trois 
   directe, meilleure valeur même sur ces parties qu'il n'a jamais vues).
 - La politique de la courbe avantage lab3 par construction (ses cibles sont les recherches de
   lab3, qui a joué ces parties) ; la valeur, elle, compare des prédictions du vainqueur.
-- Positions des cycles 1 à 16 effacées du bucket ensuite (`lab3/prune.sh 4`, 25,8 Go gardés).
+- Positions des cycles 1 à 16 effacées du bucket ensuite (`lab3/prune.sh 4`, 25,8 Go gardés, aujourd'hui sous `p4-zero`).
