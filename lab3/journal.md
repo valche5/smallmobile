@@ -53,8 +53,12 @@ Celui de lab2 (voir son journal), sauf :
   moteur : celui de lab2) : sur un cœur de mini, 4 parties en 21,0 s → 14,8 s (évaluations
   gardées seules) → 14,6 s ; sur `c7a.16xlarge`, 16 parties sur un cœur 33,6 s → 24,1 s, 1 024
   parties sur 64 cœurs 49,9 s → 34,0 s → 30,9 s avec les vecteurs de partie groupés (1,61 fois
-  plus vite). À 64 cœurs, chaque cœur va 1,4 à
-  1,5 fois moins vite que seul : les cœurs se gênent dans les caches et la mémoire partagés.
+  plus vite).
+- **Profil** sur 64 cœurs (`perf`) : le réseau prend environ 82 % du temps, dont 53 % pour les
+  grands produits bf16, 13 % pour les vecteurs de partie, 13 % pour le reste de son calcul ; le
+  moteur du jeu environ 6 %. Seul ou à 64, un cœur fait 2,05 instructions par cycle et autant
+  d'instructions par partie : les cœurs ne se gênent pas (caches, mémoire) ; à 64, le processeur
+  passe de 3,68 à 2,78 GHz (AVX-512 sur tous les cœurs), d'où 1,32 fois moins vite par cœur.
 - Retiré : `size.py` (mesure des tailles de réseau de lab2).
 
 ## Mesure
