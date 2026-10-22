@@ -137,7 +137,7 @@ lab2 gen1 0,44 $, première boucle de lab2 et mesures 2,58 $, lab2 face à lab1
 0,29 $, tailles de réseau de lab2 1,18 $, deuxième boucle de lab2 5,29 $, ses mesures de fin
 0,47 $, troisième boucle de lab2 5,35 $, boucle à 4 joueurs de lab3 et ses
 mesures 2,17 $, mesures de fin de la troisième boucle de lab2 0,63 $, machine d'essai du moteur de lab3
-0,39 $, soit 40,18 $. Relevé du 22 octobre (budget et Cost Explorer, environ un jour de retard :
+0,39 $, spécialisation à 4 joueurs de lab3 arrêtée au pas 3 0,80 $, soit 40,98 $. Relevé du 22 octobre (budget et Cost Explorer, environ un jour de retard :
 le 21 octobre en partie, le 22 pas encore) : 28,91 $ consommés sur la période, entièrement payés
 par les crédits. **Montants datés : consulter coûts et crédits du compte de gestion
 avant chaque campagne. Les crédits ne se renouvellent pas chaque semaine.**

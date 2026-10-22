@@ -32,9 +32,13 @@ Celui de lab2 (voir son journal), sauf :
 - **Réseau de départ** : le généraliste de lab2, son c060 (128x4, `lab3/nets/start.bin`), continué
   à un seul nombre de joueurs (décision de l'utilisateur, 22 octobre, après l'essai depuis zéro).
   `lab3/nets/gen0.bin`, le réseau neuf de lab2, ne sert plus qu'aux tests.
-- **Fenêtre** : toutes les positions jusqu'à 1 000 000, puis
-  1 000 000 × (1 + 0,4 × ((total / 1 000 000)^0,75 − 1) / 0,75), comme les boucles 128x4 de lab2
-  (250 000 pour l'essai depuis zéro).
+- **Fenêtre** : toutes les positions jusqu'à 4 000 000, puis
+  4 000 000 × (1 + 0,4 × ((total / 4 000 000)^0,75 − 1) / 0,75) (250 000 pour l'essai depuis
+  zéro, 1 000 000 pour le premier essai de spécialisation). Le réseau de départ joue d'abord les
+  cycles qui la remplissent (4 à 4 joueurs, `data.filled`), et le premier entraînement part de
+  là : un pas tire 4 fois les positions de son dernier cycle, soit une passe sur une fenêtre de
+  quatre cycles, puis moins quand elle grandit (le c060 de lab2 : 0,36 passe par pas sur 11
+  cycles, 275 000 parties).
 - **Cœurs** : 48 de parties et 16 d'entraînement en même temps : avec le moteur de lab3, les
   parties d'un 128x4 n'ont plus besoin des 56 cœurs de lab2.
 - **Témoin de l'arène** : l'Expert de lab2 (`lab2:net=lab2/nets/….bin,n=…`, `lab2/brain`), tel
@@ -92,8 +96,10 @@ joue qu'à sa taille, et se compare à lab2 à cette taille seulement :
 1. ~~Boucle à 4 joueurs depuis gen0, 20 pas (comme la première boucle de lab2), puis mesures de
    fin.~~ Faite le 22 octobre : à moyens égaux, le spécialiste bat le généraliste de 8,4 points à
    4 joueurs (voir Résultats).
-2. Spécialiser le généraliste : c060 de lab2 continué sur des parties à 4 joueurs, 20 pas (la
-   fenêtre met plusieurs pas à se remplir), avec le nouveau moteur. Lancé le 22 octobre.
+2. Spécialiser le généraliste : c060 de lab2 continué sur des parties à 4 joueurs, jusqu'au
+   cycle 20, avec le nouveau moteur. Premier essai arrêté au pas 3 le 22 octobre (fenêtre d'un
+   cycle, le réseau baissait : voir Résultats) ; relance avec la fenêtre remplie d'abord par
+   c000 (cycles 1 et 2 de l'essai repris : mêmes parties).
 3. Selon le résultat : les autres nombres de joueurs, un Expert du jeu qui choisit son réseau
    d'après le nombre de joueurs.
 4. Le réseau sur GPU (demande de l'utilisateur, 22 octobre) : le moteur groupe déjà les positions
@@ -103,6 +109,31 @@ joue qu'à sa taille, et se compare à lab2 à cette taille seulement :
 
 Scores du protocole (`labtools/score.py`), à 4 joueurs seulement : l'écart à une victoire sur
 quatre, de −25 (jamais) à +75 (toujours) ; n = 200.
+
+### Spécialisation à 4 joueurs, premier essai arrêté (22 octobre)
+
+`lab3/loop.sh 4 20` depuis le c060 de lab2, fenêtre minimale de 1 000 000 positions : une
+`c7a.16xlarge` Spot, 64 min, 0,80 $, arrêtée au pas 3. Parties d'un cycle 708 à 884 s (48 cœurs
+sauf le premier), entraînement 697 à 738 s (16 cœurs). Validation sur les parties réservées de
+la fenêtre de chaque pas.
+
+| Réseau | Difficile | Normale | Valeur | Possession | Politique | Précision |
+| --- | --- | --- | --- | --- | --- | --- |
+| c000 (c060 de lab2) | +24,5 ± 2,3 | +17,6 ± 2,4 | | | | |
+| c001 | +18,9 ± 2,2 | +11,1 ± 2,2 | 1,173 | 0,541 | 1,309 | 48,1 % |
+| c002 | +18,2 ± 2,3 | +12,5 ± 2,2 | 1,211 | 0,546 | 1,312 | 48,0 % |
+| c003 | +15,1 ± 2,3 | +9,5 ± 2,3 | 1,201 | 0,561 | 1,377 | 44,9 % |
+
+- **Le réseau perd 8 à 9 points en trois pas.** Cause probable : à 990 000 positions par cycle, la
+  fenêtre (minimum 1 000 000, croissance lente) ne gardait qu'un cycle, et un pas tire 4 fois
+  les positions de son dernier cycle : quatre passes, au taux plein, sur les mêmes 25 000
+  parties. La valeur retient leurs issues : 1,096 à l'entraînement contre 1,173 à 1,211 en
+  validation. Le c060 apprenait sur 11 cycles (275 000 parties), 0,36 passe par pas.
+- La fenêtre n'aurait pris un deuxième cycle qu'au pas 5, et 5 au pas 20. D'où la relance avec
+  la fenêtre remplie avant le premier entraînement (Système actuel).
+- Réseaux et arènes : `lab3/runs/p4-try1`. Les parties des cycles 1 et 2 (jouées par c000)
+  resservent à la relance ; celles des cycles 3 et 4 (c001 et c002) sont à effacer du bucket
+  avant.
 
 ### Boucle à 4 joueurs depuis zéro (22 octobre)
 

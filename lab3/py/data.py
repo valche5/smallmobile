@@ -41,9 +41,12 @@ GAMES = ".games"
 
 # fenêtre (en positions) quand `total` positions ont été jouées : tout jusqu'à WINDOW_MIN, puis
 # WINDOW_MIN × (1 + WINDOW_GROWTH × ((total / WINDOW_MIN)^WINDOW_POWER − 1) / WINDOW_POWER) ; la
-# forme de KataGo ; le minimum des boucles de lab2 avec un réseau 128x4 (plus de parties aident la
-# valeur, et un réseau plus large en profite : lab2/journal.md)
-WINDOW_MIN = 1_000_000
+# forme de KataGo. Minimum : quatre cycles de 25 000 parties à 4 joueurs (environ 990 000 positions
+# chacun), pour qu'un pas, qui tire USES = 4 fois les positions de son dernier cycle
+# (train.py), fasse au plus une passe sur sa fenêtre ; le réseau de départ joue jusqu'à la remplir
+# (`filled`). Avec une fenêtre d'un seul cycle, le c060 de lab2 continué à 4 joueurs perdait 8 à 9
+# points en trois pas (lab3/journal.md) : quatre passes par pas sur les mêmes 25 000 parties.
+WINDOW_MIN = 4_000_000
 WINDOW_GROWTH = 0.4
 WINDOW_POWER = 0.75
 
@@ -76,6 +79,13 @@ def chosen(cycles, last):
         keep.append(d)
         count += n
     return keep[::-1], sizes[-1]
+
+
+def filled(cycles, last):
+    """Si la fenêtre minimale est remplie au cycle `last` : un cycle de plus, de la taille de `last`,
+    n'y tiendrait plus (au-delà de WINDOW_MIN, la fenêtre laisse sortir les plus anciens)."""
+    dirs = [p for p in Path(cycles).iterdir() if p.is_dir() and p.name <= last]
+    return sum(positions(d) for d in dirs) + positions(Path(cycles) / last) > WINDOW_MIN
 
 
 def outside(cycles, margin=1):

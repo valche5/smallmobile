@@ -8,11 +8,13 @@
 #     KataGo pendant que le réseau apprend ;
 #   - puis les arènes du réseau k face à Difficile et Normale, à P joueurs (mêmes donnes à chaque
 #     pas).
-# Le réseau de départ c000 est le généraliste de lab2 (lab3/nets/start.bin, son c060) ; les parties
-# des cycles 1 et 2 sont les siennes.
+# Le réseau de départ c000 est le généraliste de lab2 (lab3/nets/start.bin, son c060). Il joue
+# d'abord, avec tous les cœurs, les cycles 1 à F qui remplissent la fenêtre minimale
+# (lab3/py/data.py : `filled`, F = 4 à 4 joueurs) ; le premier pas est F (réseau cF entraîné depuis
+# c000, sur toute la fenêtre), et c000 joue aussi le cycle F+1.
 #
-#   lab3/loop.sh P N      fait les pas 1 à N du réseau à P joueurs ; une étape déjà faite est
-#                         sautée (reprise)
+#   lab3/loop.sh P N      remplit la fenêtre, puis fait les pas F à N du réseau à P joueurs ; une
+#                         étape déjà faite est sautée (reprise)
 #
 # Parties : lab3/data/pP/cNNN ; réseaux : lab3/runs/pP/cNNN.bin ; arènes
 # lab3/runs/pP/arena-cNNN-{hard,normal}.tsv ; journal lab3/runs/pP/log.txt (durée de chaque
@@ -39,6 +41,14 @@ mkdir -p "$DATA" "$OUT" "$TMP"
 [ -f "$OUT/c000.bin" ] || cp lab3/nets/start.bin "$OUT/c000.bin"
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/log.txt"; }
 name() { printf c%03d "$1"; }
+
+filled() { # cycle : oui si la fenêtre minimale est remplie, non sinon
+  (cd lab3/py && .venv/bin/python -c "from data import filled; print('oui' if filled('../data/p$P', '$1') else 'non')")
+}
+
+player() { # le réseau qui joue le cycle k : c000 jusqu'au premier pas compris, puis k−2
+  if [ "$1" -le $((first + 1)) ]; then echo c000; else name $(($1 - 2)); fi
+}
 
 games() { # cycle, réseau, cœurs : écrites à part, puis déplacées. Un cycle fini a ses fichiers
   # .pos.games (--save peut recréer un dossier vide ; les .pos des cycles sortis de la fenêtre sont
@@ -92,12 +102,23 @@ $(python3 labtools/score.py "$OUT/arena-$c-$field.tsv" --role 0 | grep '^score')
 pids=()
 trap 'for p in "${pids[@]}"; do pkill -P "$p" 2> /dev/null || true; kill "$p" 2> /dev/null || true; done' EXIT
 
-for k in $(seq 1 "$LAST"); do
+# le remplissage de la fenêtre par c000
+first=1
+games c001 c000 $((PLAY + TRAIN))
+while :; do
+  # une erreur de Python arrête la boucle (set -e)
+  full=$(filled "$(name "$first")")
+  [ "$full" = oui ] && break
+  first=$((first + 1))
+  games "$(name "$first")" c000 $((PLAY + TRAIN))
+done
+
+for k in $(seq "$first" "$LAST"); do
   c=$(name "$k")
-  prev=$(name $((k - 1)))
-  # les parties du cycle k (déjà jouées au pas précédent, sauf au premier pas ou à une reprise)
-  games "$c" "$(name $((k > 2 ? k - 2 : 0)))" $((PLAY + TRAIN))
-  # le réseau k et, en même temps, les parties du cycle k+1 par le réseau k−1
+  prev=$(player $((k + 1)))
+  # les parties du cycle k (déjà jouées au pas précédent, sauf à une reprise)
+  games "$c" "$(player "$k")" $((PLAY + TRAIN))
+  # le réseau k et, en même temps, les parties du cycle k+1 par le réseau d'avant
   pids=()
   train "$c" "$prev" &
   pids+=($!)
