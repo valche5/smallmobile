@@ -76,6 +76,14 @@ Celui de lab2 (voir son journal), sauf :
   bf16 sur GPU). Machines : `labtools/cloud.sh` lance les types à GPU NVIDIA (g5, g6…) sur l'image
   d'AWS avec les pilotes, et compile avec l'option `gpu` ; leur quota Spot est à 0 sur le compte
   (demande à AWS nécessaire). g5.16xlarge (64 vCPU, A10G) à 0,52 $/h à Stockholm le 22 octobre.
+- **Mesuré sur le PC de l'utilisateur** (22 octobre ; i7-12700KF, 20 fils, sans AVX-512 ; RX 9070
+  XT, ROCm 7.14, PyTorch 2.14) avec le c060 de lab2, n = 200, 2 à 5 joueurs : parties, processeur
+  seul 207 positions/s ; GPU 141 (4 fils de jeu), 205 (8 fils), 184 (16 fils). Le GPU plafonne
+  dès 8 fils, occupé à 76-83 % pour environ 1 TFLOP/s utile : le coût est fixe, à chaque appel
+  (fil évaluateur seul, copies, lancements de PyTorch), pas dans le calcul. Entraînement, lots de
+  512 : 0,3 lot/s sur le processeur (bf16 sans AVX-512 BF16), 39 sur GPU en f32, 103 en bf16 :
+  `train.py` ne prenait le bf16 que sur processeur (`torch.autocast("cpu")`), corrigé. Rust 1.97
+  plantait en compilant lab3 (LLVM, code AVX-512) : 1.99 compile.
 - Retiré : `size.py` (mesure des tailles de réseau de lab2).
 
 ## Mesure

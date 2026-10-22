@@ -16,9 +16,9 @@ qu'une par partie). Les positions sont vues du joueur qui agit.
 
 AdamW, taux 5e-4 en un cycle (montée puis descente) à chaque pas de la boucle, lots de 512 ; calcul
 en bf16 (`torch.autocast`, poids et optimiseur en 32 bits, comme AlphaZero sur TPU) : 1,3 fois plus
-rapide sur les processeurs qui ont AVX-512 BF16. Validation en 32 bits. Sans `torch.compile` : sur
-c7a.16xlarge, 16 cœurs, bf16, 3 % gagnés pour 9 à 18 s de compilation par cycle (mesure du 21
-octobre).
+rapide sur les processeurs qui ont AVX-512 BF16, 2,7 fois sur GPU (RX 9070 XT, 22 octobre).
+Validation en 32 bits. Sans `torch.compile` : sur c7a.16xlarge, 16 cœurs, bf16, 3 % gagnés pour 9
+à 18 s de compilation par cycle (mesure du 21 octobre).
 """
 
 import argparse
@@ -89,7 +89,7 @@ def losses(net, b):
 
 def learn(net, opt, sched, b):
     """Un lot d'entraînement (en bf16) ; renvoie ses mesures (`METRICS`)."""
-    with torch.autocast("cpu", dtype=torch.bfloat16):
+    with torch.autocast(b["node"].device.type, dtype=torch.bfloat16):
         out = losses(net, b)
         pol, val, gain, owners = out[:4]
         loss = pol + val + GAIN_WEIGHT * gain + OWN_WEIGHT * owners
