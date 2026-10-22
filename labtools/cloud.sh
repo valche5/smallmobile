@@ -385,19 +385,30 @@ gone() { # la machine a-t-elle disparu (reprise Spot, garde-fou) ? Le dit, avec 
 }
 
 cmd_wait() { # affiche le journal du calcul au fil de l'eau, rend son code de sortie
-  local off=0 code
+  local off=0 code id chunk
+  id=$(state id)
+  [ -n "$id" ] || die "aucune machine (labtools/cloud.sh up)"
+  # un fichier par suivi : un autre `wait` (ou un `job` resté en route) peut suivre la même machine
+  chunk="$STATE/chunk.$$"
   while true; do
+    # machine détruite (`down`) ou remplacée : son calcul n'est plus le nôtre
+    if [ "$(state id)" != "$id" ]; then
+      say "machine $id détruite ou remplacée : suivi arrêté"
+      rm -f "$chunk"
+      return 99
+    fi
     # Le code de sortie d'abord : s'il est là, le journal lu ensuite est complet.
     code=$(on 'cat job.exit 2>/dev/null; true') || {
-      if gone; then return 99; fi
+      if gone; then rm -f "$chunk"; return 99; fi
       sleep 30
       continue
     }
     on "s=\$(stat -c %s job.log 2>/dev/null || echo 0); echo \$s; tail -c +$((off + 1)) job.log 2>/dev/null | head -c \$((s - $off))" \
-      > "$STATE/chunk" || { sleep 30; continue; }
-    off=$(head -n 1 "$STATE/chunk")
-    tail -n +2 "$STATE/chunk"
+      > "$chunk" || { sleep 30; continue; }
+    off=$(head -n 1 "$chunk")
+    tail -n +2 "$chunk"
     if [ -n "$code" ]; then
+      rm -f "$chunk"
       say "calcul terminé (code $code)"
       return "$code"
     fi
