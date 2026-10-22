@@ -84,6 +84,28 @@ Celui de lab2 (voir son journal), sauf :
   512 : 0,3 lot/s sur le processeur (bf16 sans AVX-512 BF16), 39 sur GPU en f32, 103 en bf16 :
   `train.py` ne prenait le bf16 que sur processeur (`torch.autocast("cpu")`), corrigé. Rust 1.97
   plantait en compilant lab3 (LLVM, code AVX-512) : 1.99 compile.
+- **Plafond sans réseau** (même PC, même recette) : un réseau factice qui répond aussitôt, 20 fils,
+  2 356 positions/s, environ 3 400 sans le coût du faux réseau lui-même (31 % du profil) ; une
+  simulation coûte environ 17 µs (moteur du jeu ~25 % du profil, encodage 7 %, empreinte 4 %).
+- **Le réseau par Vulkan** (`lab3 selfplay --device vulkan`, option `vulkan`, `src/vulkan.rs`,
+  `shaders/`), sans Python : un fil d'envoi recopie les groupes des fils de jeu dans un emplacement
+  que le GPU lit directement (4 emplacements en vol), un fil de réception attend chaque lot
+  (sémaphore à compteur) et lit les sorties là où le GPU les a écrites. Un seul calcul par lot, un
+  groupe de travail par position, tout le réseau dans sa mémoire partagée (`net.comp`) : les grands
+  produits des régions sur les matrices coopératives (16 × 16 × 16, bf16, sommes en f32), le flux
+  résiduel en f32 dans les registres, moins de 32 Ko de mémoire partagée (deux positions à la fois
+  par unité de calcul). Mêmes arrondis bf16 que le processeur pour h, la moyenne des voisines et
+  relu(n1) ; node_in et node_pol en deux parties bf16, presque f32. Écarts au calcul f32 sur le c060
+  (test `vulkan_evaluates_like_the_processor`) : victoire 0,006, pièces 0,26, logits 0,19 (le bf16
+  du processeur : 0,0015, 0,06, 0,04). `net32.comp`, tout en f32 (écart 2·10⁻⁴), sert de secours
+  (GPU sans matrices coopératives bf16, llvmpipe pour les tests sans GPU).
+- **Vitesse par Vulkan** (RX 9070 XT, RADV, c060, 20 fils, 2 560 parties) : 1 222 positions/s, 5,9
+  fois le processeur seul et 6 fois PyTorch ; lots de 234 positions, GPU occupé 77 %. Étapes : 40
+  petits calculs par lot (102 positions par lot, 0,84 ms de GPU chacun) 669 ; tout le réseau en un
+  calcul, f32, 551 ; bf16 et matrices coopératives 794 ; moins de 32 Ko par position 1 029 ; quatre
+  groupes par fil 1 130, quatre emplacements 1 222. Deux files de calcul : 836. Seul, le calcul
+  (`lab3 bench-vulkan`) : 0,22 ms pour une position, 509 000 positions/s par lots de 4 096 ; le
+  GPU attend surtout la mémoire (lectures des poids), pas ses unités de calcul.
 - Retiré : `size.py` (mesure des tailles de réseau de lab2).
 
 ## Mesure

@@ -1,14 +1,17 @@
 //! Le réseau sur GPU, pour la génération des parties (`lab3 selfplay --gpu`, programme compilé avec
 //! `--features gpu`) : un fil « évaluateur » appelle PyTorch (`lab3/py/serve.py`, par pyo3) ; les
 //! fils de jeu lui envoient chacun leur groupe de positions (`batch::Batch`), et il évalue ensemble
-//! tous les groupes qui attendent. Chaque fil de jeu mène deux groupes (`selfplay::run`) : pendant
-//! que le GPU évalue l'un, il fait avancer l'autre. Seul le fil évaluateur touche à Python.
+//! tous les groupes qui attendent. Chaque fil de jeu mène plusieurs groupes (`selfplay::run`) :
+//! pendant que le GPU en évalue, il fait avancer les autres. Seul le fil évaluateur touche à Python.
 //!
 //! Les nombres du GPU (bf16, sommes dans un autre ordre) diffèrent un peu de ceux du processeur :
 //! les parties ne sont plus les mêmes au bit près que sans GPU.
 //!
 //! Python est celui de `lab3/py/.venv` (PyTorch pour CUDA ou ROCm : `lab3/py/setup.sh`), là où le
 //! programme a été compilé.
+//!
+//! Le même service sans Python, par Vulkan (`Gpu::start_vulkan`, programme compilé avec
+//! `--features vulkan`) : `vulkan`.
 
 use std::path::Path;
 use std::sync::mpsc;
@@ -16,17 +19,20 @@ use std::sync::mpsc;
 use crate::encode::{GLOBAL, NODE, REGIONS};
 use crate::net::{Eval, Position};
 
-/// Un groupe envoyé au GPU, dans le format de `serve.py`.
-#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
-struct Job {
-    count: usize,
-    node: Vec<u8>,
-    glob: Vec<u8>,
-    adj: Vec<u8>,
-    regions: Vec<u8>,
-    players: Vec<u8>,
-    reply: mpsc::Sender<Vec<Eval>>,
+/// Un groupe envoyé au GPU, dans le format de `serve.py` (et de `vulkan::serve`).
+#[cfg_attr(not(any(feature = "gpu", feature = "vulkan")), allow(dead_code))]
+pub(crate) struct Job {
+    pub(crate) count: usize,
+    pub(crate) node: Vec<u8>,
+    pub(crate) glob: Vec<u8>,
+    pub(crate) adj: Vec<u8>,
+    pub(crate) regions: Vec<u8>,
+    pub(crate) players: Vec<u8>,
+    pub(crate) reply: mpsc::Sender<Vec<Eval>>,
 }
+
+/// Un service des groupes : poids, groupes reçus, et ce qui calcule (ou pourquoi rien) dès le départ.
+type Serve = fn(&Path, mpsc::Receiver<Job>, mpsc::Sender<Result<String, String>>);
 
 /// Les évaluations d'un groupe envoyé (`Gpu::submit`).
 pub struct Pending(mpsc::Receiver<Vec<Eval>>);
@@ -45,6 +51,21 @@ pub struct Gpu {
 impl Gpu {
     /// Lance le fil évaluateur avec les poids `net` ; rend aussi ce qui calcule (GPU ou processeur).
     pub fn start(net: &Path) -> Result<(Gpu, String), String> {
+        Gpu::launch(net, serve)
+    }
+
+    /// Le même service par Vulkan, sans Python (`vulkan`).
+    pub fn start_vulkan(net: &Path) -> Result<(Gpu, String), String> {
+        #[cfg(feature = "vulkan")]
+        return Gpu::launch(net, crate::vulkan::serve);
+        #[cfg(not(feature = "vulkan"))]
+        {
+            let _ = net;
+            Err("programme lab3 compilé sans Vulkan (cargo build --features vulkan)".into())
+        }
+    }
+
+    fn launch(net: &Path, serve: Serve) -> Result<(Gpu, String), String> {
         let (jobs, received) = mpsc::channel();
         let (ready, started) = mpsc::channel();
         let net = net.to_owned();

@@ -7,9 +7,11 @@
 //! lab3 speed --agent az:net=poids.bin,n=200 [--positions 12] [--seed 1]   (temps et empreinte des recherches)
 //! lab3 selfplay --agent az:net=poids.bin --games 1000 --out lab3/data/gen1 [--players 2,3,4,5]
 //!     [--device gpu]   (le réseau sur GPU, par PyTorch : programme compilé avec `--features gpu`)
+//!     [--device vulkan]   (le réseau sur GPU, par Vulkan : programme compilé avec `--features vulkan`)
 //!     (auto-jeu, recette `selfplay::RECIPE`)
 //! lab3 check-net --net poids.bin --data parties.pos [--count 5]   (comparaison avec lab3/py/check.py)
 //! lab3 bench-net --net poids.bin --data parties.pos [--count 5000]   (vitesse et écarts du calcul bf16)
+//! lab3 bench-vulkan --net poids.bin [--regions 40]   (durée d'un lot sur GPU selon sa taille ; `--features vulkan`)
 //! lab3 analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par labtools/export-room.ts)
 //! ```
 
@@ -31,6 +33,7 @@ fn main() {
         "selfplay" => selfplay_cmd(&opts),
         "check-net" => check_net_cmd(&opts),
         "bench-net" => bench_net_cmd(&opts),
+        "bench-vulkan" => bench_vulkan_cmd(&opts),
         "analyze" => analyze_cmd(&opts),
         _ => usage(),
     }
@@ -43,9 +46,12 @@ fn usage() -> ! {
     );
     eprintln!("        lab3 arena --table 'A|B|B' [--deals N] [--threads N] [--seed S] [--out F]");
     eprintln!("        lab3 speed --agent az:… [--players 2,3,4,5] [--positions 12] [--seed S]");
-    eprintln!("        lab3 selfplay --agent az:… --games N --out DIR [--players 2,3,4,5] [--seed S] [--device gpu]");
+    eprintln!(
+        "        lab3 selfplay --agent az:… --games N --out DIR [--players 2,3,4,5] [--seed S] [--device gpu|vulkan]"
+    );
     eprintln!("        lab3 check-net --net poids.bin --data parties.pos [--count N]");
     eprintln!("        lab3 bench-net --net poids.bin --data parties.pos [--count N]");
+    eprintln!("        lab3 bench-vulkan --net poids.bin [--regions R]");
     eprintln!("        lab3 analyze --game partie.smk --agent az:net=poids.bin,n=20000");
     std::process::exit(2)
 }
@@ -243,12 +249,18 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
     // le réseau sur GPU (PyTorch) : les mêmes poids que la recherche
     let gpu = match opts.get("device").map(String::as_str) {
         None | Some("cpu") => None,
-        Some("gpu") => {
+        Some(device @ ("gpu" | "vulkan")) => {
             let net = name
                 .split(',')
                 .find_map(|p| p.strip_prefix("az:").unwrap_or(p).strip_prefix("net="))
                 .unwrap_or_else(|| usage());
-            let (gpu, device) = smallmobile_lab3::gpu::Gpu::start(std::path::Path::new(net)).unwrap_or_else(|e| {
+            let net = std::path::Path::new(net);
+            let started = if device == "gpu" {
+                smallmobile_lab3::gpu::Gpu::start(net)
+            } else {
+                smallmobile_lab3::gpu::Gpu::start_vulkan(net)
+            };
+            let (gpu, device) = started.unwrap_or_else(|e| {
                 eprintln!("GPU : {e}");
                 std::process::exit(2)
             });
@@ -263,6 +275,31 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
         std::process::exit(1)
     }
     println!("{} parties en {:.0} s", cfg.games, start.elapsed().as_secs_f64());
+}
+
+/// La durée d'un lot sur le GPU par Vulkan, selon le nombre de positions.
+#[cfg(feature = "vulkan")]
+fn bench_vulkan_cmd(opts: &HashMap<String, String>) {
+    // SAFETY : avant tout autre fil
+    unsafe { std::env::set_var("LAB3_VULKAN_PROFILE", "1") };
+    let net = opts.get("net").unwrap_or_else(|| usage());
+    let regions = get(opts, "regions", 40);
+    let engine = smallmobile_lab3::vulkan::Engine::new(std::path::Path::new(net), smallmobile_lab3::vulkan::MAX_BATCH)
+        .unwrap_or_else(|e| {
+            eprintln!("GPU : {e}");
+            std::process::exit(2)
+        });
+    println!("{}, {regions} régions par position", engine.describe());
+    for count in [1, 16, 64, 128, 256, 512, 1024, 2048, 4096] {
+        let ms = engine.bench(count, regions, 20).unwrap_or_else(|e| panic!("{e}"));
+        println!("{count:5} positions : {ms:7.3} ms, {:8.0} positions/s", count as f64 / (ms / 1e3));
+    }
+}
+
+#[cfg(not(feature = "vulkan"))]
+fn bench_vulkan_cmd(_: &HashMap<String, String>) {
+    eprintln!("programme lab3 compilé sans Vulkan (cargo build --features vulkan)");
+    std::process::exit(2)
 }
 
 /// Évalue les premières positions d'un fichier de parties en `f32` : mêmes nombres attendus qu'en

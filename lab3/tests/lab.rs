@@ -478,6 +478,67 @@ fn the_gpu_evaluates_like_the_processor() {
     assert!(positions.len() > 40, "trop peu de positions : {}", positions.len());
 }
 
+#[cfg(feature = "vulkan")]
+#[test]
+fn vulkan_evaluates_like_the_processor() {
+    // le réseau d'essai (64 de large, tous ses poids au hasard) et celui de départ (128 de large,
+    // appris)
+    let start = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nets/start.bin");
+    for (bytes, seed) in [(random_net_bytes(), 44), (std::fs::read(start).unwrap(), 45)] {
+        vulkan_check(bytes, seed);
+    }
+}
+
+#[cfg(feature = "vulkan")]
+fn vulkan_check(bytes: Vec<u8>, seed: u64) {
+    use smallmobile_lab3::encode::encode;
+    use smallmobile_lab3::gpu::Gpu;
+    let path = std::env::temp_dir().join(format!("smallmobile-vulkan-{}-{seed}.bin", std::process::id()));
+    std::fs::write(&path, &bytes).unwrap();
+    let net = smallmobile_lab3::net::Net::from_bytes(&bytes).unwrap();
+    let (gpu, device) = Gpu::start_vulkan(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let tables: Vec<Table> = (0..4).map(|i| Table::new(2 + i, 100 * seed + i as u64)).collect();
+    let mut positions = Vec::new();
+    let mut rng = Rng::new(seed);
+    for (t, table) in tables.iter().enumerate() {
+        let (mut g, mut k) = (table.game(t as u32), Knowledge::default());
+        random_game(&mut g, &mut k, &mut rng.fork(), |g, k, legal| {
+            if legal.len() > 1 && rng.below(4) == 0 {
+                positions.push((encode(g, k), t, legal.iter().map(|c| c.key as usize).collect::<Vec<_>>()));
+            }
+        });
+    }
+    let items: Vec<_> = positions.iter().map(|(e, t, _)| (e, &tables[*t].map)).collect();
+    // deux groupes envoyés ensemble : évalués dans le même lot, chacun reçoit les siennes
+    let half = items.len() / 2;
+    let players = |r: std::ops::Range<usize>| positions[r].iter().map(|(e, _, _)| e.players).collect::<Vec<_>>();
+    let first = gpu.submit(&items[..half], players(0..half).into_iter());
+    let second = gpu.submit(&items[half..], players(half..items.len()).into_iter());
+    let far: Vec<_> = first.wait().into_iter().chain(second.wait()).collect();
+    // les plus grands écarts : victoire, pièces, logits des coups possibles
+    let mut worst = [0.0f32; 3];
+    for (i, (e, t, legal)) in positions.iter().enumerate() {
+        let near = net.eval_f32(e, |r| &tables[*t].map.regions[r].adj);
+        let a = &far[i];
+        let gap = |x: &[f32], y: &[f32]| x.iter().zip(y).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+        worst[0] = worst[0].max(gap(&a.win, &near.win));
+        worst[1] = worst[1].max(gap(&a.gain, &near.gain));
+        for &k in legal {
+            worst[2] = worst[2].max((a.logits[k] - near.logits[k]).abs());
+        }
+        // les clés des régions absentes restent impossibles
+        let absent = (e.regions..64).map(|r| a.logits[smallmobile_lab3::moves::GLOBAL_KEYS + r]);
+        assert!(absent.into_iter().all(|v| v == f32::NEG_INFINITY), "{device} : région absente");
+    }
+    // f32 : sommes dans un autre ordre. bf16 (matrices coopératives) : sur le réseau de départ, 0,004,
+    // 0,13 et 0,12 (22 octobre ; le bf16 du processeur, `eval_portable_bf16` : 0,0015, 0,06, 0,04)
+    let tolerance = if device.contains("bf16") { [0.02, 0.4, 0.4] } else { [1e-3; 3] };
+    eprintln!("{device}, largeur {} : écarts {worst:?}", net.hidden);
+    assert!(worst.iter().zip(&tolerance).all(|(w, t)| w < t), "{device}, largeur {} : écarts {worst:?}", net.hidden);
+    assert!(positions.len() > 40, "trop peu de positions : {}", positions.len());
+}
+
 #[test]
 fn the_engine_plays_each_game_as_if_alone() {
     use smallmobile_lab3::az::{Az, Config, Direct, now};

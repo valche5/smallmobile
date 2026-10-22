@@ -366,13 +366,14 @@ pub fn moves_file(path: &Path) -> std::path::PathBuf {
 
 /// Parties que mène chaque fil en même temps, par groupe : leurs positions à évaluer forment un
 /// groupe (`Batch`). Sur le processeur du fil, un groupe de 8, évalué couche après couche (ses
-/// évaluations gardées et les poids d'une couche tiennent dans le cache du cœur) ; avec le GPU, deux
-/// groupes de 32 : le fil fait avancer l'un pendant que le GPU évalue l'autre, et le GPU reçoit de
-/// grands lots (les groupes de tous les fils). Un fil garde tout ce qu'il touche (parties,
+/// évaluations gardées et les poids d'une couche tiennent dans le cache du cœur) ; avec le GPU,
+/// quatre groupes de 32 : le fil fait avancer les uns pendant que le GPU évalue les autres, et le GPU
+/// reçoit de grands lots (les groupes de tous les fils ; Vulkan, 22 octobre : 1 029 positions/s avec
+/// deux groupes, 1 130 avec quatre). Un fil garde tout ce qu'il touche (parties,
 /// évaluations gardées, groupes) : rien de modifiable n'est partagé entre les cœurs, hormis le
 /// compteur des parties (une fois par partie).
 const CONCURRENT: usize = 8;
-const GPU_GROUPS: usize = 2;
+const GPU_GROUPS: usize = 4;
 const GPU_CONCURRENT: usize = 32;
 
 /// Une partie finie : ses positions (enregistrements) et sa ligne de journal (`GameLog`).

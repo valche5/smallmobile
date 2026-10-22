@@ -13,7 +13,7 @@
 //! - `encode`, `net`, `az` : ce que voit le réseau, le réseau, la recherche guidée par le réseau ;
 //! - `arena` : des milliers de parties pour comparer deux joueurs ;
 //! - `selfplay` : parties d'entraînement du réseau, plusieurs à la fois par fil, leurs évaluations
-//!   groupées (`batch`), par le processeur ou par le GPU (`gpu`).
+//!   groupées (`batch`), par le processeur ou par le GPU (`gpu` : PyTorch, ou `vulkan`).
 
 pub mod agent;
 pub mod arena;
@@ -22,5 +22,7 @@ pub mod batch;
 pub mod gpu;
 pub mod selfplay;
 pub mod table;
+#[cfg(feature = "vulkan")]
+pub mod vulkan;
 
 pub use smallmobile_brain3::{encode, know, moves, net, rand};

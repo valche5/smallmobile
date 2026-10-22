@@ -13,6 +13,9 @@ path = "src/bin/lab.rs"
 # le réseau sur GPU pour la génération des parties (`lab3 selfplay --device gpu`, src/gpu.rs) :
 # PyTorch appelé par pyo3
 gpu = ["dep:pyo3"]
+# le réseau sur GPU par Vulkan, sans Python (`lab3 selfplay --device vulkan`, src/vulkan.rs) ;
+# shaders compilés par glslc (build.rs)
+vulkan = ["dep:ash"]
 
 [dependencies]
 smallmobile-kernel = { path = "../kernel" }
@@ -20,3 +23,4 @@ smallmobile-brain3 = { path = "brain" }
 # l'Expert de lab2, adversaire témoin de l'arène (`lab2:net=…`)
 smallmobile-brain2 = { path = "../lab2/brain" }
 pyo3 = { version = "0.30", features = ["auto-initialize"], optional = true }
+ash = { version = "0.38", optional = true }
