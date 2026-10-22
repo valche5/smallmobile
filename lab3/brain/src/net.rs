@@ -328,7 +328,7 @@ impl Net {
         let mut xn = vec![0.0f32; REGIONS * NODE];
         for p in items {
             let (e, r) = (p.encoded(), p.encoded().regions);
-            for (xs, row) in xn.chunks_exact_mut(NODE).zip(&e.node[..r]) {
+            for (xs, row) in xn.as_chunks_mut::<NODE>().0.iter_mut().zip(&e.node[..r]) {
                 for ((x, &v), &sc) in xs.iter_mut().zip(row).zip(&self.node_scale) {
                     *x = v as f32 * sc;
                 }
@@ -338,7 +338,7 @@ impl Net {
             hs.push(h);
         }
         let mut xg = vec![0.0f32; n * GLOBAL];
-        for (p, xs) in items.iter().zip(xg.chunks_exact_mut(GLOBAL)) {
+        for (p, xs) in items.iter().zip(xg.as_chunks_mut::<GLOBAL>().0) {
             for ((x, &v), &sc) in xs.iter_mut().zip(&p.encoded().global).zip(&self.global_scale) {
                 *x = v as f32 * sc;
             }
@@ -404,7 +404,7 @@ impl Net {
         let mut v = vec![0.0f32; n * 10];
         self.val2.apply_many::<AVX2, BF16>(&gmid, n, &mut v);
         let mut evals = Vec::with_capacity(n);
-        for ((p, v), logits) in items.iter().zip(v.chunks_exact(10)).zip(logits) {
+        for ((p, v), logits) in items.iter().zip(v.as_chunks::<10>().0).zip(logits) {
             let players = p.encoded().players;
             let mut win = [0.0f32; 5];
             let top = v[..players].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
