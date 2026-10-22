@@ -126,7 +126,8 @@ joue qu'à sa taille, et se compare à lab2 à cette taille seulement :
 2. Spécialiser le généraliste : c060 de lab2 continué sur des parties à 4 joueurs, jusqu'au
    cycle 20, avec le nouveau moteur. Premier essai arrêté au pas 3 le 22 octobre (fenêtre d'un
    cycle, le réseau baissait : voir Résultats) ; relancé le 22 octobre avec la fenêtre remplie
-   d'abord par c000 (cycles 1 et 2 de l'essai repris : mêmes parties).
+   d'abord par c000 (cycles 1 et 2 de l'essai repris : mêmes parties) Relance arrêtée au pas 18 :
+   gain bref, puis retour au niveau de c060 (voir Résultats).
 3. Selon le résultat : les autres nombres de joueurs, un Expert du jeu qui choisit son réseau
    d'après le nombre de joueurs.
 4. Le réseau sur GPU (demande de l'utilisateur, 22 octobre) : le moteur groupe déjà les positions
@@ -136,6 +137,38 @@ joue qu'à sa taille, et se compare à lab2 à cette taille seulement :
 
 Scores du protocole (`labtools/score.py`), à 4 joueurs seulement : l'écart à une victoire sur
 quatre, de −25 (jamais) à +75 (toujours) ; n = 200.
+
+### Spécialisation à 4 joueurs, relance arrêtée au pas 18 (22 octobre)
+
+Fenêtre remplie par c000 (4 cycles) avant le premier entraînement : une `c7a.16xlarge` Spot,
+286 min, 3,53 $. Arrêtée au pas 18 par l'utilisateur, sans mesures de fin. Réseaux et arènes :
+`lab3/runs/p4`.
+
+| Réseau | Difficile | Normale | Valeur | Possession | Politique | Précision |
+| --- | --- | --- | --- | --- | --- | --- |
+| c000 (c060 de lab2) | +24,5 ± 2,3 | +17,6 ± 2,4 | | | | |
+| c004 | +29,9 ± 2,4 | +21,4 ± 2,2 | 1,151 | 0,538 | 1,291 | 49,4 % |
+| c005 | +30,8 ± 2,2 | +23,6 ± 2,2 | 1,159 | 0,538 | 1,290 | 49,4 % |
+| c006 | +26,7 ± 2,3 | +21,4 ± 2,3 | 1,161 | 0,538 | 1,292 | 49,2 % |
+| c007 | +26,9 ± 2,2 | +20,1 ± 2,3 | 1,159 | 0,538 | 1,293 | 49,2 % |
+| c008 | +26,7 ± 2,3 | +18,3 ± 2,4 | 1,158 | 0,539 | 1,295 | 49,0 % |
+| c009 | +26,0 ± 2,2 | +18,3 ± 2,3 | 1,161 | 0,539 | 1,296 | 49,1 % |
+| c010 | +24,2 ± 2,3 | +16,2 ± 2,2 | 1,188 | 0,539 | 1,298 | 48,9 % |
+| c011 | +25,1 ± 2,3 | +19,2 ± 2,2 | 1,200 | 0,541 | 1,302 | 48,7 % |
+| c012 | +26,3 ± 2,3 | +16,5 ± 2,2 | 1,205 | 0,542 | 1,307 | 48,7 % |
+| c013 | +25,7 ± 2,3 | +19,5 ± 2,3 | 1,394 | 0,548 | 1,338 | 47,5 % |
+| c014 | +25,2 ± 2,3 | +20,8 ± 2,3 | 1,330 | 0,549 | 1,329 | 47,8 % |
+| c015 | +23,0 ± 2,4 | +18,7 ± 2,3 | 1,334 | 0,553 | 1,339 | 47,5 % |
+| c016 | +16,8 ± 2,3 | +13,3 ± 2,3 | 1,378 | 0,554 | 1,345 | 47,1 % |
+| c017 | +22,3 ± 2,3 | +18,9 ± 2,1 | 1,320 | 0,553 | 1,346 | 46,9 % |
+| c018 | +24,5 ± 2,3 | +18,4 ± 2,3 | 1,336 | 0,555 | 1,357 | 46,5 % |
+
+- **Gain bref, puis rien** : +6 points à c004–c005 (appris sur les parties de c060 lui-même), puis
+  retour au niveau de c060 dès c010, et un creux à c016.
+- **La valeur se dégrade par sauts** (pièces au pas 10, valeur au pas 13 : 1,19 → 1,29 à
+  l'entraînement), alors que les parties ne changent pas (longueur, parts partagées, pièces, poids
+  de tirage vérifiés sur la machine, cycles 1 à 14) : c'est l'entraînement, pas les données.
+- L'auto-jeu à 4 joueurs seul, depuis le généraliste, n'améliore pas le réseau.
 
 ### Spécialisation à 4 joueurs, premier essai arrêté (22 octobre)
 
