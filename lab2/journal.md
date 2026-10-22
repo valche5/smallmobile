@@ -2,7 +2,8 @@
 
 Ouvert le 21 octobre 2026, à partir de lab1, figé ce jour-là (`lab1/JOURNAL.md` : tout ce qui a
 été mesuré jusqu'à gen11). Règles communes des labos, protocole de mesure, machines AWS :
-`labtools/README.md`.
+`labtools/README.md`. **Figé le 22 octobre 2026 après sa troisième boucle** ; la suite, un réseau
+par nombre de joueurs : `lab3/journal.md`.
 
 ## Objectif
 
@@ -139,7 +140,7 @@ que le labo apprend ne doit rien à lab1 ; on compare ensuite ses progrès à la
    la possession et la politique (voir Résultats).
 8. ~~Sortir du plateau (+19 face à Difficile depuis c015, −12,6 face à lab1) : réseau plus large
    et fenêtre plus large.~~ Deuxième boucle, 128x4, finie le 22 octobre : −2,2 face à lab1.
-9. Troisième boucle, même recette depuis c040 : pas 41 à 60 (lancée le 22 octobre).
+9. ~~Troisième boucle, même recette depuis c040 : pas 41 à 60.~~ Faite le 22 octobre.
 
 ## Résultats
 
@@ -306,3 +307,43 @@ Arènes de c040, 920 donnes, graine 1004 :
   arène), le dépasse dès c025.
 - Positions des cycles 1 à 31 effacées du bucket ensuite (`lab2/prune.sh`, 193 → 52 Go) : la
   courbe sur les cycles 21 et 22 ne peut plus être refaite.
+
+### Troisième boucle (22 octobre)
+
+Même recette depuis c040 (choix de l'utilisateur) : `lab2/loop.sh 60`, pas 41 à 60 ; les parties
+du cycle 41 jouées d'abord par c039 sur 64 cœurs (la deuxième boucle s'arrêtait avant). Une
+`c7a.16xlarge` Spot, 424 min, 5,35 $. Fenêtre : 8 cycles au pas 41, 11 au pas 60 (9,3 millions de
+positions) ; parties 1 076 à 1 085 s par cycle, entraînement 816 à 1 188 s (il s'allonge avec la
+fenêtre) : 20 à 22 min par pas.
+
+| Réseau | Difficile | Normale | Valeur | Possession | Politique | Précision |
+| --- | --- | --- | --- | --- | --- | --- |
+| c041 | +26,4 ± 2,1 | +20,9 ± 2,0 | 1,028 | 0,528 | 1,329 | 48,1 % |
+| c042 | +24,9 ± 2,2 | +22,1 ± 2,1 | 1,028 | 0,528 | 1,329 | 48,0 % |
+| c043 | +25,5 ± 2,2 | +21,8 ± 2,2 | 1,027 | 0,527 | 1,327 | 48,1 % |
+| c044 | +25,9 ± 2,3 | +21,1 ± 2,0 | 1,026 | 0,526 | 1,325 | 48,1 % |
+| c045 | +25,6 ± 2,3 | +21,2 ± 2,0 | 1,023 | 0,526 | 1,323 | 48,3 % |
+| c046 | +26,9 ± 2,2 | +23,4 ± 2,0 | 1,021 | 0,527 | 1,322 | 48,3 % |
+| c047 | +25,5 ± 2,2 | +23,4 ± 2,1 | 1,021 | 0,527 | 1,320 | 48,4 % |
+| c048 | +25,9 ± 2,3 | +23,2 ± 2,1 | 1,021 | 0,527 | 1,317 | 48,4 % |
+| c049 | +28,5 ± 2,1 | +23,4 ± 2,1 | 1,019 | 0,526 | 1,315 | 48,5 % |
+| c050 | +26,3 ± 2,3 | +24,5 ± 1,9 | 1,016 | 0,525 | 1,313 | 48,7 % |
+| c051 | +28,8 ± 2,2 | +25,2 ± 2,1 | 1,017 | 0,525 | 1,311 | 48,7 % |
+| c052 | +27,1 ± 2,2 | +22,8 ± 2,0 | 1,016 | 0,524 | 1,308 | 48,9 % |
+| c053 | +27,9 ± 2,2 | +24,3 ± 2,1 | 1,014 | 0,525 | 1,307 | 48,9 % |
+| c054 | +30,2 ± 2,1 | +26,8 ± 2,1 | 1,013 | 0,524 | 1,305 | 48,9 % |
+| c055 | +30,7 ± 2,1 | +25,6 ± 2,0 | 1,014 | 0,524 | 1,305 | 49,0 % |
+| c056 | +30,0 ± 2,1 | +23,7 ± 2,2 | 1,016 | 0,524 | 1,302 | 49,0 % |
+| c057 | +29,4 ± 2,3 | +26,4 ± 2,1 | 1,019 | 0,523 | 1,301 | 49,0 % |
+| c058 | +29,2 ± 2,2 | +26,2 ± 2,1 | 1,017 | 0,523 | 1,298 | 49,1 % |
+| c059 | +28,7 ± 2,2 | +24,9 ± 2,1 | 1,016 | 0,523 | 1,299 | 49,1 % |
+| c060 | +30,6 ± 2,2 | +27,8 ± 2,1 | 1,014 | 0,522 | 1,298 | 49,1 % |
+
+c060 par taille (2, 3, 4, 5 joueurs) : Difficile +40,9, +24,6, +29,3, +27,7 ; Normale +46,5,
++22,0, +20,2, +22,6.
+
+- **Le plateau de la deuxième boucle cède** : vers +25 et +21 jusqu'à c045, puis la montée
+  reprend, vers +30 et +26 à partir de c054. Les gains vont aux tables de 3, 4 et 5 joueurs
+  (Normale à 3 joueurs : +6,1 pour c040, +22,0 pour c060).
+- La valeur de chaque pas baisse de nouveau (1,028 → 1,014), la politique continue (1,329 →
+  1,298).
