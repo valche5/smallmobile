@@ -16,6 +16,10 @@ use crate::encode::{Encoded, REGIONS};
 use crate::gpu::{Gpu, Pending};
 use crate::net::{Eval, Net, Position};
 
+/// Le temps (ns) que les fils de jeu ont passé à attendre leurs évaluations du GPU, tous ensemble
+/// (`collect` ; affiché par `selfplay::run` avec `LAB3_VULKAN_PROFILE`).
+pub static WAITED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub struct Batch<'a> {
     net: &'a Net,
     /// Le GPU qui évalue le groupe ; sans lui, le processeur du fil.
@@ -68,7 +72,10 @@ impl<'a> Batch<'a> {
     /// sienne en reprenant. Rien à faire sans GPU.
     pub fn collect(&self) {
         if let Some(pending) = self.sent.borrow_mut().take() {
-            *self.done.borrow_mut() = pending.wait().into_iter().map(Some).collect();
+            let start = std::time::Instant::now();
+            let evals = pending.wait();
+            WAITED.fetch_add(start.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+            *self.done.borrow_mut() = evals.into_iter().map(Some).collect();
         }
     }
 }

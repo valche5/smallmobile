@@ -25,4 +25,11 @@ fn main() {
             .unwrap_or_else(|e| panic!("glslc introuvable ({e}) : paquet glslc ou SDK Vulkan"));
         assert!(status.success(), "glslc : {}", path.display());
     }
+    // net.comp instrumenté : la durée de chaque étape (`LAB3_VULKAN_PHASES`, `src/vulkan.rs`)
+    let status = Command::new("glslc")
+        .args(["-O", "--target-env=vulkan1.3", "-DPROFILE", "shaders/net.comp", "-o"])
+        .arg(Path::new(&out).join("net_prof.spv"))
+        .status()
+        .expect("glslc");
+    assert!(status.success(), "glslc : net.comp (PROFILE)");
 }

@@ -28,18 +28,22 @@ pub(crate) struct Job {
     pub(crate) adj: Vec<u8>,
     pub(crate) regions: Vec<u8>,
     pub(crate) players: Vec<u8>,
-    pub(crate) reply: mpsc::Sender<Vec<Eval>>,
+    pub(crate) reply: mpsc::Sender<Reply>,
 }
+
+/// La réponse à un groupe : ses évaluations, à tirer par le fil de jeu qui les attend (Vulkan : il
+/// les lit lui-même dans la mémoire où le GPU les a écrites, `vulkan::serve`).
+pub(crate) type Reply = Box<dyn FnOnce() -> Vec<Eval> + Send>;
 
 /// Un service des groupes : poids, groupes reçus, et ce qui calcule (ou pourquoi rien) dès le départ.
 type Serve = fn(&Path, mpsc::Receiver<Job>, mpsc::Sender<Result<String, String>>);
 
 /// Les évaluations d'un groupe envoyé (`Gpu::submit`).
-pub struct Pending(mpsc::Receiver<Vec<Eval>>);
+pub struct Pending(mpsc::Receiver<Reply>);
 
 impl Pending {
     pub fn wait(self) -> Vec<Eval> {
-        self.0.recv().expect("le fil du GPU s'est arrêté")
+        self.0.recv().expect("le fil du GPU s'est arrêté")()
     }
 }
 
@@ -69,7 +73,11 @@ impl Gpu {
         let (jobs, received) = mpsc::channel();
         let (ready, started) = mpsc::channel();
         let net = net.to_owned();
-        let thread = std::thread::spawn(move || serve(&net, received, ready));
+        // l'envoi (le fil qui appelle PyTorch, ou celui qui soumet les lots à Vulkan), nommé pour les profils
+        let thread = std::thread::Builder::new()
+            .name("gpu-envoi".into())
+            .spawn(move || serve(&net, received, ready))
+            .map_err(|e| format!("fil du GPU : {e}"))?;
         match started.recv() {
             Ok(Ok(device)) => Ok((Gpu { jobs: Some(jobs), thread: Some(thread) }, device)),
             Ok(Err(e)) => Err(e),
@@ -179,7 +187,7 @@ fn serve(net: &Path, jobs: mpsc::Receiver<Job>, ready: mpsc::Sender<Result<Strin
                     .collect();
                 at += job.count;
                 // un fil de jeu arrêté ne relit pas : rien à faire
-                let _ = job.reply.send(evals);
+                let _ = job.reply.send(Box::new(move || evals));
             }
         }
     });

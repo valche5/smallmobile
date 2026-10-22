@@ -25,19 +25,19 @@ use std::sync::mpsc;
 use ash::vk;
 
 use crate::encode::{GLOBAL, NODE, REGIONS};
-use crate::gpu::Job;
+use crate::gpu::{Job, Reply};
 use crate::moves::{GLOBAL_KEYS, KEYS};
 use crate::net::{Eval, REGION_KINDS};
 
 /// Lots en vol : pendant que le GPU en calcule un, les autres se remplissent ou se lisent. Mesuré le
 /// 22 octobre (RX 9070 XT, selfplay, 20 fils) : 943, 1 142, 1 222 et 892 positions/s avec 2, 3, 4 et 6
 /// (plus d'emplacements, plus petits lots).
-pub const SLOTS: usize = 4;
+pub const SLOTS: usize = 12;
 /// Files de calcul au plus : les lots de files différentes peuvent se chevaucher sur le GPU. Sur
 /// RADV, deux files ralentissent (836 positions/s au lieu de 1 222, 4 emplacements).
 const QUEUES: u32 = 1;
 /// Positions au plus par lot.
-pub const MAX_BATCH: usize = 4096;
+pub const MAX_BATCH: usize = 2048;
 /// Nombres rendus par position : les logits des coups, puis la tête de valeur.
 const OUT: usize = KEYS + 10;
 /// La table en tête des poids (`net.comp`, `net32.comp`) : 16 entrées, 8 par couche (8 au plus),
@@ -47,6 +47,26 @@ const TABLE16: usize = 80;
 
 const NET16_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/net.spv"));
 const NET32_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/net32.spv"));
+/// `net.comp` instrumenté (`LAB3_VULKAN_PHASES`) : la durée de chaque étape, par position.
+const NET16_PROF_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/net_prof.spv"));
+/// Les étapes de `net.comp` (`MARK`), dans l'ordre ; les couches cumulées.
+pub const PHASES: [&str; 15] = [
+    "entrées",
+    "glob_in",
+    "node_in",
+    "voisines",
+    "part de g (n1)",
+    "n1",
+    "n2",
+    "pooling",
+    "g1",
+    "g2",
+    "politique (partie)",
+    "politique (régions)",
+    "valeur",
+    "n1 : calcul du 1er sous-groupe",
+    "n1 : attente des autres",
+];
 /// Entrées d'une région complétées à un multiple de 16 (`net.comp`).
 const NODE16: usize = 80;
 
@@ -109,11 +129,21 @@ impl Weights {
         let mut data = vec![0.0f32; TABLE];
         let mut data16: Vec<u16> = Vec::new();
         // des poids en bf16 : leur position dans la table, les `rows` premières lignes de `wt`
+        // les `rows` premières entrées de `wt` (entrée × sortie, `out` sorties, multiple de 16),
+        // complétées à `pad`, en tuiles de 16 × 16 (`TILE` de net.comp) : tuile par tuile, les
+        // tuiles d'entrées d'une même colonne de sorties à la suite, chaque tuile par colonnes
         let mut put16 = |data: &mut Vec<f32>, entry: usize, wt: &[f32], rows: usize, pad: usize, out: usize| {
             data16.resize(data16.len().next_multiple_of(64), 0);
             data[entry] = f32::from_bits(data16.len() as u32);
-            data16.extend(wt[..rows * out].iter().map(|&x| bf16(x)));
-            data16.resize(data16.len() + (pad - rows) * out, 0);
+            for nb in 0..out / 16 {
+                for kb in 0..pad / 16 {
+                    for n in 0..16 {
+                        for k in kb * 16..kb * 16 + 16 {
+                            data16.push(if k < rows { bf16(wt[k * out + nb * 16 + n]) } else { 0 });
+                        }
+                    }
+                }
+            }
         };
         // la partie basse : ce que l'arrondi en bf16 a laissé
         let low = |wt: &[f32]| -> Vec<f32> { wt.iter().map(|&x| x - f32::from_bits((bf16(x) as u32) << 16)).collect() };
@@ -246,9 +276,13 @@ pub struct Engine {
     /// Les grands produits en bf16 sur les matrices coopératives (`net.comp`) ; sinon tout en f32
     /// (`net32.comp`).
     bf16: bool,
+    /// Le shader instrumenté (`LAB3_VULKAN_PHASES`) : ses durées par étape, 16 par position, dans
+    /// `prof` (mémoire projetée).
+    phases: bool,
+    prof: *mut u32,
 }
 
-// SAFETY : les pointeurs sont ceux de la mémoire projetée, qui vit autant que l'`Engine` ; chaque
+// SAFETY : les pointeurs sont ceux de la mémoire projetée (`prof` : lu seulement par `bench`), qui vit autant que l'`Engine` ; chaque
 // emplacement n'est touché que par le fil qui le tient (voir `serve`), la file et les commandes
 // sous `submitted`.
 unsafe impl Send for Engine {}
@@ -303,6 +337,7 @@ impl Engine {
                 return Err("aucun appareil Vulkan qui calcule".into());
             };
             let bf16 = std::env::var_os("LAB3_VULKAN_F32").is_none() && Engine::has_bf16(&entry, &instance, pd);
+            let phases = bf16 && std::env::var_os("LAB3_VULKAN_PHASES").is_some();
             let priorities = vec![1.0; queue_count as usize];
             let queues =
                 [vk::DeviceQueueCreateInfo::default().queue_family_index(family).queue_priorities(&priorities)];
@@ -316,15 +351,20 @@ impl Engine {
                 shader_bfloat16_dot_product: vk::FALSE,
                 shader_bfloat16_cooperative_matrix: vk::TRUE,
             };
+            let mut clock = vk::PhysicalDeviceShaderClockFeaturesKHR::default().shader_device_clock(true);
             let mut extensions = Vec::new();
             if bf16 {
                 v12 = v12.shader_float16(true).vulkan_memory_model(true);
                 v13 = v13.subgroup_size_control(true);
                 coop = coop.cooperative_matrix(true);
-                // la chaîne : v12 → v13 → coop → bf16
+                // la chaîne, du bout vers le début : (horloge →) bf16 → coop → v13 → v12
+                extensions = vec![c"VK_KHR_cooperative_matrix".as_ptr(), c"VK_KHR_shader_bfloat16".as_ptr()];
+                if phases {
+                    b16.p_next = &mut clock as *mut _ as *mut std::ffi::c_void;
+                    extensions.push(c"VK_KHR_shader_clock".as_ptr());
+                }
                 coop.p_next = &mut b16 as *mut Bf16Features as *mut std::ffi::c_void;
                 v13.p_next = &mut coop as *mut _ as *mut std::ffi::c_void;
-                extensions = vec![c"VK_KHR_cooperative_matrix".as_ptr(), c"VK_KHR_shader_bfloat16".as_ptr()];
             }
             v12.p_next = &mut v13 as *mut _ as *mut std::ffi::c_void;
             let mut info =
@@ -357,6 +397,8 @@ impl Engine {
                 max,
                 name,
                 bf16,
+                phases,
+                prof: std::ptr::null_mut(),
             };
             engine.build(&memory, family)?;
             if std::env::var_os("LAB3_VULKAN_PROFILE").is_some() {
@@ -538,8 +580,16 @@ impl Engine {
                 slots.push((ibuf, obuf));
             }
 
+            // les durées par étape (`phases`) : toujours là, pour une seule disposition
+            let (pbuf, pmem) = self.buffer(memory, self.max * 16 * 4, storage, &[host])?;
+            let pp = self
+                .device
+                .map_memory(pmem, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
+                .map_err(vk_err("projection"))?;
+            self.prof = pp as *mut u32;
+
             let d = &self.device;
-            let bindings: Vec<_> = (0..4)
+            let bindings: Vec<_> = (0..5)
                 .map(|b| {
                     vk::DescriptorSetLayoutBinding::default()
                         .binding(b)
@@ -561,7 +611,7 @@ impl Engine {
                 .map_err(vk_err("disposition"))?;
             let sizes = [vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(4 * SLOTS as u32)];
+                .descriptor_count(5 * SLOTS as u32)];
             self.descriptor_pool = d
                 .create_descriptor_pool(
                     &vk::DescriptorPoolCreateInfo::default().max_sets(SLOTS as u32).pool_sizes(&sizes),
@@ -577,7 +627,7 @@ impl Engine {
                 )
                 .map_err(vk_err("descripteurs"))?;
             for (&set, &(ibuf, obuf)) in self.sets.iter().zip(&slots) {
-                let infos: Vec<[vk::DescriptorBufferInfo; 1]> = [wbuf, ibuf, obuf, w16buf]
+                let infos: Vec<[vk::DescriptorBufferInfo; 1]> = [wbuf, ibuf, obuf, w16buf, pbuf]
                     .iter()
                     .map(|&b| [vk::DescriptorBufferInfo::default().buffer(b).range(vk::WHOLE_SIZE)])
                     .collect();
@@ -595,7 +645,11 @@ impl Engine {
                 d.update_descriptor_sets(&writes, &[]);
             }
 
-            let code = if self.bf16 { NET16_SPV } else { NET32_SPV };
+            let code = match (self.bf16, self.phases) {
+                (true, true) => NET16_PROF_SPV,
+                (true, false) => NET16_SPV,
+                _ => NET32_SPV,
+            };
             let words = ash::util::read_spv(&mut std::io::Cursor::new(code)).map_err(|e| format!("SPIR-V : {e}"))?;
             self.module = d
                 .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&words), None)
@@ -776,6 +830,58 @@ impl Engine {
         Ok(ns / 1e6 / lots.max(1) as f64)
     }
 
+    /// En flux : `lots` lots de `count` positions soumis à la suite, `SLOTS` en vol au plus, comme
+    /// le selfplay ; rend la durée murale totale (ms) et la somme des durées sur le GPU (ms). Leur
+    /// écart : ce que coûtent les soumissions et les fins de lot.
+    pub fn bench_stream(&self, count: usize, regions: usize, lots: usize) -> Result<(f64, f64), String> {
+        // les mêmes positions dans tous les emplacements
+        self.bench(count, regions, 1)?;
+        let first = self.input(0).to_vec();
+        for slot in 1..SLOTS {
+            self.input(slot).copy_from_slice(&first);
+        }
+        let p = self.profile.as_ref().ok_or("LAB3_VULKAN_PROFILE=1 attendu")?;
+        *p.totals.lock().expect("verrou") = (0, 0, 0.0);
+        let start = std::time::Instant::now();
+        let mut pending = std::collections::VecDeque::new();
+        for k in 0..lots {
+            let slot = k % SLOTS;
+            if pending.len() == SLOTS {
+                let (s, v) = pending.pop_front().expect("un lot");
+                self.wait(s, v)?;
+                self.profile_lot(s, count);
+            }
+            pending.push_back((slot, self.submit(slot, count)?));
+        }
+        for (s, v) in pending {
+            self.wait(s, v)?;
+            self.profile_lot(s, count);
+        }
+        let wall = start.elapsed().as_secs_f64() * 1e3;
+        let (_, _, ns) = *p.totals.lock().expect("verrou");
+        Ok((wall, ns / 1e6))
+    }
+
+    /// Avec `LAB3_VULKAN_PHASES` : la durée moyenne de chaque étape (`PHASES`, µs, horloge du GPU à
+    /// 100 MHz) d'une position, sur les `rounds` lots de `count` positions de `bench`.
+    pub fn bench_phases(&self, count: usize, regions: usize, rounds: usize) -> Result<Option<Vec<f64>>, String> {
+        if !self.phases {
+            return Ok(None);
+        }
+        // SAFETY : mémoire projetée de `max · 16` nombres, que le GPU ne touche qu'entre `submit`
+        // et `wait`
+        let prof = unsafe { std::slice::from_raw_parts_mut(self.prof, self.max * 16) };
+        prof.fill(0);
+        self.bench(count, regions, rounds)?;
+        // chaque lot réécrit ses durées : celles du dernier
+        let per = count as f64;
+        Ok(Some(
+            (0..PHASES.len())
+                .map(|ph| (0..count).map(|pos| prof[pos * 16 + ph] as f64).sum::<f64>() / per / 100.0)
+                .collect(),
+        ))
+    }
+
     /// Ajoute au profil la durée du lot fini de l'emplacement `slot` (`count` positions).
     fn profile_lot(&self, slot: usize, count: usize) {
         let Some(p) = &self.profile else { return };
@@ -833,6 +939,24 @@ impl Drop for Engine {
     }
 }
 
+/// Un lot reçu : son emplacement revient à l'envoi quand le dernier groupe a lu ses sorties.
+struct Lot {
+    free: mpsc::Sender<usize>,
+    slot: usize,
+}
+
+impl Drop for Lot {
+    fn drop(&mut self) {
+        let _ = self.free.send(self.slot);
+    }
+}
+
+/// Les sorties d'un emplacement, lues par les fils de jeu.
+#[derive(Clone, Copy)]
+struct Outputs(*const f32);
+// SAFETY : mémoire projetée qui vit autant que l'`Engine`, lue seulement (voir `Lot`)
+unsafe impl Send for Outputs {}
+
 /// L'évaluation d'une position : `OUT` nombres rendus par le GPU.
 fn eval_of(players: usize, out: &[f32]) -> Eval {
     let v: &[f32; 10] = out[KEYS..OUT].try_into().expect("10 valeurs");
@@ -859,29 +983,41 @@ pub(crate) fn serve(net: &Path, jobs: mpsc::Receiver<Job>, ready: mpsc::Sender<R
     let profile = engine.profile.is_some();
     std::thread::scope(|scope| {
         // réception : attend chaque lot, dans l'ordre, et rend son emplacement
-        scope.spawn(move || {
-            let mut busy = std::time::Duration::ZERO;
-            let start = std::time::Instant::now();
-            for (value, slot, batch) in received {
-                engine.wait(slot, value).unwrap_or_else(|e| panic!("{e}"));
-                let began = std::time::Instant::now();
-                engine.profile_lot(slot, batch.iter().map(|j| j.count).sum());
-                let out = engine.output(slot);
-                let mut at = 0;
-                for job in batch {
-                    let evals =
-                        (0..job.count).map(|k| eval_of(job.players[k] as usize, &out[(at + k) * OUT..])).collect();
-                    at += job.count;
-                    // un fil de jeu arrêté ne relit pas : rien à faire
-                    let _ = job.reply.send(evals);
+        let thread = std::thread::Builder::new().name("vulkan-réception".into());
+        thread
+            .spawn_scoped(scope, move || {
+                let mut busy = std::time::Duration::ZERO;
+                let start = std::time::Instant::now();
+                for (value, slot, batch) in received {
+                    engine.wait(slot, value).unwrap_or_else(|e| panic!("{e}"));
+                    let began = std::time::Instant::now();
+                    engine.profile_lot(slot, batch.iter().map(|j| j.count).sum());
+                    // chaque fil de jeu lit ses sorties lui-même ; l'emplacement revient quand tous
+                    // les groupes du lot les ont lues (ou abandonnées)
+                    let lot = std::sync::Arc::new(Lot { free: free.clone(), slot });
+                    let out = Outputs(engine.output(slot).as_ptr());
+                    let mut at = 0;
+                    for job in batch {
+                        let (lot, players, count) = (lot.clone(), job.players, job.count);
+                        let reply: Reply = Box::new(move || {
+                            // toute la structure (pas son seul champ, qui n'est pas `Send`)
+                            let (_lot, out) = (lot, out);
+                            // SAFETY : les sorties de ce lot, écrites par le GPU (lot fini) ;
+                            // l'emplacement n'est réutilisé qu'après la fin de `_lot`
+                            let out = unsafe { std::slice::from_raw_parts(out.0.add(at * OUT), count * OUT) };
+                            (0..count).map(|k| eval_of(players[k] as usize, &out[k * OUT..])).collect()
+                        });
+                        at += count;
+                        // un fil de jeu arrêté ne relit pas : rien à faire
+                        let _ = job.reply.send(reply);
+                    }
+                    busy += began.elapsed();
                 }
-                let _ = free.send(slot);
-                busy += began.elapsed();
-            }
-            if profile {
-                eprintln!("réception occupée {:.0} %", 100.0 * busy.as_secs_f64() / start.elapsed().as_secs_f64());
-            }
-        });
+                if profile {
+                    eprintln!("réception occupée {:.0} %", 100.0 * busy.as_secs_f64() / start.elapsed().as_secs_f64());
+                }
+            })
+            .expect("fil de réception");
         // envoi : un emplacement libre, puis tous les groupes qui attendent (au moins un)
         let mut carry: Option<Job> = None;
         let (mut busy, mut idle_slot, mut idle_jobs) =

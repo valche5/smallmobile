@@ -244,16 +244,23 @@ fn finish(g: &Game, out: &mut Moves) {
 
 /// Les actions du noyau qui jouent ce coup, dans l'ordre.
 pub fn actions(g: &Game, m: &Move) -> Vec<Action> {
-    let s = &g.state;
-    match *m {
-        Move::Pick(index) => vec![Action::Pick { index: index as usize }],
-        Move::SkipPick => vec![Action::SkipPick],
-        Move::Decline => vec![Action::Decline],
-        Move::EndConquest => vec![Action::EndConquest],
-        Move::Berserk => vec![Action::BerserkRoll],
+    match single(m) {
+        Some(a) => vec![a],
+        None => lift(g),
+    }
+}
+
+/// L'action d'un coup qui n'en demande qu'une (tous sauf `Move::Lift`).
+fn single(m: &Move) -> Option<Action> {
+    Some(match *m {
+        Move::Pick(index) => Action::Pick { index: index as usize },
+        Move::SkipPick => Action::SkipPick,
+        Move::Decline => Action::Decline,
+        Move::EndConquest => Action::EndConquest,
+        Move::Berserk => Action::BerserkRoll,
         Move::Region(kind, r) => {
             let region = r as usize;
-            vec![match kind {
+            match kind {
                 Kind::Conquer => Action::Conquer { region },
                 Kind::Reinforce => Action::Reinforce { region },
                 Kind::Dragon => Action::Dragon { region },
@@ -263,30 +270,40 @@ pub fn actions(g: &Game, m: &Move) -> Vec<Action> {
                 Kind::Fortress => Action::Fortress { region },
                 Kind::Camp => Action::Camp { region, delta: 1 },
                 Kind::Token => Action::Deploy { region, delta: 1 },
-            }]
-        }
-        Move::Lift => {
-            let army = s.turn.army.expect("peuple en action");
-            let own = g.owned(army);
-            let mut out = vec![Action::Place(Placement::default())];
-            for r in own.iter() {
-                if s.regions[r].hero {
-                    out.push(Action::Hero { region: r });
-                }
-                out.extend((0..s.regions[r].camps).map(|_| Action::Camp { region: r, delta: -1 }));
             }
-            out
         }
-        Move::End { peace, stout } => vec![Action::EndTurn { peace: peace.map(usize::from), stout }],
-        Move::EndDefense => vec![Action::EndDefense],
+        Move::Lift => return None,
+        Move::End { peace, stout } => Action::EndTurn { peace: peace.map(usize::from), stout },
+        Move::EndDefense => Action::EndDefense,
+    })
+}
+
+/// Les actions de `Move::Lift`.
+fn lift(g: &Game) -> Vec<Action> {
+    let s = &g.state;
+    let army = s.turn.army.expect("peuple en action");
+    let own = g.owned(army);
+    let mut out = vec![Action::Place(Placement::default())];
+    for r in own.iter() {
+        if s.regions[r].hero {
+            out.push(Action::Hero { region: r });
+        }
+        out.extend((0..s.regions[r].camps).map(|_| Action::Camp { region: r, delta: -1 }));
     }
+    out
 }
 
 /// Joue un coup ; un coup refusé laisse la partie dans un état quelconque (c'est un bogue de
 /// l'appelant). Le suivi de la fin de tour est l'affaire de `Knowledge::play`.
 pub fn play(g: &mut Game, m: &Move, journal: &mut impl Journal) -> Result<(), Reason> {
-    for a in actions(g, m) {
-        g.apply(&a, journal)?;
+    // sans `Vec` pour les coups d'une seule action (presque tous, à chaque simulation)
+    match single(m) {
+        Some(a) => g.apply(&a, journal)?,
+        None => {
+            for a in lift(g) {
+                g.apply(&a, journal)?;
+            }
+        }
     }
     Ok(())
 }

@@ -111,22 +111,31 @@ impl Node {
 
     /// Les probabilités a priori des coups (softmax des logits).
     fn priors(&self) -> Vec<f32> {
-        softmax(self.edges.iter().map(|e| e.logit))
+        let mut out = Vec::new();
+        self.priors_into(&mut out);
+        out
+    }
+
+    /// `priors`, dans `out` (sans allocation une fois `out` assez grand).
+    fn priors_into(&self, out: &mut Vec<f32>) {
+        softmax_into(self.edges.iter().map(|e| e.logit), out);
     }
 
     /// Les valeurs complétées des coups, transformées pour s'ajouter aux logits : un coup jamais
     /// essayé reçoit la valeur mêlée du nœud (valeur du réseau et valeurs des coups essayés,
     /// pondérées par leur probabilité a priori) ; puis toutes sont ramenées entre 0 et 1 et
     /// multipliées par `(VISIT_INIT + visites du coup le plus vu) × VALUE_SCALE`.
-    fn completed(&self) -> Vec<f32> {
-        let priors = self.priors();
+    /// Dans `s.values` (`s.priors` : les probabilités a priori).
+    fn completed_into(&self, s: &mut Scratch) {
+        self.priors_into(&mut s.priors);
+        let priors = &s.priors;
         let visits: u32 = self.edges.iter().map(|e| e.visits).sum();
         let raw = self.raw[self.actor];
         let mixed = if visits == 0 {
             raw
         } else {
             let (mut mass, mut weighted) = (0.0f32, 0.0f32);
-            for (e, &p) in self.edges.iter().zip(&priors) {
+            for (e, &p) in self.edges.iter().zip(priors) {
                 if let Some(q) = self.q(e) {
                     mass += p;
                     weighted += p * q;
@@ -134,35 +143,63 @@ impl Node {
             }
             (raw + visits as f32 * weighted / mass.max(f32::MIN_POSITIVE)) / (visits as f32 + 1.0)
         };
-        let values: Vec<f32> = self.edges.iter().map(|e| self.q(e).unwrap_or(mixed)).collect();
+        let values = &mut s.values;
+        values.clear();
+        values.extend(self.edges.iter().map(|e| self.q(e).unwrap_or(mixed)));
         let lo = values.iter().copied().fold(f32::INFINITY, f32::min);
         let hi = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let most = self.edges.iter().map(|e| e.visits).max().unwrap_or(0);
         let scale = (VISIT_INIT + most as f32) * VALUE_SCALE;
-        values.iter().map(|&v| scale * (v - lo) / (hi - lo).max(1e-8)).collect()
+        values.iter_mut().for_each(|v| *v = scale * (*v - lo) / (hi - lo).max(1e-8));
     }
 
     /// La politique améliorée : softmax des logits plus les valeurs complétées.
     fn improved(&self) -> Vec<f32> {
-        softmax(self.edges.iter().zip(self.completed()).map(|(e, c)| e.logit + c))
+        let mut s = Scratch::default();
+        self.improved_into(&mut s);
+        s.values
+    }
+
+    /// `improved`, dans `s.values`.
+    fn improved_into(&self, s: &mut Scratch) {
+        self.completed_into(s);
+        s.values.iter_mut().zip(&self.edges).for_each(|(c, e)| *c += e.logit);
+        softmax_in_place(&mut s.values);
     }
 
     /// Le coup à suivre hors de la racine : celui dont la part des visites est la plus en retard
     /// sur la politique améliorée.
-    fn select(&self) -> usize {
+    fn select(&self, s: &mut Scratch) -> usize {
         let visits: u32 = self.edges.iter().map(|e| e.visits).sum();
-        let improved = self.improved();
+        self.improved_into(s);
+        let improved = &s.values;
         let score = |i: usize| improved[i] - self.edges[i].visits as f32 / (1.0 + visits as f32);
         (0..self.edges.len()).fold(0, |best, i| if score(i) > score(best) { i } else { best })
     }
 }
 
-fn softmax(xs: impl Iterator<Item = f32>) -> Vec<f32> {
-    let xs: Vec<f32> = xs.collect();
+/// Les tampons des calculs d'un nœud (`Node::select`), gardés d'une simulation à la suivante : ces
+/// calculs ne demandent plus d'allocation (une dizaine par nœud traversé auparavant).
+#[derive(Default)]
+struct Scratch {
+    priors: Vec<f32>,
+    values: Vec<f32>,
+}
+
+/// La softmax des `xs`, dans `out`.
+fn softmax_into(xs: impl Iterator<Item = f32>, out: &mut Vec<f32>) {
+    out.clear();
+    out.extend(xs);
+    softmax_in_place(out);
+}
+
+/// La softmax de `xs`, à sa place : le maximum, les exponentielles, leur somme, puis chacune divisée
+/// par la somme.
+fn softmax_in_place(xs: &mut [f32]) {
     let top = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let exps: Vec<f32> = xs.iter().map(|&x| (x - top).exp()).collect();
-    let sum: f32 = exps.iter().sum();
-    exps.iter().map(|e| e / sum).collect()
+    xs.iter_mut().for_each(|x| *x = (*x - top).exp());
+    let sum: f32 = xs.iter().sum();
+    xs.iter_mut().for_each(|e| *e /= sum);
 }
 
 /// Le calendrier du halving séquentiel (`get_sequence_of_considered_visits` de mctx) : pour chaque
@@ -478,8 +515,10 @@ impl Az {
         let noise: Vec<f32> = legal.iter().map(|_| if explore { gumbel(rng) } else { 0.0 }).collect();
         let schedule = considered_visits(CONSIDERED.min(legal.len()), iterations);
         // le score d'un coup de la racine parmi ceux qui ont `visits` visites
-        let root_pick = |root: &Node, visits: u32| -> usize {
-            let completed = root.completed();
+        let mut scratch = Scratch::default();
+        let root_pick = |root: &Node, visits: u32, s: &mut Scratch| -> usize {
+            root.completed_into(s);
+            let completed = &s.values;
             let score = |i: usize| noise[i] + root.edges[i].logit + completed[i];
             (0..root.edges.len())
                 .filter(|&i| root.edges[i].visits == visits)
@@ -494,7 +533,7 @@ impl Az {
             let mut node = 0u32;
             let value: Value = loop {
                 let n = &nodes[node as usize];
-                let e = if node == 0 { root_pick(n, considered) } else { n.select() };
+                let e = if node == 0 { root_pick(n, considered, &mut scratch) } else { n.select(&mut scratch) };
                 let mv = n.edges[e].mv;
                 path.push((node, e));
                 // le coup, puis les coups forcés qui suivent, et le résultat de leur hasard
@@ -534,7 +573,7 @@ impl Az {
         }
         let root_node = &nodes[0];
         let most = root_node.edges.iter().map(|e| e.visits).max().unwrap_or(0);
-        let chosen = root_pick(root_node, most);
+        let chosen = root_pick(root_node, most, &mut scratch);
         let me = root_node.actor;
         let priors = root_node.priors();
         let policy = root_node.edges.iter().zip(root_node.improved()).map(|(e, p)| (e.key, p)).collect();

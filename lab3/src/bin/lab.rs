@@ -11,7 +11,9 @@
 //!     (auto-jeu, recette `selfplay::RECIPE`)
 //! lab3 check-net --net poids.bin --data parties.pos [--count 5]   (comparaison avec lab3/py/check.py)
 //! lab3 bench-net --net poids.bin --data parties.pos [--count 5000]   (vitesse et écarts du calcul bf16)
-//! lab3 bench-vulkan --net poids.bin [--regions 40]   (durée d'un lot sur GPU selon sa taille ; `--features vulkan`)
+//! lab3 bench-vulkan --net poids.bin [--regions 40] [--count N] [--rounds 20] [--stream LOTS]   (durée d'un lot sur
+//!     GPU selon sa taille, ou de `rounds` lots de N positions : une capture RGP, `MESA_VK_TRACE=rgp` ; en flux :
+//!     LOTS lots soumis à la suite ; `--features vulkan`)
 //! lab3 analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par labtools/export-room.ts)
 //! ```
 
@@ -51,7 +53,7 @@ fn usage() -> ! {
     );
     eprintln!("        lab3 check-net --net poids.bin --data parties.pos [--count N]");
     eprintln!("        lab3 bench-net --net poids.bin --data parties.pos [--count N]");
-    eprintln!("        lab3 bench-vulkan --net poids.bin [--regions R]");
+    eprintln!("        lab3 bench-vulkan --net poids.bin [--regions R] [--count N] [--rounds R]");
     eprintln!("        lab3 analyze --game partie.smk --agent az:net=poids.bin,n=20000");
     std::process::exit(2)
 }
@@ -284,14 +286,40 @@ fn bench_vulkan_cmd(opts: &HashMap<String, String>) {
     unsafe { std::env::set_var("LAB3_VULKAN_PROFILE", "1") };
     let net = opts.get("net").unwrap_or_else(|| usage());
     let regions = get(opts, "regions", 40);
+    let rounds = get(opts, "rounds", 20);
+    let counts: Vec<usize> = match opts.get("count") {
+        Some(n) => vec![n.parse().unwrap_or_else(|_| usage())],
+        None => vec![1, 16, 64, 128, 256, 512, 1024, 2048, 4096],
+    };
     let engine = smallmobile_lab3::vulkan::Engine::new(std::path::Path::new(net), smallmobile_lab3::vulkan::MAX_BATCH)
         .unwrap_or_else(|e| {
             eprintln!("GPU : {e}");
             std::process::exit(2)
         });
     println!("{}, {regions} régions par position", engine.describe());
-    for count in [1, 16, 64, 128, 256, 512, 1024, 2048, 4096] {
-        let ms = engine.bench(count, regions, 20).unwrap_or_else(|e| panic!("{e}"));
+    if let Some(lots) = opts.get("stream") {
+        // en flux (`--stream LOTS`) : lots de `--count` positions, à la suite
+        let lots: usize = lots.parse().unwrap_or_else(|_| usage());
+        let count = get(opts, "count", 256);
+        let (wall, gpu) = engine.bench_stream(count, regions, lots).unwrap_or_else(|e| panic!("{e}"));
+        println!(
+            "{lots} lots de {count} en flux : {wall:.2} ms, GPU {gpu:.2} ms ({:.0} %), {:.0} positions/s",
+            100.0 * gpu / wall,
+            (lots * count) as f64 / (wall / 1e3)
+        );
+        return;
+    }
+    for count in counts {
+        if let Some(phases) = engine.bench_phases(count, regions, rounds).unwrap_or_else(|e| panic!("{e}")) {
+            // shader instrumenté (`LAB3_VULKAN_PHASES`) : la durée de chaque étape d'une position
+            let all: f64 = phases.iter().sum();
+            println!("{count:5} positions, une position : {all:.1} µs");
+            for (name, us) in smallmobile_lab3::vulkan::PHASES.iter().zip(&phases) {
+                println!("    {name:<20} {us:7.1} µs  {:4.1} %", 100.0 * us / all);
+            }
+            continue;
+        }
+        let ms = engine.bench(count, regions, rounds).unwrap_or_else(|e| panic!("{e}"));
         println!("{count:5} positions : {ms:7.3} ms, {:8.0} positions/s", count as f64 / (ms / 1e3));
     }
 }

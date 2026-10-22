@@ -411,7 +411,9 @@ pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Res
         let mut handles = Vec::new();
         for t in 0..cfg.threads {
             let (next, positions) = (&next, &positions);
-            handles.push(scope.spawn(move || -> std::io::Result<()> {
+            // nommé, pour les profils (`perf report --sort comm`)
+            let thread = std::thread::Builder::new().name(format!("jeu-{t:02}"));
+            handles.push(thread.spawn_scoped(scope, move || -> std::io::Result<()> {
                 let path = dir.join(format!("s{:x}-{t:02}{SUFFIX}", cfg.seed));
                 let mut out = BufWriter::new(File::create(&path)?);
                 let mut games = BufWriter::new(File::create(games_file(&path))?);
@@ -467,10 +469,15 @@ pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Res
                 out.flush()?;
                 logs.flush()?;
                 games.flush()
-            }));
+            })?);
         }
         for h in handles {
             h.join().expect("fil d'auto-apprentissage")?;
+        }
+        if gpu.is_some() && std::env::var_os("LAB3_VULKAN_PROFILE").is_some() {
+            let waited = crate::batch::WAITED.load(Ordering::Relaxed) as f64 / 1e9;
+            let all = start.elapsed().as_secs_f64() * cfg.threads as f64;
+            eprintln!("fils de jeu : {:.0} % du temps à attendre le GPU", 100.0 * waited / all);
         }
         Ok(())
     })
