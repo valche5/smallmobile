@@ -410,7 +410,7 @@ plateau avec le même réseau 128x4 et la même recette : c015 contre c000 = −
 3. **Un taux d'apprentissage plus bas** (ou une moyenne des poids) : chaque pas refait un cycle
    complet à 5e-4 sur un réseau mûr.
 4. **Vérifier la recherche groupée** (jamais comparée en arène à l'ancienne ; toutes les parties
-   de lab3 en viennent).
+   de lab3 en viennent). Écartée : même distribution que l'ancienne (voir plus bas).
 
 Essai de la piste 1, `deep6` : c015 approfondi à 6 couches (`runs/deep6/c016.bin`, mêmes sorties
 que c015), fenêtre de départ c010…c016 de la reprise (liens dans `data/deep6`), puis pas 17 à 30
@@ -450,6 +450,17 @@ RAM, la fenêtre aurait pris ~31 Go vers c060 sur les 32 du PC ; mappée, le noy
 pages. Lot de 512 : 11,3 ms (2 ms en RAM, 33,5 ms sans `MAP_POPULATE`, 81 ms pour l'ancien
 mmap des fichiers denses). Sur c032 : chargement 23 s au lieu de 45, entraînement 80 s au lieu
 de 72, 109 s en tout au lieu de 122 ; 7 Go utilisés.
+
+Piste 4 écartée sans arène : dans un tour de la recherche groupée, chaque coup de la racine qui a
+`considered` visites en reçoit une (`root_picks` prend tous ceux du tour), et le score d'un coup
+encore à visiter ne change pas pendant le tour (seuls les coups déjà visités, qui n'y sont plus
+éligibles, reçoivent des valeurs). L'ancienne recherche visitait donc les mêmes coups, dans un autre
+ordre ; les sous-arbres sont disjoints et les évaluations les mêmes (empreintes communes : un seul
+envoi). Seul l'ordre des tirages (déterminisation) change : même distribution de recherches.
+
+Piste 3 préparée : `LR` dans la boucle (`train.py --lr`, 5e-4 par défaut). Chaque pas repart d'un
+AdamW neuf et remonte au taux maximal ; une moyenne des poids pendant le cycle ferait doublon avec
+la descente de OneCycle, qui finit presque à zéro.
 
 ### Reprise généraliste depuis c060, arrêt à la validation de c016 (23 octobre)
 
