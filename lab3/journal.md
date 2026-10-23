@@ -519,6 +519,25 @@ libres, ~6,3 Go par cycle (le `.pos` en fait 5,3). Ménage à 22:20 (fait par l'
 formes compactes de deep6 c017–c037, de p2-3-4-5, p4 et p4-zero, anciennes formes compactes de
 c038–c060 ; parties gardées (`.pos.games`, `.pos.moves`). 426 Go libres.
 
+Pas 61 à 70, fini à 00:02 (740 s par pas : parties ~570 s au lieu de ~370). Duels contre c000,
+tous « gain de 3 points plutôt que 0 », de +3,8 à +11,1. Confirmations sur 920 donnes neuves :
+
+| Duel | Score | 2 joueurs | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- |
+| c070 contre c060 | **+2,0 ± 1,5** | +2,8 | +1,5 | +0,5 | +3,0 |
+| c070 contre c000 | **+6,7 ± 1,6** | +5,1 | +7,8 | +7,9 | +6,0 |
+
+**n = 800 ne refait pas le saut de n = 400** : +2,0 en 10 pas, comme les deux essais d'avant
+(+2,9 et +1,7), pour 30 % de temps en plus. Chaque tranche de 10 pas apporte ~+2 en duel direct,
+quels que soient le taux et les simulations ; face à c000 les gains se tassent (+4,9, +5,8, +6,4,
++6,7 : les scores ne s'additionnent pas). Seules les recherches complètes sont enregistrées
+(`selfplay::RECIPE`, une sur 8) : les cibles de politique sont déjà toutes à n = SIMS.
+
+Essai 4, `deep7` : plus de capacité avec les cibles meilleures. c070 approfondi à 7 couches (le
+maximum du shader en largeur 128 ; `runs/deep7/c070.bin`, mêmes sorties), cycles de deep6 liés
+dans `data/deep7`, n = 400, en continu (optimiseur neuf au premier pas : les poids changent de
+forme), c071 à c090 ; mesures : c080 et c090 contre c070 de deep6.
+
 Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
 (`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En
 RAM, la fenêtre aurait pris ~31 Go vers c060 sur les 32 du PC ; mappée, le noyau peut rendre les

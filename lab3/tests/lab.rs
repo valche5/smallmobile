@@ -481,16 +481,18 @@ fn a_batch_of_positions_evaluates_like_each_alone() {
 #[cfg(feature = "vulkan")]
 #[test]
 fn vulkan_evaluates_like_the_processor() {
-    // le réseau d'essai (64 de large, tous ses poids au hasard) et celui de départ (128 de large,
-    // appris)
-    let start = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nets/start.bin");
-    for (bytes, seed) in [(random_net_bytes(), 44), (std::fs::read(start).unwrap(), 45)] {
+    // le réseau d'essai (64 de large, tous ses poids au hasard), celui de départ (128 de large,
+    // appris), et ce dernier à 7 couches, le maximum du shader en largeur 128 (lab3/journal.md, deep7)
+    let start = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("nets/start.bin")).unwrap();
+    for (bytes, seed) in [(random_net_bytes(), 44), (with_layers(&start, 3, 0.05, 46), 46), (start, 45)] {
         vulkan_check(bytes, seed);
     }
 }
 
-/// `bytes` (SMNN1) avec `extra` couches de plus à la fin, aux poids tirés au hasard.
-fn with_layers(bytes: &[u8], extra: usize, seed: u64) -> Vec<u8> {
+/// `bytes` (SMNN1) avec `extra` couches de plus à la fin, aux poids tirés au hasard dans
+/// ±`scale` (±0,05 : l'ordre des poids appris en largeur 128 ; plus grands, les activations et les
+/// écarts du bf16 grossissent couche après couche).
+fn with_layers(bytes: &[u8], extra: usize, scale: f32, seed: u64) -> Vec<u8> {
     let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
     let (count, mut at, mut layers, mut h) = (word(5), 9, 0, 0);
     for _ in 0..count {
@@ -518,7 +520,7 @@ fn with_layers(bytes: &[u8], extra: usize, seed: u64) -> Vec<u8> {
                 out.extend_from_slice(&(dims.len() as u32).to_le_bytes());
                 dims.iter().for_each(|&d| out.extend_from_slice(&(d as u32).to_le_bytes()));
                 for _ in 0..dims.iter().product::<usize>() {
-                    out.extend_from_slice(&((rng.unit() as f32 - 0.5) * 0.2).to_le_bytes());
+                    out.extend_from_slice(&((rng.unit() as f32 - 0.5) * 2.0 * scale).to_le_bytes());
                 }
             }
         }
@@ -533,7 +535,7 @@ fn with_layers(bytes: &[u8], extra: usize, seed: u64) -> Vec<u8> {
 fn one_gpu_evaluates_two_networks() {
     use smallmobile_lab3::encode::encode;
     use smallmobile_lab3::gpu::Gpu;
-    let nets: Vec<Vec<u8>> = vec![random_net_bytes_from(77), with_layers(&random_net_bytes_from(78), 2, 5)];
+    let nets: Vec<Vec<u8>> = vec![random_net_bytes_from(77), with_layers(&random_net_bytes_from(78), 2, 0.1, 5)];
     let paths: Vec<_> = (0..2)
         .map(|i| std::env::temp_dir().join(format!("smallmobile-vulkan2-{}-{i}.bin", std::process::id())))
         .collect();
