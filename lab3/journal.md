@@ -485,6 +485,21 @@ types), dans le même sens à toutes les tailles. Le gain face à c000 (+0,9 de 
 que le duel direct : les scores ne s'additionnent pas d'un adversaire à l'autre. Suite prévue :
 l'apprentissage en continu (`CONTINUOUS=1`) depuis c050.
 
+Essai 2, apprentissage en continu depuis c050 (`CONTINUOUS=1`, taux constant 1e-4, n = 400,
+service `lab3-deep6-cont`, lancé à 20:20, jusqu'à c060). Deux lenteurs trouvées en route :
+
+- La moyenne des poids à chaque lot coûtait 36 s par pas sur le GPU (120 s au lieu de 84) : mise
+  à jour tous les 8 lots (`EMA_EVERY`, même horizon).
+- La fenêtre a dépassé le cache du système : 14,5 millions de positions, ~28 Go de fichiers
+  compacts pour ~25 Go de cache ; l'apprentissage lisait le disque en continu (40 à 50 Mo/s,
+  `vmstat`), 116 → 148 s de c052 à c054. Nouvelle forme compacte (`.pos.packed2.npz`) : un masque
+  des octets non nuls (565 octets par position) au lieu de leurs index (2 octets chacun, ~1 008),
+  et chaque bloc d'adjacences gardé une fois par fichier (3 % de blocs distincts : la carte change
+  peu le long d'une partie). 1 212 octets par position au lieu de 1 949 (−38 %), mêmes champs au
+  bit près, 7,9 ms par lot de 512 (7,6 avant) ; le `.pos` lu est sorti du cache
+  (`posix_fadvise`). c057 : 136 s au lieu de 201 (chargement 24 s, entraînement 104 s) sur une
+  fenêtre plus grande (15,4 millions).
+
 Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
 (`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En
 RAM, la fenêtre aurait pris ~31 Go vers c060 sur les 32 du PC ; mappée, le noyau peut rendre les

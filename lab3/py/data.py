@@ -1,6 +1,7 @@
 """Les parties d'entraînement écrites par `lab3 selfplay` (voir lab3/src/selfplay.rs pour le format)."""
 
 import mmap
+import os
 import struct
 import zipfile
 from pathlib import Path
@@ -137,23 +138,36 @@ def in_validation(keys, share):
 # faisait attendre l'apprentissage 80 ms par lot de 512 (lab3/journal.md) ; sous forme compacte,
 # ses grands tableaux restent mappés dans ces fichiers (`_members`), et le cache du système en
 # garde ce qui tient en RAM : la fenêtre grandit (~24 Go à c040) sans déborder les 31 Go du PC.
-PACKED = ".packed.npz"
-# les octets des régions puis ceux de la partie, en un seul vecteur creux
+PACKED = ".packed2.npz"
+# les octets des régions puis ceux de la partie, en un seul vecteur creux : où sont les non nuls (un
+# bit chacun, `MASK` octets par position), puis leurs valeurs
 SPARSE = REGIONS * NODE + GLOBAL
+MASK = (SPARSE + 7) // 8
 
 
 def pack(f):
-    """La forme compacte du fichier de positions `f` (faite une fois, puis relue)."""
+    """La forme compacte du fichier de positions `f` (faite une fois, puis relue). Par position :
+    ses régions présentes seulement, le masque de ses octets non nuls et leurs valeurs, ses coups
+    possibles seulement ; les adjacences d'une même carte une seule fois (seuls 3 % des blocs
+    diffèrent : la carte change peu d'une position à la suite). ~1 220 octets par position au lieu
+    des 6 210 de `RECORD` (1 940 avec les index des non nuls et toutes les adjacences)."""
     out = f.with_name(f.name + PACKED)
     if out.exists() and out.stat().st_mtime >= f.stat().st_mtime:
         return out
     r = np.fromfile(f, dtype=RECORD)
+    _forget(f)
     n = len(r)
     counts = games(f, n)
     keys = np.repeat(map_keys(r[np.cumsum(counts) - counts]), counts) if n else np.empty(0, np.uint64)
     present = np.arange(REGIONS)[None, :] < r["regions"][:, None].astype(np.int64)
     dense = np.concatenate([r["node"].reshape(n, -1), r["glob"]], 1)
-    pos, col = np.nonzero(dense)
+    nonzero = dense != 0
+    blocks, block_of, rows = {}, np.empty(n, np.uint32), []
+    for i in range(n):
+        row = r["adj"][i, : r["regions"][i]]
+        block_of[i] = blocks.setdefault(row.tobytes(), len(blocks))
+        if block_of[i] == len(rows):
+            rows.append(row)
     legal = r["policy"] != ILLEGAL
     lpos, key = np.nonzero(legal)
     tmp = out.with_name(out.name + ".tmp")
@@ -167,16 +181,28 @@ def pack(f):
             gain=r["gain"],
             keys=keys,
             owner=r["owner"][present],
-            adj=r["adj"][present],
-            nz_count=np.bincount(pos, minlength=n).astype(np.uint16),
-            nz_idx=col.astype(np.uint16),
-            nz_val=dense[pos, col],
+            adj=np.concatenate(rows) if rows else np.empty(0, np.uint64),
+            adj_count=np.array([len(row) for row in rows], np.uint8),
+            adj_block=block_of,
+            nz_count=nonzero.sum(1).astype(np.uint16),
+            nz_mask=np.packbits(nonzero, axis=1),
+            nz_val=dense[nonzero],
             pol_count=np.bincount(lpos, minlength=n).astype(np.uint16),
             pol_key=key.astype(np.uint16),
             pol_val=r["policy"][lpos, key],
         )
     tmp.rename(out)
+    _forget(out)
     return out
+
+
+def _forget(f):
+    """Sort `f` du cache du système : la fenêtre mappée (`Packed`) y garde sa place."""
+    fd = os.open(f, os.O_RDONLY)
+    try:
+        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+    finally:
+        os.close(fd)
 
 
 def _members(path):
@@ -241,19 +267,24 @@ class Packed:
     de `RECORD` d'un lot, `packed["weight"]` les petits champs d'une position."""
 
     SMALL = ("players", "regions", "weight", "win", "gain", "keys")
-    SEGMENTED = (("owner", "regions"), ("adj", "regions"), ("nz_idx", "nz_count"), ("nz_val", "nz_count"),
-                 ("pol_key", "pol_count"), ("pol_val", "pol_count"))
+    MAPPED = ("owner", "adj", "nz_mask", "nz_val", "pol_key", "pol_val")
 
     def __init__(self, files):
         parts = [_members(f) for f in files]
         small = {k: np.concatenate([p[k] for p in parts]) for k in self.SMALL + ("nz_count", "pol_count")}
         self.__dict__.update(small)
-        for name, _ in self.SEGMENTED:
+        for name in self.MAPPED:
             setattr(self, name, Parts([p[name] for p in parts]))
         def begin(count):
             c = count.astype(np.int64)
             return np.cumsum(c) - c
         self.rows_at, self.nz_at, self.pol_at = begin(self.regions), begin(self.nz_count), begin(self.pol_count)
+        # le début du bloc d'adjacences de chaque position, dans les blocs de tous les fichiers
+        ats, row0 = [], 0
+        for p in parts:
+            ats.append(row0 + begin(p["adj_count"])[p["adj_block"]])
+            row0 += len(p["adj"])
+        self.adj_at = np.concatenate(ats) if ats else np.empty(0, np.int64)
 
     def __len__(self):
         return len(self.players)
@@ -268,11 +299,13 @@ class Packed:
         ids, b, rank = _segments(self.rows_at, self.regions, sel)
         out["owner"] = np.full((n, REGIONS), OFF_MAP, np.uint8)
         out["owner"][b, rank] = self.owner[ids]
+        ids, b, rank = _segments(self.adj_at, self.regions, sel)
         out["adj"] = np.zeros((n, REGIONS), np.uint64)
         out["adj"][b, rank] = self.adj[ids]
-        ids, b, _ = _segments(self.nz_at, self.nz_count, sel)
+        # les valeurs dans l'ordre des non nuls du masque, ligne par ligne
+        ids, _, _ = _segments(self.nz_at, self.nz_count, sel)
         dense = np.zeros((n, SPARSE), np.uint8)
-        dense[b, self.nz_idx[ids]] = self.nz_val[ids]
+        dense[np.unpackbits(self.nz_mask[sel], axis=1, count=SPARSE).view(bool)] = self.nz_val[ids]
         out["node"] = np.ascontiguousarray(dense[:, : REGIONS * NODE]).reshape(n, REGIONS, NODE)
         out["glob"] = np.ascontiguousarray(dense[:, REGIONS * NODE :])
         ids, b, _ = _segments(self.pol_at, self.pol_count, sel)

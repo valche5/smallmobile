@@ -24,7 +24,7 @@
 # PLAY, TRAIN ; DEVICE=vulkan : le réseau des parties sur GPU (`lab3 selfplay --device vulkan`).
 # L'entraînement Python prend le GPU quand il y en a un, indépendamment de DEVICE.
 # La fenêtre de l'apprentissage est lue sous forme compacte (lab3/py/data.py, `pack` : un fichier
-# `.pos.packed.npz` fait une fois à côté de chaque `.pos`), mappée depuis les fichiers.
+# `.pos.packed2.npz` fait une fois à côté de chaque `.pos`), mappée depuis les fichiers.
 # Sur GPU : étapes successives par défaut (PARALLEL=0), THREADS fils de jeu (tous les cœurs par
 # défaut) ; les parties du cycle k+1 y sont jouées par le réseau k, qui vient d'apprendre. TRAIN règle seulement les opérations CPU de PyTorch ; aucun cœur ne lui est réservé.
 # Sur CPU : PARALLEL=1 conserve le recouvrement historique avec PLAY et TRAIN cœurs.

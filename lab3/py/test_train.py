@@ -65,6 +65,10 @@ class BatchesTest(unittest.TestCase):
     def test_packed_gives_back_the_records(self):
         """La forme compacte redonne les mêmes champs, au bit près, sur plusieurs fichiers."""
         recs = random_records(40, np.random.default_rng(3))
+        # des cartes qui reviennent d'une position à l'autre (un seul bloc d'adjacences gardé)
+        recs[5:9]["regions"] = recs[4]["regions"]
+        recs[5:9]["adj"] = recs[4]["adj"]
+        recs[20]["adj"], recs[20]["regions"] = recs[3]["adj"], recs[3]["regions"]
         with tempfile.TemporaryDirectory() as tmp:
             for name, part, counts in (("a.pos", recs[:15], [7, 8]), ("b.pos", recs[15:], [10, 0, 15])):
                 part.tofile(Path(tmp) / name)
