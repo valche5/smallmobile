@@ -469,6 +469,22 @@ Confirmation sur 920 donnes neuves (graine 1005) : **c044 contre c040 = +1,9 ± 
 type). Boucle reprise à 18:46 (`START=45`, jusqu'à c050, 90 min au plus) ; mesure prévue : c050
 contre c040.
 
+Pas 45 à 50, fini à 19:40. Duels contre c000, tous « gain de 3 points plutôt que 0 » : c045 +3,8,
+c046 +5,8, c047 +4,5, c048 +4,8, c049 +5,8, c050 +4,1. Confirmations sur 920 donnes neuves
+(graine 1005) :
+
+| Duel | Score | 2 joueurs | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- |
+| c050 contre c040 | **+2,9 ± 1,5** | +2,4 | +2,4 | +4,5 | +2,5 |
+| c050 contre c000 | **+5,8 ± 1,6** | +5,8 | +4,3 | +7,1 | +6,0 |
+| (c040 contre c000) | +4,9 ± 1,5 | +5,8 | +6,5 | +5,0 | +2,2 |
+
+**Le taux plus bas aide** : là où les dix pas à 5e-4 restaient sur le palier de n = 400 (duels
+contre c000 à plat vers +3,5), les dix pas à 1,5e-4 battent c040 de 2,9 points (environ 2 écarts
+types), dans le même sens à toutes les tailles. Le gain face à c000 (+0,9 de plus) est plus petit
+que le duel direct : les scores ne s'additionnent pas d'un adversaire à l'autre. Suite prévue :
+l'apprentissage en continu (`CONTINUOUS=1`) depuis c050.
+
 Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
 (`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En
 RAM, la fenêtre aurait pris ~31 Go vers c060 sur les 32 du PC ; mappée, le noyau peut rendre les
