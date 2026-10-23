@@ -457,6 +457,13 @@ n = 400), puis les duels restent vers +3,5 : un nouveau palier. La politique de 
 Suite, piste 3 : c041 à c050, n = 400, `LR=1.5e-4` (service `lab3-deep6-lr`, lancé à 17:04),
 mesurée par un duel direct c050 contre c040 sur 920 donnes neuves.
 
+Arrêté à 17:44 à la demande de l'utilisateur, pendant les parties de c045 (effacées à la reprise).
+Duels contre c000 : c041 +4,6, c042 +3,1, c043 +7,1, c044 +5,7, tous « gain de 3 points plutôt
+que 0 » (c043 et c044 arrêtés dès 184 donnes, ± 3,5 à 3,7). Pertes d'entraînement un peu plus
+basses qu'à 5e-4 (valeur 1,012 → 1,003, propriétaires 0,514 → 0,510), validation stable. Prometteur,
+pas encore mesuré : confirmation c044 contre c040 (920 donnes, graine 1005) à faire. Reprise :
+même commande avec `START=45`.
+
 Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
 (`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En
 RAM, la fenêtre aurait pris ~31 Go vers c060 sur les 32 du PC ; mappée, le noyau peut rendre les
