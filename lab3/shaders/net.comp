@@ -87,6 +87,8 @@ layout(push_constant) uniform Params {
     // bf16), deux au plus
     uint nets_off;
     uint wbase0, wbbase0, wbase1, wbbase1;
+    // les couches du deuxième réseau (`layers` : celles du premier)
+    uint layers1;
 } p;
 layout(std430, binding = 5) readonly buffer Steps { uvec4 steps[]; };
 
@@ -325,7 +327,7 @@ void main() {
     sync();
     MARK(2u)
 
-    for (uint l = 0u; l < p.layers; l++) {
+    for (uint l = 0u; l < (second ? p.layers1 : p.layers); l++) {
         uint base = T_LAYERS + 8u * l;
         uint n1w = T(base), n1b = T(base + 1u), n2b = T(base + 3u);
         uint g1w = T(base + 4u), g1b = T(base + 5u), g2w = T(base + 6u), g2b = T(base + 7u);

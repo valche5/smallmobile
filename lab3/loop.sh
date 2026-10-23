@@ -64,8 +64,10 @@ else
   THREADS=$PLAY
   TRAIN=${TRAIN:-4}
 fi
-DATA=lab3/data/p$GROUP
-OUT=lab3/runs/p$GROUP
+# RUN : le nom des dossiers de parties et de réseaux (un essai à part, voir START)
+RUN=${RUN:-p$GROUP}
+DATA=lab3/data/$RUN
+OUT=lab3/runs/$RUN
 TMP=lab3/data/tmp
 LAB=./target/release/lab3
 mkdir -p "$DATA" "$OUT" "$TMP"
@@ -74,7 +76,7 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/log.txt"; }
 name() { printf c%03d "$1"; }
 
 filled() { # cycle : oui si la fenêtre minimale est remplie, non sinon
-  (cd lab3/py && .venv/bin/python -c "from data import filled; print('oui' if filled('../data/p$GROUP', '$1') else 'non')")
+  (cd lab3/py && .venv/bin/python -c "from data import filled; print('oui' if filled('../data/$RUN', '$1') else 'non')")
 }
 
 player() { # le réseau qui joue le cycle k. En parallèle : c000 jusqu'au premier pas compris, puis
@@ -92,25 +94,25 @@ games() { # cycle, réseau, cœurs : écrites à part, puis déplacées. Un cycl
   local c=$1 net=$2 threads=$3 start
   compgen -G "$DATA/$c/*.pos.games" > /dev/null && return 0
   start=$(date +%s)
-  rm -rf "${TMP:?}/p$GROUP-$c"
+  rm -rf "${TMP:?}/$RUN-$c"
   if ! $LAB selfplay --agent "az:net=$OUT/$net.bin,n=200" --players "$P" --games "$GAMES" \
-    --seed $((SEED_BASE + 10#${c#c})) --threads "$threads" --device "$DEVICE" --out "$TMP/p$GROUP-$c" \
-    > "$TMP/p$GROUP-$c.txt" 2> "$TMP/p$GROUP-$c.err"; then
-    tail -5 "$TMP/p$GROUP-$c.err"
+    --seed $((SEED_BASE + 10#${c#c})) --threads "$threads" --device "$DEVICE" --out "$TMP/$RUN-$c" \
+    > "$TMP/$RUN-$c.txt" 2> "$TMP/$RUN-$c.err"; then
+    tail -5 "$TMP/$RUN-$c.err"
     return 1
   fi
   rm -rf "${DATA:?}/$c"
-  mv "$TMP/p$GROUP-$c" "$DATA/$c"
-  log "$c parties ($net) : $(($(date +%s) - start)) s, $(cat "$TMP/p$GROUP-$c.txt")"
-  rm -f "$TMP/p$GROUP-$c.txt" "$TMP/p$GROUP-$c.err"
+  mv "$TMP/$RUN-$c" "$DATA/$c"
+  log "$c parties ($net) : $(($(date +%s) - start)) s, $(cat "$TMP/$RUN-$c.txt")"
+  rm -f "$TMP/$RUN-$c.txt" "$TMP/$RUN-$c.err"
 }
 
 train() { # réseau, réseau de départ
   local c=$1 prev=$2 start
   [ -f "$OUT/$c.bin" ] && return 0
   start=$(date +%s)
-  if ! (cd lab3/py && .venv/bin/python train.py --cycles "../data/p$GROUP" --last "$c" --init "../runs/p$GROUP/$prev.bin" \
-    --out "../runs/p$GROUP/$c.tmp.bin" --threads "$TRAIN") > "$OUT/$c-train.log" 2>&1; then
+  if ! (cd lab3/py && .venv/bin/python train.py --cycles "../data/$RUN" --last "$c" --init "../runs/$RUN/$prev.bin" \
+    --out "../runs/$RUN/$c.tmp.bin" --threads "$TRAIN") > "$OUT/$c-train.log" 2>&1; then
     tail -20 "$OUT/$c-train.log"
     return 1
   fi
@@ -147,7 +149,9 @@ while :; do
   games "$(name "$first")" c000 "$THREADS"
 done
 
-for k in $(seq "$first" "$LAST"); do
+# START : commencer au pas START (un essai qui reprend la fenêtre d'un autre : ses cycles liés dans
+# DATA, le réseau de départ en OUT/c(START−1).bin)
+for k in $(seq "$((${START:-0} > first ? ${START:-0} : first))" "$LAST"); do
   c=$(name "$k")
   # le départ de l'apprentissage : le dernier réseau appris (en parallèle, c'est aussi celui qui
   # joue le cycle k+1 pendant ce temps)

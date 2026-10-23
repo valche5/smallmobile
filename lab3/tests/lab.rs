@@ -489,14 +489,51 @@ fn vulkan_evaluates_like_the_processor() {
     }
 }
 
-/// Deux réseaux sur un même moteur (l'arène sur GPU, `Gpu::start_nets`) : chaque position est
-/// évaluée par le sien.
+/// `bytes` (SMNN1) avec `extra` couches de plus à la fin, aux poids tirés au hasard.
+fn with_layers(bytes: &[u8], extra: usize, seed: u64) -> Vec<u8> {
+    let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    let (count, mut at, mut layers, mut h) = (word(5), 9, 0, 0);
+    for _ in 0..count {
+        let name = std::str::from_utf8(&bytes[at + 4..at + 4 + word(at)]).unwrap().to_string();
+        let ndim_at = at + 4 + word(at);
+        let dims: Vec<usize> = (0..word(ndim_at)).map(|d| word(ndim_at + 4 + 4 * d)).collect();
+        if name.ends_with(".n1.weight") {
+            layers += 1;
+        }
+        if name == "node_in.weight" {
+            h = dims[0];
+        }
+        at = ndim_at + 4 + 4 * dims.len() + 4 * dims.iter().product::<usize>();
+    }
+    let mut out = bytes[..5].to_vec();
+    out.extend_from_slice(&((count + 8 * extra) as u32).to_le_bytes());
+    out.extend_from_slice(&bytes[9..]);
+    let mut rng = Rng::new(seed);
+    for l in layers..layers + extra {
+        for (part, inputs) in [("n1", 3 * h), ("n2", h), ("g1", 3 * h), ("g2", h)] {
+            for (kind, dims) in [("weight", vec![h, inputs]), ("bias", vec![h])] {
+                let name = format!("layers.{l}.{part}.{kind}");
+                out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+                out.extend_from_slice(name.as_bytes());
+                out.extend_from_slice(&(dims.len() as u32).to_le_bytes());
+                dims.iter().for_each(|&d| out.extend_from_slice(&(d as u32).to_le_bytes()));
+                for _ in 0..dims.iter().product::<usize>() {
+                    out.extend_from_slice(&((rng.unit() as f32 - 0.5) * 0.2).to_le_bytes());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Deux réseaux sur un même moteur (l'arène sur GPU, `Gpu::start_nets`), le second avec deux
+/// couches de plus : chaque position est évaluée par le sien.
 #[cfg(feature = "vulkan")]
 #[test]
 fn one_gpu_evaluates_two_networks() {
     use smallmobile_lab3::encode::encode;
     use smallmobile_lab3::gpu::Gpu;
-    let nets: Vec<Vec<u8>> = [77, 78].map(random_net_bytes_from).into();
+    let nets: Vec<Vec<u8>> = vec![random_net_bytes_from(77), with_layers(&random_net_bytes_from(78), 2, 5)];
     let paths: Vec<_> = (0..2)
         .map(|i| std::env::temp_dir().join(format!("smallmobile-vulkan2-{}-{i}.bin", std::process::id())))
         .collect();
