@@ -23,7 +23,7 @@ Validation en 32 bits. Sans `torch.compile` : sur c7a.16xlarge, 16 cœurs, bf16,
 En continu (`--state-out`, piste du plateau, lab3/journal.md) : l'optimiseur, le réseau qui apprend et
 une moyenne de ses poids passent d'un pas à l'autre (`--state-in`), le taux reste constant (montée
 de `WARMUP` lots au premier pas seulement), et le réseau exporté, qui joue, est la moyenne
-(exponentielle, `EMA` par lot), comme les réseaux du selfplay de KataGo. Sans cela, chaque pas
+(exponentielle, `EMA` par lot, tous les `EMA_EVERY` lots), comme les réseaux du selfplay de KataGo. Sans cela, chaque pas
 repart d'un AdamW neuf et remonte au taux maximal, ce qui écarte un réseau mûr du point où le pas
 précédent l'avait posé.
 """
@@ -59,9 +59,11 @@ VAL_SHARE = 0.05
 VAL_MEASURE = 0.006
 # lots préparés d'avance (`batches`)
 AHEAD = 3
-# en continu : moyenne des poids sur ~5 000 lots (les trois quarts d'un pas de 25 000 parties), et
-# montée du taux au premier pas
+# en continu : moyenne des poids sur ~5 000 lots (les trois quarts d'un pas de 25 000 parties),
+# mise à jour tous les `EMA_EVERY` lots (à chaque lot, elle prenait 36 s des 120 d'un pas sur le
+# GPU), et montée du taux au premier pas
 EMA = 0.9998
+EMA_EVERY = 8
 WARMUP = 500
 def fields(recs, sel):
     """Les champs pleins des positions `sel` : d'une fenêtre compacte (`Packed`), ou d'un tableau
@@ -216,11 +218,11 @@ def main():
     net.train()
     sums = np.zeros(len(METRICS))
     params = list(net.parameters())
-    for b in batches(recs, order, BATCH, device):
+    for i, b in enumerate(batches(recs, order, BATCH, device)):
         sums += learn(net, opt, sched, b)
-        if ema:
+        if ema and i % EMA_EVERY == EMA_EVERY - 1:
             with torch.no_grad():
-                torch._foreach_lerp_(ema, params, 1 - EMA)
+                torch._foreach_lerp_(ema, params, 1 - EMA**EMA_EVERY)
     train_secs = time.time() - start
 
     played = net
