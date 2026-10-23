@@ -49,6 +49,9 @@ case "$DEVICE" in
   *) ARENA_EVERY=${ARENA_EVERY:-1} ;;
 esac
 SEED_BASE=${SEED_BASE:-30000000}
+# simulations des recherches complètes du selfplay (les rapides : selfplay::RECIPE) ; les duels
+# restent à n = 200
+SIMS=${SIMS:-200}
 DEVICE=${DEVICE:-cpu}
 case "$DEVICE" in
   cpu) PARALLEL=${PARALLEL:-1} ;;
@@ -95,7 +98,7 @@ games() { # cycle, réseau, cœurs : écrites à part, puis déplacées. Un cycl
   compgen -G "$DATA/$c/*.pos.games" > /dev/null && return 0
   start=$(date +%s)
   rm -rf "${TMP:?}/$RUN-$c"
-  if ! $LAB selfplay --agent "az:net=$OUT/$net.bin,n=200" --players "$P" --games "$GAMES" \
+  if ! $LAB selfplay --agent "az:net=$OUT/$net.bin,n=$SIMS" --players "$P" --games "$GAMES" \
     --seed $((SEED_BASE + 10#${c#c})) --threads "$threads" --device "$DEVICE" --out "$TMP/$RUN-$c" \
     > "$TMP/$RUN-$c.txt" 2> "$TMP/$RUN-$c.err"; then
     tail -5 "$TMP/$RUN-$c.err"

@@ -430,6 +430,20 @@ Premier pas (c017) : la boucle accélérée tourne de bout en bout en **407 s pa
 260 s, apprentissage 111 s dont 35 de chargement et compactage, duel 36 s), contre ~1 070 la
 nuit dernière. c017 contre c000 : −3,4 ± 3,3 (arrêt après 184 donnes, « 0 plutôt que 3 »).
 
+Pas 17 à 30, fini à 15:31 (14 pas, 1 h 39). Duels contre c000 (460 donnes au plus, arrêt
+séquentiel) : c017 −3,4, c018 +1,3, c019 +1,7, c020 +0,6, c021 +2,4, c022 +0,7, c023 +4,4 et
+c024 +3,2 (« gain de 3 points plutôt que 0 »), c025 +1,2, c026 −2,5, c027 −2,3 (arrêtés à 184
+donnes), c028 +2,1, c029 +1,8, c030 +1,2. Confirmation sur 920 donnes neuves (graine 1005, sans
+arrêt, 99 s sur GPU) : **c030 contre c000 = +0,9 ± 1,6**, pas significatif. Les mesures
+d'apprentissage progressent pourtant à chaque pas, ce que le 128x4 ne faisait plus (sa politique
+montait de 1,430 à 1,445) : politique 1,447 → 1,428, propriétaires 0,523 → 0,514 ; en
+validation, politique 1,307 → 1,290, précision 49,0 → 49,6 %, valeur stable (~1,01 / 1,02 à
+1,04). La capacité aide à apprendre, mais pas encore à jouer mieux : elle n'est pas le seul frein.
+
+Suite, piste 2 : le même réseau de c031 à c040 avec n = 400 pour les recherches du selfplay
+(`SIMS=400` ; duels toujours à n = 200), lancé à 15:40 de la même façon (`START=31`, jusqu'à
+c040).
+
 ### Reprise généraliste depuis c060, arrêt à la validation de c016 (23 octobre)
 
 Campagne locale du 23 octobre, de 03:55:58 à 07:56:47 CEST, environ 4 h : 16 cycles de 25 000
