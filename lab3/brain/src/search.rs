@@ -52,14 +52,11 @@ const SCALE: f32 = 8.0;
 #[derive(Clone, Copy, Debug)]
 pub struct Config {
     pub iterations: usize,
-    /// Simulations d'un tour du halving menées ensemble, au plus (`Az::run`) ; 0 : tout le tour.
-    /// 1 : une à la fois, la recherche d'avant le 23 octobre au bit près (comparaisons en arène).
-    pub batch: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { iterations: 200, batch: 0 }
+        Config { iterations: 200 }
     }
 }
 
@@ -71,7 +68,6 @@ impl Config {
             let (k, v) = part.split_once('=')?;
             match k {
                 "n" => cfg.iterations = v.parse().ok()?,
-                "batch" => cfg.batch = v.parse().ok()?,
                 _ => return None,
             }
         }
@@ -528,10 +524,7 @@ impl Az {
 
     /// Le nom affiché : le réseau et les réglages.
     pub fn describe(&self) -> String {
-        match self.cfg.batch {
-            0 => format!("az({}, n={})", self.label, self.cfg.iterations),
-            b => format!("az({}, n={}, batch={b})", self.label, self.cfg.iterations),
-        }
+        format!("az({}, n={})", self.label, self.cfg.iterations)
     }
 
     /// Une position nouvelle, évaluée (`judged`) : ses coups et leurs logits, et la valeur que lui
@@ -685,10 +678,7 @@ impl Az {
         let mut at = 0;
         while at < schedule.len() {
             let considered = schedule[at];
-            let mut count = schedule[at..].iter().take_while(|&&c| c == considered).count();
-            if self.cfg.batch > 0 {
-                count = count.min(self.cfg.batch);
-            }
+            let count = schedule[at..].iter().take_while(|&&c| c == considered).count();
             at += count;
             let root_node = tree.nodes[0];
             let stats = &tree.stats[root_node.first as usize..(root_node.first + root_node.len) as usize];

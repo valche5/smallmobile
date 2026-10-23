@@ -394,8 +394,7 @@ fn the_search_sees_only_what_the_player_knows() {
 fn evaluations_kept_from_search_to_search_change_nothing() {
     use smallmobile_lab3::az::{Az, Config, Evals};
     // un réseau dont les réponses varient d'une position à l'autre
-    let az =
-        Az::new(Config { iterations: 30, ..Config::default() }, std::sync::Arc::new(random_net()), "hasard".into());
+    let az = Az::new(Config { iterations: 30 }, std::sync::Arc::new(random_net()), "hasard".into());
     let mut rng = Rng::new(31);
     let mut checked = 0;
     for game in 0..4u64 {
@@ -509,8 +508,7 @@ fn vulkan_check(bytes: Vec<u8>, seed: u64) {
 fn the_engine_plays_each_game_as_if_alone() {
     use smallmobile_lab3::az::{Az, Config, Direct, now};
     use smallmobile_lab3::selfplay::{self, Options};
-    let az =
-        Az::new(Config { iterations: 12, ..Config::default() }, std::sync::Arc::new(random_net()), "hasard".into());
+    let az = Az::new(Config { iterations: 12 }, std::sync::Arc::new(random_net()), "hasard".into());
     let dir = std::env::temp_dir().join(format!("smallmobile-engine-{}", std::process::id()));
     let opts = Options { full_share: 0.5, fast: 4 };
     let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 12, threads: 2, seed: 17, opts };
