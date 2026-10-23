@@ -393,7 +393,7 @@ joue qu'à sa taille, et se compare à lab2 à cette taille seulement :
 Scores du protocole (`labtools/score.py`), à 4 joueurs seulement : l'écart à une victoire sur
 quatre, de −25 (jamais) à +75 (toujours) ; n = 200.
 
-### Sortir du plateau : essai d'un réseau approfondi, 128x6 (23 octobre, en cours)
+### Sortir du plateau : réseau approfondi 128x6, puis n = 400 (23 octobre, en cours)
 
 Le plateau ne date pas de la reprise : dans lab2, c060 ne battait déjà plus c050 (+0,2 ± 1,5),
 tout le gain de la troisième boucle venait de c041 à c050. La reprise de cette nuit repart de ce
@@ -443,6 +443,19 @@ validation, politique 1,307 → 1,290, précision 49,0 → 49,6 %, valeur stable
 Suite, piste 2 : le même réseau de c031 à c040 avec n = 400 pour les recherches du selfplay
 (`SIMS=400` ; duels toujours à n = 200), lancé à 15:40 de la même façon (`START=31`, jusqu'à
 c040).
+
+Pas 31 à 40, fini à 17:01 (1 h 21, ~530 s par pas : parties 355 s). Tous les duels contre c000
+sont positifs, et 8 sur 10 concluent « gain de 3 points plutôt que 0 » : c031 +3,8, c032 +3,8,
+c033 +3,8, c034 +3,6, c035 +3,0, c036 +4,0, c037 +2,2, c038 +4,4, c039 +3,1, c040 +3,6.
+Confirmation sur 920 donnes neuves (graine 1005) : **c040 contre c000 = +4,9 ± 1,5** (2 joueurs
++5,8, 3 +6,5, 4 +5,0, 5 +2,2), contre +0,9 ± 1,6 pour c030. **De meilleures cibles sortent du
+plateau**, d'un coup : le saut est là dès c031 (le premier réseau appris sur des parties à
+n = 400), puis les duels restent vers +3,5 : un nouveau palier. La politique de validation monte
+(1,289 → 1,307, précision 49,4 → 47,9 %) : les cibles à n = 400 sont plus tranchées, donc plus dures
+à prédire, ce n'est pas un recul.
+
+Suite, piste 3 : c041 à c050, n = 400, `LR=1.5e-4` (service `lab3-deep6-lr`, lancé à 17:04),
+mesurée par un duel direct c050 contre c040 sur 920 donnes neuves.
 
 Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
 (`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En
