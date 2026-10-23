@@ -26,11 +26,15 @@ première boucle de lab2 ; départ de zéro, comme lab2.
 
 Celui de lab2 (voir son journal), sauf :
 
-- **Un nombre de joueurs par réseau** : `lab3/loop.sh P N` joue toutes ses parties
-  d'auto-apprentissage et ses arènes à P joueurs ; parties `lab3/data/pP`, réseaux et arènes
-  `lab3/runs/pP`. Le réseau garde les entrées et sorties de lab2 (jusqu'à 5 joueurs).
+- **Tailles des tables** : `lab3/loop.sh P N` joue ses parties d'auto-apprentissage et ses arènes
+  aux tailles indiquées par P : un nombre pour une spécialisation, ou `2,3,4,5` pour un généraliste
+  (reprise demandée le 23 octobre). Parties `lab3/data/pP`, réseaux et arènes `lab3/runs/pP`.
+  Les listes utilisent des tirets dans les chemins (`p2-3-4-5`) : les virgules séparent les options
+  de la notation des agents. Dans chaque cycle généraliste, les parties alternent 2, 3, 4, 5 joueurs.
+  Le réseau garde les entrées et sorties de lab2 (jusqu'à 5 joueurs).
 - **Réseau de départ** : le généraliste de lab2, son c060 (128x4, `lab3/nets/start.bin`), continué
-  à un seul nombre de joueurs (décision de l'utilisateur, 22 octobre, après l'essai depuis zéro).
+  à un seul nombre de joueurs pour la spécialisation (décision du 22 octobre), ou à toutes les
+  tailles pour la reprise généraliste du 23 octobre.
   `lab3/nets/gen0.bin`, le réseau neuf de lab2, ne sert plus qu'aux tests.
 - **Fenêtre** : toutes les positions jusqu'à 4 000 000, puis
   4 000 000 × (1 + 0,4 × ((total / 4 000 000)^0,75 − 1) / 0,75) (250 000 pour l'essai depuis
@@ -39,8 +43,16 @@ Celui de lab2 (voir son journal), sauf :
   là : un pas tire 4 fois les positions de son dernier cycle, soit une passe sur une fenêtre de
   quatre cycles, puis moins quand elle grandit (le c060 de lab2 : 0,36 passe par pas sur 11
   cycles, 275 000 parties).
-- **Cœurs** : 48 de parties et 16 d'entraînement en même temps : avec le moteur de lab3, les
-  parties d'un 128x4 n'ont plus besoin des 56 cœurs de lab2.
+- **Ordre des étapes** : sur GPU (`DEVICE=vulkan`), génération, entraînement et arènes sont
+  successifs par défaut (`PARALLEL=0`) : pas de partage statique des cœurs ni de concurrence entre
+  Vulkan et ROCm. La génération et les arènes utilisent `THREADS` fils (tous par défaut) ; `TRAIN`
+  règle les opérations CPU de PyTorch (4 par défaut), sans réservation de cœurs. Sur CPU,
+  `PARALLEL=1` garde la recette AWS historique : 48 fils pour les parties et 16 pour l'apprentissage
+  simultanés, tous les 64 pour le remplissage et les arènes.
+- **Mémoire sur le PC** : `MMAP=1 lab3/loop.sh …` passe `--mmap` à `train.py` : les fichiers
+  `.pos` restent mappés en lecture et seuls les lots sont copiés. La fenêtre et le tirage pondéré
+  restent les mêmes ; le système peut libérer leurs pages pour les autres applications. Sans
+  cette option, le chargement complet en RAM reste le défaut.
 - **Témoin de l'arène** : l'Expert de lab2 (`lab2:net=lab2/nets/….bin,n=…`, `lab2/brain`), tel
   qu'il joue dans le jeu ; plus de témoin lab1.
 - **Moteur de génération des parties** (`selfplay::run`, `batch`, demande de l'utilisateur :
@@ -227,6 +239,41 @@ Celui de lab2 (voir son journal), sauf :
   même ordre (g2 12 → 8 µs ; sur l'entrée dense de g1, le vote coûte plus qu'il ne gagne, 14 →
   25 µs : pas là). Écarts au processeur inchangés au bit près ; banc 821 000 → 907 000
   positions/s de GPU ; selfplay GPU 3 360 → **~3 520 positions/s**, ~1 000 000 évaluations/s.
+- **Essai de `g1` sur les matrices coopératives** (23 octobre, non retenu) : `ub`, les moyennes
+  des voisines, n'est plus lu au moment de `g1` ; son espace peut recevoir les entrées globales
+  décomposées en bf16 haute/basse, sans ajouter de mémoire partagée. Deux prototypes, trois
+  produits pour approcher le f32 : quatre sous-groupes en deux passages avec sorties f32 dans
+  `scratch`, puis huit sous-groupes en un passage avec sorties haute/basse dans `ub`. Les deux
+  passent le contrôle numérique sur les réseaux 64 et 128, sans élargir les tolérances. Le
+  compilateur confirme les mêmes ressources pour la référence et les prototypes : 192 VGPR,
+  32 Kio de mémoire partagée allouée, sans débordement des registres. Mais le
+  banc en flux (lots de 128) ralentit : ~1,20–1,21 million d'évaluations/s pour le premier,
+  ~1,03 pour le second, contre ~1,25–1,29 pour la référence. En vrai selfplay, le meilleur
+  prototype perd **4,7 %** : référence 3 837 positions/s, prototype 3 657 (ordre ABBA, deux
+  essais de 42 s chacun par version, première tranche de 10 s écartée ; c060, n = 200, 20 fils,
+  16 parties par fil, graines identiques, 2 à 5 joueurs). Chaque matrice répète un seul vecteur
+  sur ses 16 lignes ; le coût des produits, conversions et barrières annule le bénéfice.
+  Prototypes retirés ; sources de référence restaurées. Détails et variantes conservés hors
+  Git dans `lab3/runs/g1-matrix-20261023-031627/RESULTATS.md`. Cet essai ne tranche pas la piste
+  de plusieurs positions par groupe ni celle des trois groupes résidents par unité de calcul.
+- **Essai de trois groupes résidents** (23 octobre, non retenu) : `ub` réduit à une tranche de
+  16 colonnes pour toutes les régions, réutilisée pour les entrées basses de `node_in` puis les
+  moyennes des voisines pendant `n1`. Poids chargés par tranche, une chaîne de produits par
+  tuile pour `n1` et `n2`, prélecture de `gemv4` ramenée à huit poids. Le shader de 256 fils
+  descend de 192 à **120 VGPR**, de 32 à **21 Kio de LDS allouée**, sans débordement des
+  registres ; 12 sous-groupes/SIMD au lieu de 8, ressources compatibles avec trois groupes
+  résidents. Le contrôle numérique existant passe pour les réseaux 64 et 128, sans modifier les
+  tolérances. Une variante à 128 fils (240 VGPR, 6 sous-groupes/SIMD) est moins rapide au banc.
+  En flux, 20 000 lots de 512 : temps GPU −7,1 %, débit mural +5,4 %. Mais par lots de 128, le
+  temps GPU augmente de 5,5 % (le débit mural augmente malgré cela : temps hors calcul GPU
+  différent). En vrai selfplay, c060, n = 200, 20 fils, 2 à 5 joueurs, graine 777 :
+  à 16 parties par fil, référence **3 837 positions/s**, prototype **3 718 (−3,1 %)**, ordre
+  ABBA, deux essais de 42 s chacun par version, première tranche de 10 s écartée. Lots de
+  ~133 et ~149 positions : la capacité supplémentaire profite peu aux petits lots, dont les
+  synchronisations et les lectures supplémentaires augmentent la latence. Dernier contrôle
+  avec 24 parties par fil (un essai de 42 s chacun) : référence 3 912, prototype 3 828 (−2,1 %).
+  Aucun changement du shader retenu. Variantes, statistiques du pilote et journaux conservés
+  hors Git dans `lab3/runs/three-groups-20261023-032833/RESULTATS.md`.
 - **Deux défauts du compilateur de RADV** (Mesa 26.2.4, ACO, gfx1201), trouvés en comparant son
   assembleur (`RADV_DEBUG=shaders`) pour des variantes justes et fausses du shader. (1) En formant
   des paires d'instructions VOPD, ACO met une addition avec l'instruction qui produit l'une de ses
@@ -238,6 +285,54 @@ Celui de lab2 (voir son journal), sauf :
   plus proche : arrondi fait dans le shader, les écarts au f32 reviennent au niveau du bf16 du
   processeur (logits 0,19 → 0,05).
 - Retiré : `size.py` (mesure des tailles de réseau de lab2).
+
+## Reprise généraliste sur le PC (23 octobre)
+
+À la demande de l'utilisateur : continuer c060 de lab2 en mélangeant les tailles de tables dans
+chaque cycle (2, 3, 4, 5 joueurs, même nombre de parties par taille), avec le moteur optimisé de lab3.
+Le départ `lab3/runs/p2-3-4-5/c000.bin` est identique à `lab2/nets/c060.bin` ; les nouveaux réseaux
+restent dans lab3. Les graines commencent à 30 000 061 pour ne pas rejouer les graines des 60 cycles
+de lab2. La fenêtre est remplie avec de nouvelles parties avant le premier apprentissage.
+
+Lancement à 03:55 CEST, sur GrosseBoite (RX 9070 XT), jusqu'à c020, 25 000 parties par cycle,
+200 simulations par recherche, arènes de 460 donnes face à Difficile puis Normale. Génération
+Vulkan, apprentissage ROCm bf16, arènes CPU. Les trois étapes sont successives : les fils CPU ne
+sont plus partagés entre deux tâches simultanées. La fenêtre est mappée depuis les fichiers,
+sans copie complète en RAM (32 Gio sur le PC).
+
+Commande de reprise avec la même configuration (ne pas lancer en double) :
+
+```sh
+timeout --kill-after=30s 8h env DEVICE=vulkan MMAP=1 PARALLEL=0 THREADS=20 \
+  GAMES=25000 DEALS=460 SEED_BASE=30000060 LAB3_CONCURRENT=16 \
+  PYTHONUNBUFFERED=1 lab3/loop.sh 2,3,4,5 20
+```
+
+Lancée en service utilisateur `lab3-generalist-20261023.service`, indépendant du chat, avec une
+limite de 8 h et arrêt de tout son groupe de processus. Journal des étapes :
+`lab3/runs/p2-3-4-5/log.txt` ; détails du remplissage en cours :
+`lab3/data/tmp/p2-3-4-5-c001.err` (rythme et parties terminées) et `.txt` (bilan final). Pendant l'apprentissage :
+`lab3/runs/p2-3-4-5/cNNN-train.log`. Arrêt :
+`systemctl --user stop lab3-generalist-20261023.service`.
+
+Vérifications avant lancement : lecture RAM/mmap identique sur deux fichiers (clés, poids, indices
+désordonnés, répétés et aux frontières) ; essai réel de 128 parties mêlant les quatre tailles,
+35 lots GPU, validation, export et relecture des poids finis ; orchestration successive/parallèle
+et reprise vérifiées avec des exécutables factices ; compilation release et `git diff --check`.
+
+Premier cycle : 25 000 parties en 295 s, régime établi autour de 2 870 positions/s. Le deuxième
+cycle atteint ensuite 3 715–3 752 positions/s avec le même exécutable, le même modèle et les mêmes
+réglages. Le mmap n'intervient pas encore (uniquement à l'apprentissage) ; les anciens essais
+écrivaient eux aussi les fichiers de parties. Un relevé `pidstat` pendant le premier cycle n'a
+montré aucune attente disque.
+
+Incident du diagnostic à 04:03–04:05 : l'agent a suspendu les processus de la campagne par SIGSTOP
+pour lancer des essais comparatifs sans perdre les positions déjà produites. Mauvaise méthode
+avec la file Vulkan soumise à l'avance : perte du contexte GPU, arrêt du cycle c002. Les essais
+réalisés pendant cette suspension (`runs/rate-check-20261023`) sont non concluants et ne doivent
+pas servir à comparer les graines ou les exécutables. Reprise à 04:05:54, c001 conservé, c002
+rejoué ; échéance de sécurité maintenue à 11:55:58 CEST. Ne pas suspendre les processus GPU de
+cette façon pour de futurs diagnostics.
 
 ## Mesure
 
@@ -271,6 +366,57 @@ joue qu'à sa taille, et se compare à lab2 à cette taille seulement :
 
 Scores du protocole (`labtools/score.py`), à 4 joueurs seulement : l'écart à une victoire sur
 quatre, de −25 (jamais) à +75 (toujours) ; n = 200.
+
+### Reprise généraliste depuis c060, arrêt à la validation de c016 (23 octobre)
+
+Campagne locale du 23 octobre, de 03:55:58 à 07:56:47 CEST, environ 4 h : 16 cycles de 25 000
+parties à 2–5 joueurs mélangés, 12 réseaux exportés (c004 à c015), c016 non exporté à cause d'une
+erreur de conversion NumPy/PyTorch en validation. Les données de c016 sont conservées.
+
+Scores face aux IA du jeu, mêmes graines 1002/1003, 460 donnes et 200 simulations ; tailles
+pondérées également, intervalles à 95 %. Les résultats de c060 sont ceux archivés de lab2.
+
+| Réseau | Difficile | Normale |
+| --- | --- | --- |
+| Départ : lab2 c060 | +30,6 ± 2,2 | +27,8 ± 2,1 |
+| c004 | +28,8 ± 2,0 | +27,1 ± 2,1 |
+| c005 | +26,8 ± 2,2 | +25,2 ± 2,1 |
+| c006 | +28,7 ± 2,2 | +25,3 ± 2,0 |
+| c007 | +28,0 ± 2,1 | +24,7 ± 2,2 |
+| c008 | +28,4 ± 2,2 | +25,8 ± 2,0 |
+| c009 | +28,3 ± 2,2 | +26,3 ± 2,0 |
+| c010 | +28,8 ± 2,3 | +24,5 ± 2,1 |
+| c011 | +29,1 ± 2,1 | +25,9 ± 2,0 |
+| c012 | +28,4 ± 2,2 | +26,6 ± 2,2 |
+| c013 | +29,0 ± 2,0 | +24,3 ± 2,1 |
+| c014 | +29,5 ± 2,2 | +25,2 ± 2,0 |
+| c015 (dernier exporté) | +29,8 ± 2,2 | +25,6 ± 2,0 |
+
+**Aucun gain démontré face à c060.** Comparaison appariée sur les donnes communes avec
+`labtools/score.py` : c015 − c060 = **−0,9 ± 2,8 points face à Difficile**, **−2,2 ± 2,5 face à
+Normale**, les deux indécis. C'est une comparaison de performances contre les IA du jeu, pas
+un duel direct entre ces réseaux. Les conclusions de lab2 sur les limites de ces adversaires
+restent valables. Rapports : `runs/p2-3-4-5/comparison-c015-c060-{hard,normal}.txt`.
+
+Précision de validation 49,4 % à c004, 48,5 % à c015 : fenêtres différentes, donc pas une mesure
+isolée de progrès ou de régression. Le départ c060 conserve sa place de référence.
+
+**Temps observés sur le PC** : 25 000 parties en 227–232 s après le premier cycle ; calcul
+d'apprentissage GPU en 130–284 s, étape entière en 173–414 s (fenêtre de 3,4 à 6,8 millions de
+positions) ; les deux arènes CPU en environ 9 min par génération, devenues l'étape la plus longue.
+
+**Correction du plantage, sans reprise de l'apprentissage** : 339 969 positions de validation
+à c016, soit 166 lots de 2048 et un dernier lot d'une seule position. Dans ce cas, la vue d'un
+champ f32 est jugée contiguë par NumPy, mais conserve le pas de 6210 octets du format `.pos`,
+non divisible par 4. `np.ascontiguousarray` ne copie pas cette vue ; `torch.from_numpy` la
+refuse. Erreur reproduite aussi sur un tableau en RAM : indépendante du mmap. `batches` force
+désormais une copie C de chaque champ, y compris pour un lot singleton.
+
+Tests : trois régressions `py/test_train.py` (singleton, dernier lot singleton en RAM et sur
+plusieurs fichiers mappés, sélection vide) ; lecture du dernier singleton réel de c016 sur CPU
+et GPU ; inférence GPU de validation sur les 2049 dernières positions réelles, moyenne pondérée
+vérifiée. Aucun optimiseur exécuté, aucun modèle modifié ou créé. Campagne laissée arrêtée et
+suivi automatique déjà supprimé, conformément à la demande de l'utilisateur.
 
 ### Spécialisation à 4 joueurs, relance arrêtée au pas 18 (22 octobre)
 

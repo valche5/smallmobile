@@ -127,10 +127,44 @@ def in_validation(keys, share):
     return keys % np.uint64(10_000) < np.uint64(round(share * 10_000))
 
 
-def load(paths, keep=None):
+class MappedRecords:
+    """Les fichiers d'une fenêtre, sans copie complète en RAM ; seuls les lots sont copiés."""
+
+    def __init__(self, files):
+        self.parts = [np.memmap(f, dtype=RECORD, mode="r", shape=(n,)) for f, n in files if n]
+        self.ends = np.cumsum([len(p) for p in self.parts])
+        self.dtype = RECORD
+
+    def __len__(self):
+        return int(self.ends[-1]) if len(self.ends) else 0
+
+    def __getitem__(self, index):
+        if isinstance(index, str):
+            # Les poids de tirage sont petits (4 octets par position), contrairement aux entrées.
+            return np.concatenate([p[index] for p in self.parts]) if self.parts else np.empty(0, RECORD[index])
+        if isinstance(index, slice):
+            index = np.arange(*index.indices(len(self)))
+        idx = np.asarray(index, dtype=np.int64)
+        idx = np.where(idx < 0, idx + len(self), idx)
+        if np.any((idx < 0) | (idx >= len(self))):
+            raise IndexError("position hors de la fenêtre")
+        flat = idx.reshape(-1)
+        blocks = np.searchsorted(self.ends, flat, side="right")
+        out = np.empty(len(flat), dtype=RECORD)
+        for block in np.unique(blocks):
+            mask = blocks == block
+            start = self.ends[block - 1] if block else 0
+            out[mask] = self.parts[block][flat[mask] - start]
+        return out.reshape(idx.shape)[()] if idx.ndim == 0 else out.reshape(idx.shape)
+
+
+def load(paths, keep=None, mmap=False):
     """Les enregistrements des fichiers (ou dossiers) donnés, en un seul tableau, et la clé de la
     partie de chacun (`map_keys`, pour séparer la validation). `keep` : ne garder que certaines
-    parties (fonction des clés qui rend un masque, comme `in_validation`)."""
+    parties (fonction des clés qui rend un masque, comme `in_validation`). `mmap` garde les fichiers
+    sur disque et ne copie en RAM que les lots demandés (sans filtre `keep`)."""
+    if mmap and keep is not None:
+        raise ValueError("mmap ne prend pas de filtre keep")
     files = []
     for path in paths:
         p = Path(path)
@@ -143,6 +177,10 @@ def load(paths, keep=None):
         keys = np.repeat(map_keys(m[np.cumsum(counts) - counts]), counts)
         del m
         plan.append((f, count, keys, None if keep is None else keep(keys)))
+    if mmap:
+        recs = MappedRecords([(f, count) for f, count, _, _ in plan])
+        keys = np.concatenate([keys for _, _, keys, _ in plan]) if plan else np.empty(0, dtype=np.uint64)
+        return recs, keys
     total = sum(len(keys) if sel is None else int(sel.sum()) for _, _, keys, sel in plan)
     recs = np.empty(total, dtype=RECORD)
     out = np.empty(total, dtype=np.uint64)

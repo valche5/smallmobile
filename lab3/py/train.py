@@ -47,8 +47,10 @@ def batches(recs, idx, size, device):
     for start in range(0, len(idx), size):
         sel = np.sort(idx[start : start + size])
         recs_sel = recs[sel]
-        # champs copiés à part : un enregistrement n'aligne pas ses nombres sur 4 octets
-        r = {name: np.ascontiguousarray(recs_sel[name]) for name in recs_sel.dtype.names}
+        # Copie obligatoire : le pas d'un enregistrement (6210 octets) n'aligne pas les f32.
+        # Avec une seule position, NumPy juge la vue contiguë et ascontiguousarray la garde,
+        # mais PyTorch refuse encore son pas de 6210 octets. copy remet aussi ce pas à plat.
+        r = {name: recs_sel[name].copy(order="C") for name in recs_sel.dtype.names}
         policy = torch.from_numpy(r["policy"].astype(np.int32)).to(device)
         legal = policy != ILLEGAL
         policy = torch.where(legal, policy, 0).float()
@@ -124,6 +126,7 @@ def main():
     ap.add_argument("--init", required=True, help="le réseau qui a joué le dernier cycle (.bin)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--threads", type=int, help="cœurs de PyTorch")
+    ap.add_argument("--mmap", action="store_true", help="lire les lots depuis les fichiers, sans charger toute la fenêtre en RAM")
     ap.add_argument("--seed", type=int, default=0, help="ordre des lots")
     args = ap.parse_args()
 
@@ -132,7 +135,7 @@ def main():
         torch.set_num_threads(args.threads)
     start = time.time()
     dirs, new = chosen(args.cycles, args.last)
-    recs, keys = load_data(dirs)
+    recs, keys = load_data(dirs, mmap=args.mmap)
     rng = np.random.default_rng(args.seed)
     # validation sur des parties entières, choisies par une règle fixe (`in_validation`) : aucune
     # position d'une partie vue à l'entraînement, ni par ce réseau ni par les suivants
@@ -143,7 +146,7 @@ def main():
     print(
         f"fenêtre {dirs[0].name}…{dirs[-1].name} : {len(recs)} positions de {len(np.unique(keys))} parties "
         f"({len(val_idx)} positions pour la validation) ; {new} nouvelles, {steps} lots ; "
-        f"chargement {time.time() - start:.0f} s",
+        f"chargement {time.time() - start:.0f} s ; {device}, {'fichiers mappés' if args.mmap else 'données en RAM'}",
         flush=True,
     )
 

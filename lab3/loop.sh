@@ -1,7 +1,6 @@
 #!/bin/bash
 # La boucle d'auto-apprentissage de lab3 (lab3/journal.md), à la manière de KataGo, pour un réseau
-# spécialisé dans un nombre de joueurs P : ses parties d'auto-jeu et ses arènes se jouent toutes
-# à P joueurs. Pas k :
+# pour P joueurs (un nombre, ou une liste comme 2,3,4,5 pour un généraliste). Pas k :
 #   - en même temps : l'entraînement du réseau k depuis le réseau k−1, sur une fenêtre des derniers
 #     cycles jusqu'au cycle k (lab3/py/train.py, TRAIN cœurs), et les parties du cycle k+1 jouées
 #     par le réseau k−1 (PLAY cœurs) : un cycle de retard, comme les joueurs d'AlphaZero et de
@@ -21,20 +20,40 @@
 # étape). Sur AWS : --save lab3/data/pP,lab3/runs/pP. Réglages (essais sur mini) : GAMES, DEALS,
 # PLAY, TRAIN ; DEVICE=vulkan : le réseau des parties sur GPU (`lab3 selfplay --device vulkan`).
 # L'entraînement Python prend le GPU quand il y en a un, indépendamment de DEVICE.
+# MMAP=1 : fenêtre lue depuis les fichiers, seuls les lots sont copiés en RAM.
+# Sur GPU : étapes successives par défaut (PARALLEL=0), THREADS fils de jeu (tous les cœurs par
+# défaut). TRAIN règle seulement les opérations CPU de PyTorch ; aucun cœur ne lui est réservé.
+# Sur CPU : PARALLEL=1 conserve le recouvrement historique avec PLAY et TRAIN cœurs.
+# SEED_BASE=30000060 : continuer les graines après les 60 cycles de lab2 (défaut : 30000000).
+# Pour une liste, les chemins utilisent des tirets (p2-3-4-5) : une virgule sépare les options
+# dans la notation d'un agent `az:net=…,n=200` et ne peut donc pas faire partie de son chemin.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 P=${1:?le nombre de joueurs}
+GROUP=${P//,/-}
 LAST=${2:?le nombre de pas}
 GAMES=${GAMES:-25000}
 DEALS=${DEALS:-460}
-# cœurs des parties et de l'entraînement quand ils tournent ensemble, sur c7a.16xlarge : avec le
-# moteur de lab3 (1,6 fois plus rapide que celui de lab2), les parties d'un réseau 128x4 n'ont plus
-# besoin de 56 cœurs, et l'entraînement en profite (il ne gagne presque plus rien au-delà de 16)
-PLAY=${PLAY:-48}
-TRAIN=${TRAIN:-16}
+SEED_BASE=${SEED_BASE:-30000000}
 DEVICE=${DEVICE:-cpu}
-DATA=lab3/data/p$P
-OUT=lab3/runs/p$P
+case "$DEVICE" in
+  cpu) PARALLEL=${PARALLEL:-1} ;;
+  *) PARALLEL=${PARALLEL:-0} ;;
+esac
+if [ "$PARALLEL" = 1 ]; then
+  # Recette CPU sur c7a.16xlarge : générations et apprentissage se partagent les cœurs.
+  PLAY=${PLAY:-48}
+  TRAIN=${TRAIN:-16}
+  THREADS=$((PLAY + TRAIN))
+else
+  PLAY=${THREADS:-$(nproc)}
+  THREADS=$PLAY
+  TRAIN=${TRAIN:-4}
+fi
+train_args=()
+[ "${MMAP:-0}" != 1 ] || train_args+=(--mmap)
+DATA=lab3/data/p$GROUP
+OUT=lab3/runs/p$GROUP
 TMP=lab3/data/tmp
 LAB=./target/release/lab3
 mkdir -p "$DATA" "$OUT" "$TMP"
@@ -43,7 +62,7 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/log.txt"; }
 name() { printf c%03d "$1"; }
 
 filled() { # cycle : oui si la fenêtre minimale est remplie, non sinon
-  (cd lab3/py && .venv/bin/python -c "from data import filled; print('oui' if filled('../data/p$P', '$1') else 'non')")
+  (cd lab3/py && .venv/bin/python -c "from data import filled; print('oui' if filled('../data/p$GROUP', '$1') else 'non')")
 }
 
 player() { # le réseau qui joue le cycle k : c000 jusqu'au premier pas compris, puis k−2
@@ -56,25 +75,25 @@ games() { # cycle, réseau, cœurs : écrites à part, puis déplacées. Un cycl
   local c=$1 net=$2 threads=$3 start
   compgen -G "$DATA/$c/*.pos.games" > /dev/null && return 0
   start=$(date +%s)
-  rm -rf "${TMP:?}/p$P-$c"
+  rm -rf "${TMP:?}/p$GROUP-$c"
   if ! $LAB selfplay --agent "az:net=$OUT/$net.bin,n=200" --players "$P" --games "$GAMES" \
-    --seed $((30000000 + 10#${c#c})) --threads "$threads" --device "$DEVICE" --out "$TMP/p$P-$c" \
-    > "$TMP/p$P-$c.txt" 2> "$TMP/p$P-$c.err"; then
-    tail -5 "$TMP/p$P-$c.err"
+    --seed $((SEED_BASE + 10#${c#c})) --threads "$threads" --device "$DEVICE" --out "$TMP/p$GROUP-$c" \
+    > "$TMP/p$GROUP-$c.txt" 2> "$TMP/p$GROUP-$c.err"; then
+    tail -5 "$TMP/p$GROUP-$c.err"
     return 1
   fi
   rm -rf "${DATA:?}/$c"
-  mv "$TMP/p$P-$c" "$DATA/$c"
-  log "$c parties ($net) : $(($(date +%s) - start)) s, $(cat "$TMP/p$P-$c.txt")"
-  rm -f "$TMP/p$P-$c.txt" "$TMP/p$P-$c.err"
+  mv "$TMP/p$GROUP-$c" "$DATA/$c"
+  log "$c parties ($net) : $(($(date +%s) - start)) s, $(cat "$TMP/p$GROUP-$c.txt")"
+  rm -f "$TMP/p$GROUP-$c.txt" "$TMP/p$GROUP-$c.err"
 }
 
 train() { # réseau, réseau de départ
   local c=$1 prev=$2 start
   [ -f "$OUT/$c.bin" ] && return 0
   start=$(date +%s)
-  if ! (cd lab3/py && .venv/bin/python train.py --cycles "../data/p$P" --last "$c" --init "../runs/p$P/$prev.bin" \
-    --out "../runs/p$P/$c.tmp.bin" --threads "$TRAIN") > "$OUT/$c-train.log" 2>&1; then
+  if ! (cd lab3/py && .venv/bin/python train.py --cycles "../data/p$GROUP" --last "$c" --init "../runs/p$GROUP/$prev.bin" \
+    --out "../runs/p$GROUP/$c.tmp.bin" --threads "$TRAIN" "${train_args[@]}") > "$OUT/$c-train.log" 2>&1; then
     tail -20 "$OUT/$c-train.log"
     return 1
   fi
@@ -91,7 +110,7 @@ arenas() { # réseau
     seed=1002
     [ "$field" = normal ] && seed=1003
     $LAB arena --hero "az:net=$OUT/$c.bin,n=200" --field "$field" --players "$P" --deals "$DEALS" --seed "$seed" \
-      --threads $((PLAY + TRAIN)) --out "$OUT/arena-$c-$field.tmp" > "$OUT/arena-$c-$field.txt"
+      --threads "$THREADS" --out "$OUT/arena-$c-$field.tmp" > "$OUT/arena-$c-$field.txt"
     mv "$OUT/arena-$c-$field.tmp" "$OUT/arena-$c-$field.tsv"
     log "$c face à $field : $(($(date +%s) - start)) s, \
 $(python3 labtools/score.py "$OUT/arena-$c-$field.tsv" --role 0 | grep '^score')"
@@ -103,31 +122,37 @@ pids=()
 trap 'for p in "${pids[@]}"; do pkill -P "$p" 2> /dev/null || true; kill "$p" 2> /dev/null || true; done' EXIT
 
 # le remplissage de la fenêtre par c000
+log "tailles $P, $DEVICE, étapes $([ "$PARALLEL" = 1 ] && echo parallèles || echo successives), $THREADS fils ; graines $SEED_BASE + cycle ; jusqu'à $(name "$LAST")"
 first=1
-games c001 c000 $((PLAY + TRAIN))
+games c001 c000 "$THREADS"
 while :; do
   # une erreur de Python arrête la boucle (set -e)
   full=$(filled "$(name "$first")")
   [ "$full" = oui ] && break
   first=$((first + 1))
-  games "$(name "$first")" c000 $((PLAY + TRAIN))
+  games "$(name "$first")" c000 "$THREADS"
 done
 
 for k in $(seq "$first" "$LAST"); do
   c=$(name "$k")
   prev=$(player $((k + 1)))
   # les parties du cycle k (déjà jouées au pas précédent, sauf à une reprise)
-  games "$c" "$(player "$k")" $((PLAY + TRAIN))
-  # le réseau k et, en même temps, les parties du cycle k+1 par le réseau d'avant
-  pids=()
-  train "$c" "$prev" &
-  pids+=($!)
-  if [ "$k" -lt "$LAST" ]; then
-    games "$(name $((k + 1)))" "$prev" "$PLAY" &
+  games "$c" "$(player "$k")" "$THREADS"
+  if [ "$PARALLEL" = 1 ]; then
+    # Recouvrement historique : le réseau k et les parties du cycle k+1 par le réseau d'avant.
+    pids=()
+    train "$c" "$prev" &
     pids+=($!)
+    if [ "$k" -lt "$LAST" ]; then
+      games "$(name $((k + 1)))" "$prev" "$PLAY" &
+      pids+=($!)
+    fi
+    for p in "${pids[@]}"; do
+      wait "$p"
+    done
+  else
+    # Un seul utilisateur du GPU : les parties du cycle suivant seront jouées au tour suivant.
+    train "$c" "$prev"
   fi
-  for p in "${pids[@]}"; do
-    wait "$p"
-  done
   arenas "$c"
 done
