@@ -14,7 +14,7 @@ fin et à qui appartient chaque région au début du prochain tour du joueur (co
 cases de KataGo : des dizaines d'étiquettes réelles par position, là où la victoire n'en donne
 qu'une par partie). Les positions sont vues du joueur qui agit.
 
-AdamW, taux 5e-4 en un cycle (montée puis descente) à chaque pas de la boucle, lots de 512 ; calcul
+AdamW, taux 5e-4 (`--lr`) en un cycle (montée puis descente) à chaque pas de la boucle, lots de 512 ; calcul
 en bf16 (`torch.autocast`, poids et optimiseur en 32 bits, comme AlphaZero sur TPU) : 1,3 fois plus
 rapide sur les processeurs qui ont AVX-512 BF16, 2,7 fois sur GPU (RX 9070 XT, 22 octobre).
 Validation en 32 bits. Sans `torch.compile` : sur c7a.16xlarge, 16 cœurs, bf16, 3 % gagnés pour 9
@@ -155,6 +155,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--threads", type=int, help="cœurs de PyTorch")
     ap.add_argument("--seed", type=int, default=0, help="ordre des lots")
+    ap.add_argument("--lr", type=float, default=LR, help="taux maximal du cycle")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -178,8 +179,8 @@ def main():
     )
 
     net = load_net(args.init).to(device)
-    opt = torch.optim.AdamW(net.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=LR, total_steps=steps, pct_start=0.1)
+    opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=WEIGHT_DECAY)
+    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=steps, pct_start=0.1)
     # tirage avec remise, en proportion des poids
     weight = recs["weight"][train_idx].astype(np.float64)
     order = rng.choice(train_idx, size=steps * BATCH, p=weight / weight.sum())

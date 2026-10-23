@@ -24,7 +24,7 @@
 # PLAY, TRAIN ; DEVICE=vulkan : le réseau des parties sur GPU (`lab3 selfplay --device vulkan`).
 # L'entraînement Python prend le GPU quand il y en a un, indépendamment de DEVICE.
 # La fenêtre de l'apprentissage est lue sous forme compacte (lab3/py/data.py, `pack` : un fichier
-# `.pos.packed.npz` fait une fois à côté de chaque `.pos`), en RAM.
+# `.pos.packed.npz` fait une fois à côté de chaque `.pos`), mappée depuis les fichiers.
 # Sur GPU : étapes successives par défaut (PARALLEL=0), THREADS fils de jeu (tous les cœurs par
 # défaut) ; les parties du cycle k+1 y sont jouées par le réseau k, qui vient d'apprendre. TRAIN règle seulement les opérations CPU de PyTorch ; aucun cœur ne lui est réservé.
 # Sur CPU : PARALLEL=1 conserve le recouvrement historique avec PLAY et TRAIN cœurs.
@@ -52,6 +52,8 @@ SEED_BASE=${SEED_BASE:-30000000}
 # simulations des recherches complètes du selfplay (les rapides : selfplay::RECIPE) ; les duels
 # restent à n = 200
 SIMS=${SIMS:-200}
+# taux maximal de chaque cycle d'apprentissage (train.py, `--lr`)
+LR=${LR:-5e-4}
 DEVICE=${DEVICE:-cpu}
 case "$DEVICE" in
   cpu) PARALLEL=${PARALLEL:-1} ;;
@@ -115,7 +117,7 @@ train() { # réseau, réseau de départ
   [ -f "$OUT/$c.bin" ] && return 0
   start=$(date +%s)
   if ! (cd lab3/py && .venv/bin/python train.py --cycles "../data/$RUN" --last "$c" --init "../runs/$RUN/$prev.bin" \
-    --out "../runs/$RUN/$c.tmp.bin" --threads "$TRAIN") > "$OUT/$c-train.log" 2>&1; then
+    --out "../runs/$RUN/$c.tmp.bin" --threads "$TRAIN" --lr "$LR") > "$OUT/$c-train.log" 2>&1; then
     tail -20 "$OUT/$c-train.log"
     return 1
   fi
