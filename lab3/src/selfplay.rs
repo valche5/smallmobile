@@ -602,7 +602,7 @@ pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Res
                     (i < cfg.games).then(|| (i, Box::pin(game(i, cfg, az, batch)) as Running))
                 };
                 if let Some(gpu) = stream {
-                    let batch = Batch::new(&az.net, Some((gpu, lane.expect("les places du fil"))));
+                    let batch = Batch::new(&az.net, Some((gpu, lane.expect("les places du fil"), 0)));
                     let mut slots: Vec<Option<(usize, Running)>> = (0..concurrent).map(|_| None).collect();
                     // les parties à reprendre, avec leurs évaluations ; celles qui attendent le GPU,
                     // dans l'ordre de leurs envois (celui où il les évalue)

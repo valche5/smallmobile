@@ -390,7 +390,6 @@ pub fn decision(
     k: &Knowledge,
     mut choose: impl FnMut(&Game, &Knowledge) -> Move,
 ) -> Result<(Vec<Action>, Vec<Move>), Reason> {
-    let (actor, phase) = (g.state.actor(), g.state.phase);
     let (mut w, mut kw) = (*g, *k);
     let (mut out, mut played) = (Vec::new(), Vec::new());
     loop {
@@ -398,13 +397,20 @@ pub fn decision(
         out.extend(actions(&w, &mv));
         kw.play(&mut w, &mv)?;
         played.push(mv);
-        let unit = matches!(phase, Phase::Redeploy | Phase::Defend);
-        let ended = matches!(mv, Move::End { .. } | Move::EndDefense);
-        if !unit || ended || w.state.phase != phase || w.state.actor() != actor {
+        if !goes_on(g, &w, &mv) {
             break;
         }
     }
     Ok((compact(g, &out), played))
+}
+
+/// La décision commencée en `g` (`decision`) continue-t-elle, une fois `mv` joué (`w`) ? Oui
+/// pendant une fin de tour ou une défense, tant que le même joueur agit dans la même phase.
+pub fn goes_on(g: &Game, w: &Game, mv: &Move) -> bool {
+    let phase = g.state.phase;
+    let unit = matches!(phase, Phase::Redeploy | Phase::Defend);
+    let ended = matches!(mv, Move::End { .. } | Move::EndDefense);
+    unit && !ended && w.state.phase == phase && w.state.actor() == g.state.actor()
 }
 
 /// Les actions d'une fin de tour ou d'une défense, groupées : les héros et campements relevés puis

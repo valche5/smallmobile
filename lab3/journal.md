@@ -56,7 +56,19 @@ Celui de lab2 (voir son journal), sauf :
   arrêté par le test séquentiel « 3 points ou rien » (`STOP`). Les arènes face à Difficile et
   Normale à chaque pas prenaient la moitié d'un pas (~540 s sur 1 070) et ne mesurent plus les
   progrès à ce niveau (lab2/journal.md, troisième boucle). Un duel sur le CPU (20 fils) :
-  ~860 s quand le test ne conclut qu'à la fin (c015 contre c000), soit ~215 s par pas.
+  ~860 s quand le test ne conclut qu'à la fin (c015 contre c000) ; sur GPU (`--device vulkan`,
+  ci-dessous) 47 s : un duel à chaque pas sur GPU, tous les 4 sur CPU.
+- **L'arène sur GPU** (`lab3 arena --device vulkan`, `arena::run` avec un GPU) : comme le
+  selfplay, chaque fil mène 16 parties ; un joueur `az` cherche en attendant ses évaluations du
+  GPU (`az::act_with`), pendant que le fil fait avancer les autres parties ; les IA du jeu jouent
+  directement. Un seul moteur pour tous les réseaux de la table (`Gpu::start_nets`, deux au
+  plus, de même forme) : leurs poids à la suite dans les mêmes tampons, chaque position garde le
+  rang du sien (un octet) et le shader décale sa table de poids d'autant (`T`). Deux moteurs à la
+  fois sur ce GPU se bloquent, même sur deux files (graphique et calcul seul) : une étape soumise
+  d'avance qui attend son feu vert retient l'autre moteur (constaté, mécanisme du pilote non
+  élucidé). Test `one_gpu_evaluates_two_networks`. Duel c015 contre c000, 460 donnes : GPU
+  **−0,5 ± 2,1** en 47 s, CPU −0,0 ± 2,2 en 859 s (18 fois plus long) ; avec l'arrêt séquentiel,
+  34 s pour 184 donnes.
 - **Fenêtre en RAM, sous forme compacte** (`data.py`, `pack`, `Packed`) : chaque fichier `.pos`
   a, à côté, un `.pos.packed.npz` fait une fois (~25 s par cycle de 25 000 parties) : les octets
   non nuls des régions et de la partie (indice de 16 bits, valeur), la politique des seuls coups

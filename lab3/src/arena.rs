@@ -11,17 +11,26 @@
 //!
 //! Une arène peut s'arrêter dès que son résultat est clair (`Sequential`) : elle garde alors les
 //! premières donnes, les mêmes que dans l'arène complète.
+//!
+//! Sur GPU (`run` avec `gpu`), comme le selfplay : chaque fil mène plusieurs parties, un joueur
+//! `az` attend ses évaluations du GPU (un seul moteur pour tous les réseaux, chaque position avec
+//! le sien) pendant que le fil fait avancer les autres parties ; les IA du jeu jouent directement.
 
 use std::io::Write;
+use std::pin::Pin;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll, Waker};
 use std::time::Instant;
 
 use smallmobile_kernel::Phase;
 
 use crate::agent::Agent;
+use crate::batch::Batch;
+use crate::gpu::Gpu;
 use crate::know::Knowledge;
 use crate::moves;
+use crate::net::Net;
 use crate::rand::{Rng, mix};
 use crate::table::{Outcome, Table};
 
@@ -62,6 +71,50 @@ pub fn play_game(table: &Table, seed: u32, seats: &[&dyn Agent], rng_seed: u64) 
     }
     Played { outcome: Outcome::of(&g), moves: count, times }
 }
+
+/// `play_game`, les joueurs `az` attendant leurs évaluations du groupe de leur réseau (`batches`).
+pub async fn play_game_on(
+    table: &Table,
+    seed: u32,
+    seats: &[&dyn Agent],
+    rng_seed: u64,
+    batches: &[Batch<'_>],
+) -> Played {
+    let mut g = table.game(seed);
+    let mut k = Knowledge::default();
+    let mut rng = Rng::new(rng_seed);
+    let mut times = vec![Vec::new(); seats.len()];
+    let mut count = 0;
+    while g.state.phase != Phase::GameOver {
+        assert!(count < MAX_MOVES, "partie sans fin");
+        let pid = g.state.actor().expect("un joueur doit agir");
+        let unit = matches!(g.state.phase, Phase::Redeploy | Phase::Defend);
+        let choice = unit || moves::legal(&g, &k).len() > 1;
+        // la durée comprend le travail des autres parties du fil pendant les attentes
+        let start = Instant::now();
+        let actions = match seats[pid].az() {
+            Some(az) => {
+                let batch = batches.iter().find(|b| b.serves(&az.net)).expect("le groupe du réseau de ce joueur");
+                crate::az::act_with(az, &g, &k, &mut rng.fork(), batch).await
+            }
+            None => seats[pid].act(&g, &k, &mut rng.fork()),
+        };
+        if choice {
+            times[pid].push(start.elapsed().as_secs_f32());
+        }
+        for a in &actions {
+            if let Err(e) = k.apply(&mut g, a) {
+                panic!("action refusée ({}) : {a:?} → {e:?}", seats[pid].name());
+            }
+        }
+        count += 1;
+    }
+    Played { outcome: Outcome::of(&g), moves: count, times }
+}
+
+/// Parties que mène chaque fil de l'arène sur GPU (`LAB3_CONCURRENT` pour essayer), comme le
+/// selfplay (`selfplay::GPU_GAMES`).
+const GPU_GAMES: usize = 16;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Tally {
@@ -267,8 +320,9 @@ pub struct Run {
 }
 
 /// Joue `cfg.deals` donnes ; la donne `d` se joue à la table `lineups[d % lineups.len()]`, une fois
-/// par rotation.
-pub fn run(cfg: &Config, lineups: &[Lineup]) -> Run {
+/// par rotation. Avec `gpu` (le GPU, et les réseaux des joueurs `az` dans l'ordre de
+/// `Gpu::start_nets`), sur GPU.
+pub fn run(cfg: &Config, lineups: &[Lineup], gpu: Option<(&Gpu, &[&Net])>) -> Run {
     let roles = lineups.iter().flat_map(|l| l.roles.iter()).max().map_or(0, |r| r + 1);
     let players: Vec<usize> = (0..cfg.deals).map(|d| lineups[d % lineups.len()].seats.len()).collect();
     let jobs: Vec<(usize, usize)> =
@@ -280,59 +334,95 @@ pub fn run(cfg: &Config, lineups: &[Lineup]) -> Run {
     let progress = Mutex::new(Progress::new(players, step));
     let start = Instant::now();
     let done = AtomicUsize::new(0);
+    // la partie suivante à jouer : sa donne, sa rotation, et les joueurs de chaque place
+    let take = || -> Option<(usize, usize, Vec<&dyn Agent>)> {
+        let j = next.fetch_add(1, Ordering::Relaxed);
+        let &(d, shift) = jobs.get(j)?;
+        if d >= limit.load(Ordering::Relaxed) {
+            return None;
+        }
+        let lineup = &lineups[d % lineups.len()];
+        let n = lineup.seats.len();
+        // la place `seat` de la table reçoit la place `(seat + n − shift) % n` d'avant la rotation
+        Some((d, shift, (0..n).map(|seat| lineup.seats[(seat + n - shift) % n]).collect()))
+    };
+    let deal_of = |d: usize, shift: usize| {
+        let deal = mix(cfg.seed, d as u64);
+        let n = lineups[d % lineups.len()].seats.len();
+        (Table::new(n, deal % 1_000_000_007), mix(deal, 1) as u32, mix(deal, 2 + shift as u64))
+    };
     // par fil : les résultats, et la durée des décisions de chaque place (donne, rôle, durées)
     type Part = (Vec<SeatResult>, Vec<(usize, usize, Vec<f32>)>);
+    let finish = |d: usize, shift: usize, played: Played, part: &mut Part| {
+        let (results, times) = part;
+        let lineup = &lineups[d % lineups.len()];
+        let n = lineup.seats.len();
+        let o = &played.outcome;
+        let first = results.len();
+        for (seat, seat_times) in played.times.into_iter().enumerate() {
+            let role = lineup.roles[(seat + n - shift) % n];
+            results.push(SeatResult {
+                deal: d,
+                players: n,
+                shift,
+                seat,
+                role,
+                win: o.win[seat],
+                coins: o.coins[seat],
+                margin: o.margin(seat),
+                rank: o.rank[seat],
+                decisions: seat_times.len(),
+                seconds: seat_times.iter().map(|&t| t as f64).sum(),
+            });
+            times.push((d, role, seat_times));
+        }
+        if let Some(stop) = cfg.stop {
+            let mine = results[first..].iter().filter(|r| r.role == stop.role);
+            let value = mine.clone().map(|r| 100.0 * (r.win - 1.0 / n as f64)).sum();
+            if let Some(kept) = progress.lock().unwrap().add(d, value, mine.count(), stop.delta) {
+                limit.store(kept, Ordering::Relaxed);
+            }
+        }
+        let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
+        if finished.is_multiple_of(50) || finished == jobs.len() {
+            eprint!("\r{finished}/{} parties, {:.0} s", jobs.len(), start.elapsed().as_secs_f64());
+        }
+    };
+    // les places de chaque fil dans l'anneau du GPU, une part par réseau
+    let mut lanes: Vec<Vec<crate::gpu::Lane>> = (0..cfg.threads).map(|_| Vec::new()).collect();
+    if let Some((gpu, nets)) = gpu {
+        for (i, lane) in gpu.lanes(cfg.threads * nets.len()).into_iter().enumerate() {
+            lanes[i / nets.len()].push(lane);
+        }
+    }
+    let concurrent = std::env::var("LAB3_CONCURRENT").ok().and_then(|v| v.parse().ok()).unwrap_or(GPU_GAMES);
     let parts: Vec<Part> = std::thread::scope(|scope| {
-        let threads: Vec<_> = (0..cfg.threads)
-            .map(|_| {
-                scope.spawn(|| {
-                    let (mut results, mut times) = (Vec::new(), Vec::new());
-                    loop {
-                        let j = next.fetch_add(1, Ordering::Relaxed);
-                        let Some(&(d, shift)) = jobs.get(j) else { break };
-                        if d >= limit.load(Ordering::Relaxed) {
-                            break;
-                        }
-                        let lineup = &lineups[d % lineups.len()];
-                        let n = lineup.seats.len();
-                        // la place `seat` de la table reçoit la place `from(seat)` d'avant la rotation
-                        let from = |seat: usize| (seat + n - shift) % n;
-                        let seats: Vec<&dyn Agent> = (0..n).map(|seat| lineup.seats[from(seat)]).collect();
-                        let deal = mix(cfg.seed, d as u64);
-                        let table = Table::new(n, deal % 1_000_000_007);
-                        let played = play_game(&table, mix(deal, 1) as u32, &seats, mix(deal, 2 + shift as u64));
-                        let o = &played.outcome;
-                        let first = results.len();
-                        for (seat, seat_times) in played.times.into_iter().enumerate() {
-                            let role = lineup.roles[from(seat)];
-                            results.push(SeatResult {
-                                deal: d,
-                                players: n,
-                                shift,
-                                seat,
-                                role,
-                                win: o.win[seat],
-                                coins: o.coins[seat],
-                                margin: o.margin(seat),
-                                rank: o.rank[seat],
-                                decisions: seat_times.len(),
-                                seconds: seat_times.iter().map(|&t| t as f64).sum(),
-                            });
-                            times.push((d, role, seat_times));
-                        }
-                        if let Some(stop) = cfg.stop {
-                            let mine = results[first..].iter().filter(|r| r.role == stop.role);
-                            let value = mine.clone().map(|r| 100.0 * (r.win - 1.0 / n as f64)).sum();
-                            if let Some(kept) = progress.lock().unwrap().add(d, value, mine.count(), stop.delta) {
-                                limit.store(kept, Ordering::Relaxed);
+        let threads: Vec<_> = lanes
+            .into_iter()
+            .map(|lanes| {
+                let (take, deal_of, finish) = (&take, &deal_of, &finish);
+                scope.spawn(move || {
+                    let mut part: Part = Default::default();
+                    match gpu {
+                        None => {
+                            while let Some((d, shift, seats)) = take() {
+                                let (table, seed, rng) = deal_of(d, shift);
+                                finish(d, shift, play_game(&table, seed, &seats, rng), &mut part);
                             }
                         }
-                        let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
-                        if finished.is_multiple_of(50) || finished == jobs.len() {
-                            eprint!("\r{finished}/{} parties, {:.0} s", jobs.len(), start.elapsed().as_secs_f64());
+                        Some((gpu, nets)) => {
+                            let batches: Vec<Batch> = nets
+                                .iter()
+                                .zip(lanes)
+                                .enumerate()
+                                .map(|(rank, (&net, lane))| Batch::new(net, Some((gpu, lane, rank as u8))))
+                                .collect();
+                            on_gpu(&batches, gpu, concurrent, take, deal_of, |d, shift, played| {
+                                finish(d, shift, played, &mut part)
+                            });
                         }
                     }
-                    (results, times)
+                    part
                 })
             })
             .collect();
@@ -351,6 +441,69 @@ pub fn run(cfg: &Config, lineups: &[Lineup]) -> Run {
     }
     run.results.sort_by_key(|r| (r.deal, r.shift, r.seat));
     run
+}
+
+/// Une partie de l'arène en cours sur GPU : sa donne, sa rotation, et ce qu'elle rendra.
+type Running<'a> = Pin<Box<dyn Future<Output = (usize, usize, Played)> + 'a>>;
+
+/// Les parties d'un fil de l'arène sur GPU : `concurrent` à la fois ; chacune avance jusqu'à ce
+/// qu'un joueur `az` attende ses évaluations (envoyées aussitôt au GPU, par le groupe de son
+/// réseau, `batches`),
+/// et reprend dès qu'elles sont là. `take` donne la partie suivante, `finish` reçoit les finies.
+fn on_gpu<'b, 's: 'b, 'n: 'b>(
+    batches: &'b [Batch<'n>],
+    gpu: &Gpu,
+    concurrent: usize,
+    take: &(dyn Fn() -> Option<(usize, usize, Vec<&'s dyn Agent>)> + Sync),
+    deal_of: &(dyn Fn(usize, usize) -> (Table, u32, u64) + Sync),
+    mut finish: impl FnMut(usize, usize, Played),
+) {
+    use crate::gpu::Sent;
+    use crate::net::Eval;
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut slots: Vec<Option<Running<'b>>> = (0..concurrent).map(|_| None).collect();
+    // les parties à reprendre (avec les évaluations attendues, et le groupe qui les a) ; celles qui
+    // attendent un GPU, avec leur groupe
+    type Resumed = (usize, Option<(usize, Vec<Eval>)>);
+    let mut ready: Vec<Resumed> = (0..concurrent).map(|s| (s, None)).collect();
+    let mut waiting: Vec<(usize, usize, Sent)> = Vec::new();
+    loop {
+        while let Some((s, evals)) = ready.pop() {
+            if let Some((b, evals)) = evals {
+                batches[b].resume(evals);
+            }
+            loop {
+                if slots[s].is_none() {
+                    let Some((d, shift, seats)) = take() else { break };
+                    let (table, seed, rng) = deal_of(d, shift);
+                    slots[s] = Some(Box::pin(async move {
+                        let played = play_game_on(&table, seed, &seats, rng, batches).await;
+                        (d, shift, played)
+                    }));
+                }
+                let running = slots[s].as_mut().expect("une partie");
+                let Poll::Ready((d, shift, played)) = running.as_mut().poll(&mut cx) else {
+                    // la partie attend : ses positions sont dans le groupe du réseau qui cherche
+                    let (b, sent) = batches
+                        .iter()
+                        .enumerate()
+                        .find_map(|(b, batch)| batch.send().map(|sent| (b, sent)))
+                        .expect("une partie qui attend a ses positions");
+                    waiting.push((s, b, sent));
+                    break;
+                };
+                slots[s] = None;
+                finish(d, shift, played);
+            }
+        }
+        if waiting.is_empty() {
+            break;
+        }
+        // la première attente déjà servie, sinon la plus vieille
+        let i = waiting.iter().position(|(_, _, sent)| gpu.done(sent)).unwrap_or(0);
+        let (s, b, sent) = waiting.remove(i);
+        ready.push((s, Some((b, batches[b].receive(sent)))));
+    }
 }
 
 /// Les résultats d'un rôle, par nombre de joueurs (indice = nombre de joueurs).

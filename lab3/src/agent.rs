@@ -17,6 +17,12 @@ pub trait Agent: Sync {
     /// du jeu, toute une fin de tour ou une défense pour les autres (`moves::decision`). `rng` est
     /// propre à cette décision.
     fn act(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Vec<Action>;
+
+    /// La recherche guidée par le réseau, si ce joueur en est une : l'arène sur GPU la fait attendre
+    /// ses évaluations (`Az::act_with`) au lieu de l'appeler par `act`.
+    fn az(&self) -> Option<&crate::az::Az> {
+        None
+    }
 }
 
 /// L'IA du jeu, à un niveau donné. Elle voit un monde possible, pas la vraie partie : ainsi elle ne

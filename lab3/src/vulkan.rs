@@ -222,6 +222,37 @@ impl Weights {
     }
 }
 
+/// Réseaux au plus d'un même moteur (`Engine::new_nets`).
+pub const NETS: usize = 2;
+
+impl Weights {
+    /// Les poids de plusieurs réseaux de même forme, à la suite dans les mêmes tampons, et où
+    /// commencent ceux de chacun (f32, bf16) : la table de chaque réseau donne ses positions à
+    /// partir de là (`T` des shaders, décalé par réseau).
+    fn several(nets: &[&Path]) -> Result<(Weights, Vec<(u32, u32)>), String> {
+        if nets.is_empty() || nets.len() > NETS {
+            return Err(format!("de 1 à {NETS} réseaux par moteur"));
+        }
+        let (mut data, mut data16, mut bases) = (Vec::new(), Vec::new(), Vec::new());
+        let mut shape = None;
+        for net in nets {
+            let w = Weights::load(net)?;
+            if shape.is_some_and(|s| s != (w.hidden, w.layers)) {
+                return Err(format!("{} : pas la même forme que le premier réseau", net.display()));
+            }
+            shape = Some((w.hidden, w.layers));
+            // des débuts alignés comme dans un réseau seul (tuiles bf16 de 64 nombres)
+            data.resize(data.len().next_multiple_of(64), 0.0);
+            data16.resize(data16.len().next_multiple_of(64), 0);
+            bases.push((data.len() as u32, data16.len() as u32));
+            data.extend_from_slice(&w.data);
+            data16.extend_from_slice(&w.data16);
+        }
+        let (hidden, layers) = shape.expect("un réseau");
+        Ok((Weights { data, data16, hidden, layers }, bases))
+    }
+}
+
 /// Où sont les entrées des positions dans l'anneau (octets), et la file d'ordre (`ORDER` numéros
 /// de places).
 #[derive(Clone, Copy)]
@@ -230,6 +261,8 @@ struct InputLayout {
     glob: usize,
     adj: usize,
     regions: usize,
+    /// le réseau de chaque position (un octet, `Engine::new_nets`)
+    nets: usize,
     order: usize,
     size: usize,
 }
@@ -241,8 +274,9 @@ impl InputLayout {
         let glob = up(node + max * REGIONS * NODE);
         let adj = up(glob + max * GLOBAL);
         let regions = up(adj + max * REGIONS * 8);
-        let order = up(regions + max);
-        InputLayout { node, glob, adj, regions, order, size: order + ORDER * 4 }
+        let nets = up(regions + max);
+        let order = up(nets + max);
+        InputLayout { node, glob, adj, regions, nets, order, size: order + ORDER * 4 }
     }
 }
 
@@ -289,6 +323,8 @@ pub struct Engine {
     submitted: Mutex<u64>,
     profile: Option<Profile>,
     weights: Weights,
+    /// où commencent les poids de chaque réseau (f32, bf16)
+    bases: Vec<(u32, u32)>,
     input_layout: InputLayout,
     max: usize,
     name: String,
@@ -316,7 +352,14 @@ impl Engine {
     /// dont le nom contient `LAB3_VULKAN_DEVICE`) et les poids `net`, pour des lots de `max`
     /// positions au plus.
     pub fn new(net: &Path, max: usize) -> Result<Engine, String> {
-        let weights = Weights::load(net)?;
+        Engine::new_nets(&[net], max)
+    }
+
+    /// `new` avec plusieurs réseaux de même forme (`NETS` au plus) : chaque position dit le sien
+    /// (`write`). Un seul moteur pour tous : deux moteurs à la fois sur ce GPU se bloquent (leurs
+    /// étapes soumises d'avance attendent chacune leur feu vert, journal).
+    pub fn new_nets(nets: &[&Path], max: usize) -> Result<Engine, String> {
+        let (weights, bases) = Weights::several(nets)?;
         // SAFETY : appels Vulkan dans l'ordre de la spécification ; chaque objet créé est détruit
         // par `Drop`
         unsafe {
@@ -435,6 +478,7 @@ impl Engine {
                 profile: None,
                 input_layout: InputLayout::new(RING),
                 weights,
+                bases,
                 max,
                 name,
                 bf16,
@@ -648,7 +692,7 @@ impl Engine {
             self.set_layout = d
                 .create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings), None)
                 .map_err(vk_err("disposition"))?;
-            let push = [vk::PushConstantRange::default().stage_flags(vk::ShaderStageFlags::COMPUTE).size(36)];
+            let push = [vk::PushConstantRange::default().stage_flags(vk::ShaderStageFlags::COMPUTE).size(56)];
             let set_layouts = [self.set_layout];
             self.layout = d
                 .create_pipeline_layout(
@@ -783,8 +827,8 @@ impl Engine {
     }
 
     /// Écrit la position `p` à la place `cell` de l'anneau : ses régions présentes, la partie, les
-    /// voisines (bits), le nombre de régions.
-    pub(crate) fn write<P: Position + ?Sized>(&self, cell: usize, p: &P) {
+    /// voisines (bits), le nombre de régions, et le réseau qui l'évalue (`new_nets`).
+    pub(crate) fn write<P: Position + ?Sized>(&self, cell: usize, p: &P, net: u8) {
         let (l, input) = (self.input_layout, self.input());
         let e = p.encoded();
         let node = l.node + cell * REGIONS * NODE;
@@ -797,6 +841,7 @@ impl Engine {
             *out = bits.to_le_bytes();
         }
         input[l.regions + cell] = e.regions as u8;
+        input[l.nets + cell] = net;
     }
 
     /// Range la place `cell` au numéro `at` de la file d'ordre.
@@ -864,9 +909,13 @@ impl Engine {
     /// d'ordre, ou celui que dit l'étape `step` du tampon des étapes, sinon `u32::MAX`).
     fn params(&self, first: usize, step: usize) -> Vec<u8> {
         let l = self.input_layout;
-        [l.node, l.glob, l.adj, l.regions, self.weights.layers as usize, first, ORDER, l.order, step]
-            .iter()
-            .flat_map(|&v| (v as u32).to_le_bytes())
+        let base = |n: usize| self.bases.get(n).or(self.bases.first()).copied().expect("un réseau");
+        let (b0, b1) = (base(0), base(1));
+        [l.node, l.glob, l.adj, l.regions, self.weights.layers as usize, first, ORDER, l.order, step, l.nets]
+            .into_iter()
+            .map(|v| v as u32)
+            .chain([b0.0, b0.1, b1.0, b1.1])
+            .flat_map(u32::to_le_bytes)
             .collect()
     }
 

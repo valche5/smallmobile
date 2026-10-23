@@ -40,9 +40,14 @@ fn random_net() -> smallmobile_lab3::net::Net {
 
 /// Les poids de `random_net`, au format SMNN1.
 fn random_net_bytes() -> Vec<u8> {
+    random_net_bytes_from(77)
+}
+
+/// `random_net_bytes`, d'autres poids au hasard pour chaque `seed`.
+fn random_net_bytes_from(seed: u64) -> Vec<u8> {
     let bytes = std::fs::read(net_path()).unwrap();
     let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
-    let mut rng = Rng::new(77);
+    let mut rng = Rng::new(seed);
     let mut out = bytes[..9].to_vec();
     let mut at = 9;
     for _ in 0..word(5) {
@@ -484,6 +489,49 @@ fn vulkan_evaluates_like_the_processor() {
     }
 }
 
+/// Deux réseaux sur un même moteur (l'arène sur GPU, `Gpu::start_nets`) : chaque position est
+/// évaluée par le sien.
+#[cfg(feature = "vulkan")]
+#[test]
+fn one_gpu_evaluates_two_networks() {
+    use smallmobile_lab3::encode::encode;
+    use smallmobile_lab3::gpu::Gpu;
+    let nets: Vec<Vec<u8>> = [77, 78].map(random_net_bytes_from).into();
+    let paths: Vec<_> = (0..2)
+        .map(|i| std::env::temp_dir().join(format!("smallmobile-vulkan2-{}-{i}.bin", std::process::id())))
+        .collect();
+    for (p, b) in paths.iter().zip(&nets) {
+        std::fs::write(p, b).unwrap();
+    }
+    let (gpu, device) = Gpu::start_nets(&[&paths[0], &paths[1]]).unwrap();
+    paths.iter().for_each(|p| std::fs::remove_file(p).unwrap());
+    let cpu: Vec<_> = nets.iter().map(|b| smallmobile_lab3::net::Net::from_bytes(b).unwrap()).collect();
+    let table = Table::new(4, 4242);
+    let mut positions = Vec::new();
+    let mut rng = Rng::new(9);
+    let (mut g, mut k) = (table.game(3), Knowledge::default());
+    random_game(&mut g, &mut k, &mut rng.fork(), |g, k, legal| {
+        if legal.len() > 1 && positions.len() < 40 {
+            positions.push(encode(g, k));
+        }
+    });
+    let items: Vec<_> = positions.iter().map(|e| (e, &table.map)).collect();
+    let mut lane = gpu.lanes(1).pop().unwrap();
+    let (a, b) = (lane.send(&gpu, &items[..20], 0), lane.send(&gpu, &items[20..], 1));
+    let far: Vec<_> = lane.take(&gpu, a).into_iter().chain(lane.take(&gpu, b)).collect();
+    let gap = |x: &[f32], y: &[f32]| x.iter().zip(y).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+    let (mut own, mut other) = (0.0f32, f32::INFINITY);
+    for (i, e) in positions.iter().enumerate() {
+        let mine = i / 20;
+        let near = |n: usize| cpu[n].eval_f32(e, |r| &table.map.regions[r].adj);
+        own = own.max(gap(&far[i].win, &near(mine).win));
+        other = other.min(gap(&far[i].win, &near(1 - mine).win));
+    }
+    // bf16 : comme `vulkan_check` ; l'autre réseau, nettement plus loin
+    let tolerance = if device.contains("bf16") { 0.006 } else { 1e-3 };
+    assert!(own < tolerance && other > 10.0 * own, "{device} : son réseau {own}, l'autre {other}");
+}
+
 #[cfg(feature = "vulkan")]
 fn vulkan_check(bytes: Vec<u8>, seed: u64) {
     use smallmobile_lab3::encode::encode;
@@ -508,8 +556,8 @@ fn vulkan_check(bytes: Vec<u8>, seed: u64) {
     // deux envois à la suite : chacun reçoit les siennes
     let half = items.len() / 2;
     let mut lane = gpu.lanes(1).pop().unwrap();
-    let first = lane.send(&gpu, &items[..half]);
-    let second = lane.send(&gpu, &items[half..]);
+    let first = lane.send(&gpu, &items[..half], 0);
+    let second = lane.send(&gpu, &items[half..], 0);
     let far: Vec<_> = lane.take(&gpu, first).into_iter().chain(lane.take(&gpu, second)).collect();
     // les plus grands écarts : victoire, pièces, logits des coups possibles
     let mut worst = [0.0f32; 3];
@@ -645,7 +693,7 @@ fn the_lab2_expert_plays_in_the_arena() {
     let lab2 = by_name(&format!("lab2:net={}/../lab2/nets/c040.bin,n=4", env!("CARGO_MANIFEST_DIR"))).unwrap();
     let az = expert(4);
     let lineups = vec![Lineup::hero(2, &az, lab2.as_ref())];
-    let run = arena::run(&Config { deals: 1, threads: 2, seed: 2, stop: None }, &lineups);
+    let run = arena::run(&Config { deals: 1, threads: 2, seed: 2, stop: None }, &lineups, None);
     assert_eq!(run.results.len(), 4, "deux parties, deux places");
 }
 
@@ -710,7 +758,7 @@ fn the_arena_puts_every_player_at_every_seat() {
     let (easy, normal) = (KernelAi::new(Level::Easy), KernelAi::new(Level::Normal));
     let cfg = Config { deals: 6, threads: 3, seed: 4, stop: None };
     let lineups: Vec<Lineup> = [2, 3, 4].into_iter().map(|n| Lineup::hero(n, &easy, &normal)).collect();
-    let run = arena::run(&cfg, &lineups);
+    let run = arena::run(&cfg, &lineups, None);
     // donnes à 2, 3, 4, 2, 3, 4 joueurs ; une partie par rotation, une ligne par place
     assert_eq!(run.results.len(), 2 * (4 + 9 + 16));
     for r in &run.results {
@@ -726,7 +774,7 @@ fn the_arena_puts_every_player_at_every_seat() {
     let key = |run: &arena::Run| -> Vec<_> {
         run.results.iter().map(|r| (r.deal, r.shift, r.seat, r.role, r.coins, r.rank)).collect()
     };
-    assert_eq!(key(&arena::run(&cfg, &lineups)), key(&run));
+    assert_eq!(key(&arena::run(&cfg, &lineups, None)), key(&run));
 }
 
 #[test]
@@ -749,10 +797,10 @@ fn a_clear_arena_stops_early_and_keeps_its_first_deals() {
     let (normal, easy) = (KernelAi::new(Level::Normal), KernelAi::new(Level::Easy));
     let lineups: Vec<Lineup> = [2, 3].into_iter().map(|n| Lineup::hero(n, &normal, &easy)).collect();
     let stop = Some(Sequential { role: 0, delta: 10.0, look: 2 });
-    let stopped = arena::run(&Config { deals: 60, threads: 4, seed: 9, stop }, &lineups);
+    let stopped = arena::run(&Config { deals: 60, threads: 4, seed: 9, stop }, &lineups, None);
     assert_eq!(stopped.verdict, Some(true), "Normal bat nettement Facile");
     assert!(stopped.deals < 60 && stopped.deals.is_multiple_of(4), "{} donnes", stopped.deals);
-    let full = arena::run(&Config { deals: 60, threads: 4, seed: 9, stop: None }, &lineups);
+    let full = arena::run(&Config { deals: 60, threads: 4, seed: 9, stop: None }, &lineups, None);
     assert_eq!((full.deals, full.verdict), (60, None));
     let key = |r: &arena::SeatResult| (r.deal, r.shift, r.seat, r.role, r.coins, r.rank);
     let first: Vec<_> = full.results.iter().filter(|r| r.deal < stopped.deals).map(key).collect();

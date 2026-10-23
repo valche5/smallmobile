@@ -3,6 +3,7 @@
 //! ```text
 //! lab3 arena --hero hard --field normal [--players 2,3,4,5] [--deals 100] [--threads N] [--seed 1] [--out r.tsv]
 //!     [--stop 3]   (arrêt dès que le score du joueur testé est clairement 0 ou 3 points : test séquentiel)
+//!     [--device vulkan]   (les joueurs `az` sur GPU, un par réseau, plusieurs parties par fil)
 //! lab3 arena --table 'az:net=poids.bin|hard|normal' [--deals 100] [--out r.tsv]   (table fixe)
 //! lab3 speed --agent az:net=poids.bin,n=200 [--positions 12] [--seed 1]   (temps et empreinte des recherches)
 //! lab3 selfplay --agent az:net=poids.bin --games 1000 --out lab3/data/gen1 [--players 2,3,4,5]
@@ -43,7 +44,7 @@ fn main() {
 fn usage() -> ! {
     eprintln!(
         "usage : lab3 arena --hero A --field B [--players 2,3,4,5] [--deals N] [--threads N] [--seed S] [--out F] \
-         [--stop D]"
+         [--stop D] [--device cpu|vulkan]"
     );
     eprintln!("        lab3 arena --table 'A|B|B' [--deals N] [--threads N] [--seed S] [--out F]");
     eprintln!("        lab3 speed --agent az:… [--players 2,3,4,5] [--positions 12] [--seed S]");
@@ -108,6 +109,8 @@ fn arena_cmd(opts: &HashMap<String, String>) {
         seed: get(opts, "seed", 1),
         stop,
     };
+    // le nom de chaque joueur distinct, dans l'ordre de `agents`
+    let named: Vec<String>;
     let (agents, specs): (Vec<Box<dyn Agent>>, Option<Vec<usize>>) = match opts.get("table") {
         Some(table) => {
             let mut distinct: Vec<&str> = Vec::new();
@@ -119,10 +122,38 @@ fn arena_cmd(opts: &HashMap<String, String>) {
                 });
                 roles.push(role);
             }
+            named = distinct.iter().map(|d| d.to_string()).collect();
             (distinct.into_iter().map(agent_named).collect(), Some(roles))
         }
-        None => (vec![agent(opts, "hero"), agent(opts, "field")], None),
+        None => {
+            named = ["hero", "field"].iter().map(|k| opts.get(*k).cloned().unwrap_or_default()).collect();
+            (vec![agent(opts, "hero"), agent(opts, "field")], None)
+        }
     };
+    // --device vulkan : chaque réseau des joueurs `az` sur un GPU, le sien
+    let on_gpu = match opts.get("device").map(String::as_str) {
+        None | Some("cpu") => false,
+        Some("gpu" | "vulkan") => true,
+        Some(_) => usage(),
+    };
+    // les réseaux des joueurs `az`, sur un seul GPU (un moteur pour tous, `Gpu::start_nets`)
+    let (mut paths, mut nets) = (Vec::new(), Vec::new());
+    for (a, name) in agents.iter().zip(&named) {
+        if let Some(az) = a.az().filter(|_| on_gpu) {
+            let net = name.split(',').find_map(|p| p.strip_prefix("az:").unwrap_or(p).strip_prefix("net="));
+            paths.push(std::path::PathBuf::from(net.unwrap_or_else(|| usage())));
+            nets.push(&*az.net);
+        }
+    }
+    let gpu = (!paths.is_empty()).then(|| {
+        let paths: Vec<&std::path::Path> = paths.iter().map(|p| p.as_path()).collect();
+        let (gpu, device) = smallmobile_lab3::gpu::Gpu::start_nets(&paths).unwrap_or_else(|e| {
+            eprintln!("GPU : {e}");
+            std::process::exit(2)
+        });
+        eprintln!("réseaux évalués par {device}");
+        gpu
+    });
     let lineups: Vec<Lineup> = match &specs {
         Some(roles) => {
             vec![Lineup { seats: roles.iter().map(|&r| agents[r].as_ref()).collect(), roles: roles.clone() }]
@@ -134,7 +165,7 @@ fn arena_cmd(opts: &HashMap<String, String>) {
     };
     let names: Vec<String> = agents.iter().map(|a| a.name()).collect();
     let start = Instant::now();
-    let run = arena::run(&cfg, &lineups);
+    let run = arena::run(&cfg, &lineups, gpu.as_ref().map(|g| (g, &nets[..])));
     // face à un champ homogène, seul le joueur testé compte (le champ en est le miroir)
     let shown = if specs.is_some() { names.len() } else { 1 };
     for (role, name) in names.iter().enumerate().take(shown) {

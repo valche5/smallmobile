@@ -144,7 +144,11 @@ pub struct Gpu {
 #[cfg(not(feature = "vulkan"))]
 impl Gpu {
     pub fn start(net: &Path) -> Result<(Gpu, String), String> {
-        let _ = net;
+        Gpu::start_nets(&[net])
+    }
+
+    pub fn start_nets(nets: &[&Path]) -> Result<(Gpu, String), String> {
+        let _ = nets;
         Err("programme lab3 compilé sans Vulkan (cargo build --features vulkan)".into())
     }
 
@@ -167,7 +171,7 @@ impl Lane {
         self.free.len()
     }
 
-    pub fn send<P: Position>(&mut self, gpu: &Gpu, _: &[P]) -> Sent {
+    pub fn send<P: Position>(&mut self, gpu: &Gpu, _: &[P], _: u8) -> Sent {
         match gpu.never {}
     }
 
@@ -180,9 +184,15 @@ impl Lane {
 impl Gpu {
     /// Ouvre le GPU avec les poids `net` et lance le fil « gpu » ; rend aussi l'appareil qui calcule.
     pub fn start(net: &Path) -> Result<(Gpu, String), String> {
+        Gpu::start_nets(&[net])
+    }
+
+    /// `start` avec plusieurs réseaux de même forme (l'arène : un par joueur `az`) ; une position
+    /// dit le sien à l'envoi (`Lane::send`), par son rang dans `nets`.
+    pub fn start_nets(nets: &[&Path]) -> Result<(Gpu, String), String> {
         use crate::vulkan::{Engine, MAX_BATCH, ORDER, STEPS};
         use std::sync::atomic::{AtomicBool, AtomicU64};
-        let engine = Engine::new(net, MAX_BATCH)?;
+        let engine = Engine::new_nets(nets, MAX_BATCH)?;
         let device = engine.describe();
         let ring = std::sync::Arc::new(Ring {
             engine,
@@ -274,14 +284,15 @@ impl Lane {
     }
 
     /// Écrit `positions` à des places libres de ce fil, puis leurs places à la suite dans la file
-    /// d'ordre ; le fil « gpu » les soumet dès qu'elles y sont.
-    pub fn send<P: Position>(&mut self, gpu: &Gpu, positions: &[P]) -> Sent {
+    /// d'ordre ; le fil « gpu » les soumet dès qu'elles y sont. `net` : le rang du réseau qui les
+    /// évalue (`Gpu::start_nets`).
+    pub fn send<P: Position>(&mut self, gpu: &Gpu, positions: &[P], net: u8) -> Sent {
         use std::sync::atomic::Ordering;
         let (r, order) = (&*gpu.ring, crate::vulkan::ORDER as u64);
         assert!(positions.len() <= self.free.len(), "plus de place pour ce fil dans l'anneau du GPU");
         let cells: Vec<u32> = (0..positions.len()).map(|_| self.free.pop().expect("une place")).collect();
         for (&cell, p) in cells.iter().zip(positions) {
-            r.engine.write(cell as usize, p);
+            r.engine.write(cell as usize, p, net);
         }
         let first = r.head.fetch_add(cells.len() as u64, Ordering::Relaxed);
         for (j, &cell) in cells.iter().enumerate() {

@@ -40,7 +40,7 @@ pub struct Batch<'a> {
     net: &'a Net,
     /// Le GPU qui évalue les positions, et les places du fil dans son anneau ; sans lui, le
     /// processeur du fil.
-    gpu: Option<(&'a Gpu, RefCell<Lane>)>,
+    gpu: Option<(&'a Gpu, RefCell<Lane>, u8)>,
     /// Les positions déposées depuis le dernier envoi, dans l'ordre des tickets.
     waiting: RefCell<Vec<Request>>,
     /// Les évaluations du dernier envoi (ou de la partie reprise), par ticket, chacune prise par sa
@@ -70,9 +70,11 @@ impl Position for Request {
 }
 
 impl<'a> Batch<'a> {
-    pub fn new(net: &'a Net, gpu: Option<(&'a Gpu, Lane)>) -> Self {
+    /// `gpu` : le GPU, les places du fil dans son anneau, et le rang de ce réseau sur ce GPU
+    /// (`Gpu::start_nets`).
+    pub fn new(net: &'a Net, gpu: Option<(&'a Gpu, Lane, u8)>) -> Self {
         let instant = std::env::var_os("LAB3_INSTANT").is_some();
-        let gpu = gpu.map(|(gpu, lane)| (gpu, RefCell::new(lane)));
+        let gpu = gpu.map(|(gpu, lane, rank)| (gpu, RefCell::new(lane), rank));
         Batch { net, gpu, waiting: RefCell::default(), done: RefCell::default(), instant }
     }
 
@@ -95,16 +97,16 @@ impl<'a> Batch<'a> {
         if waiting.is_empty() {
             return None;
         }
-        let (gpu, lane) = self.gpu.as_ref().expect("un GPU");
+        let (gpu, lane, rank) = self.gpu.as_ref().expect("un GPU");
         let start = std::time::Instant::now();
-        let sent = lane.borrow_mut().send(gpu, &waiting);
+        let sent = lane.borrow_mut().send(gpu, &waiting, *rank);
         count(TIME_SUBMIT, start);
         Some(sent)
     }
 
     /// Les évaluations de `sent`, attendues et lues.
     pub fn receive(&self, sent: Sent) -> Vec<Eval> {
-        let (gpu, lane) = self.gpu.as_ref().expect("un GPU");
+        let (gpu, lane, _) = self.gpu.as_ref().expect("un GPU");
         let start = std::time::Instant::now();
         gpu.wait(&sent);
         count(TIME_WAIT, start);
@@ -112,6 +114,11 @@ impl<'a> Batch<'a> {
         let evals = lane.borrow_mut().take(gpu, sent);
         count(TIME_DECODE, start);
         evals
+    }
+
+    /// Ce groupe évalue-t-il ce réseau ? (l'arène : un groupe par réseau, `arena::run`)
+    pub fn serves(&self, net: &Net) -> bool {
+        std::ptr::eq(net, self.net)
     }
 
     /// Avant de reprendre la partie qui attendait `evals` (`receive`) : elle les trouvera.

@@ -5,8 +5,9 @@
 #     cycles jusqu'au cycle k (lab3/py/train.py, TRAIN cœurs), et les parties du cycle k+1 jouées
 #     par le réseau k−1 (PLAY cœurs) : un cycle de retard, comme les joueurs d'AlphaZero et de
 #     KataGo pendant que le réseau apprend ;
-#   - puis, tous les ARENA_EVERY pas et au dernier, le duel du réseau k contre REF (c000 par défaut)
-#     aux tailles P, mêmes donnes à chaque fois (graine 1004), arrêté par le test séquentiel. Les
+#   - puis, tous les ARENA_EVERY pas (chaque pas sur GPU, tous les 4 sur CPU) et au dernier, le duel
+#     du réseau k contre REF (c000 par défaut) aux tailles P, mêmes donnes à chaque fois (graine
+#     1004), arrêté par le test séquentiel ; sur GPU avec DEVICE. Les
 #     arènes face aux IA du jeu (Difficile, Normale) ne mesurent plus les progrès à ce niveau
 #     (lab2/journal.md) et prenaient la moitié d'un pas.
 # Le réseau de départ c000 est le généraliste de lab2 (lab3/nets/start.bin, son c060). Il joue
@@ -41,7 +42,12 @@ GAMES=${GAMES:-25000}
 DEALS=${DEALS:-460}
 REF=${REF:-c000}
 STOP=${STOP:-3}
-ARENA_EVERY=${ARENA_EVERY:-4}
+# sur GPU, un duel prend moins d'une minute (lab3 arena --device vulkan) : à chaque pas ; sur CPU,
+# ~15 min : tous les 4 pas
+case "$DEVICE" in
+  cpu) ARENA_EVERY=${ARENA_EVERY:-4} ;;
+  *) ARENA_EVERY=${ARENA_EVERY:-1} ;;
+esac
 SEED_BASE=${SEED_BASE:-30000000}
 DEVICE=${DEVICE:-cpu}
 case "$DEVICE" in
@@ -119,7 +125,7 @@ arenas() { # réseau, pas : son duel contre REF, tous les ARENA_EVERY pas et au 
   [ -f "$OUT/duel-$c-$REF.tsv" ] && return 0
   start=$(date +%s)
   $LAB arena --hero "az:net=$OUT/$c.bin,n=200" --field "az:net=$OUT/$REF.bin,n=200" --players "$P" \
-    --deals "$DEALS" --seed 1004 --stop "$STOP" --threads "$THREADS" --out "$OUT/duel-$c-$REF.tmp" \
+    --deals "$DEALS" --seed 1004 --stop "$STOP" --threads "$THREADS" --device "$DEVICE" --out "$OUT/duel-$c-$REF.tmp" \
     > "$OUT/duel-$c-$REF.txt"
   mv "$OUT/duel-$c-$REF.tmp" "$OUT/duel-$c-$REF.tsv"
   log "$c face à $REF : $(($(date +%s) - start)) s, $(grep -E '^(arrêt|test séquentiel)' "$OUT/duel-$c-$REF.txt")"
