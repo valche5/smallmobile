@@ -393,6 +393,43 @@ joue qu'à sa taille, et se compare à lab2 à cette taille seulement :
 Scores du protocole (`labtools/score.py`), à 4 joueurs seulement : l'écart à une victoire sur
 quatre, de −25 (jamais) à +75 (toujours) ; n = 200.
 
+### Sortir du plateau : essai d'un réseau approfondi, 128x6 (23 octobre, en cours)
+
+Le plateau ne date pas de la reprise : dans lab2, c060 ne battait déjà plus c050 (+0,2 ± 1,5),
+tout le gain de la troisième boucle venait de c041 à c050. La reprise de cette nuit repart de ce
+plateau avec le même réseau 128x4 et la même recette : c015 contre c000 = −0,0 ± 2,2 (CPU),
+−0,5 ± 2,1 (GPU). Pistes, de la plus prometteuse à la moins :
+
+1. **Plus de capacité** : lab2 a mesuré qu'un réseau plus large aide la valeur, la possession et
+   la politique quand les parties suffisent. Le shader accepte jusqu'à 7 couches en largeur 128
+   (256 demanderait de le refaire : sa mémoire partagée ne tiendrait plus). Plutôt que de repartir
+   de zéro, **approfondir** : `py/deepen.py` ajoute des couches dont les branches résiduelles partent
+   de zéro, le réseau joue d'abord exactement comme l'ancien puis apprend avec plus de capacité.
+2. **De meilleures cibles** : n = 400 pour les recherches complètes (avec n = 200 et 16 coups
+   retenus, la politique améliorée reste proche du réseau).
+3. **Un taux d'apprentissage plus bas** (ou une moyenne des poids) : chaque pas refait un cycle
+   complet à 5e-4 sur un réseau mûr.
+4. **Vérifier la recherche groupée** (jamais comparée en arène à l'ancienne ; toutes les parties
+   de lab3 en viennent).
+
+Essai de la piste 1, `deep6` : c015 approfondi à 6 couches (`runs/deep6/c016.bin`, mêmes sorties
+que c015), fenêtre de départ c010…c016 de la reprise (liens dans `data/deep6`), puis pas 17 à 30
+avec la boucle accélérée (duel contre c000 sur GPU à chaque pas). Selfplay à 6 couches ~3 280
+positions/s (−12 %). Lancé à 13:52 en service utilisateur, 3 h au plus :
+
+```sh
+systemd-run --user --unit=lab3-deep6 --working-directory=$PWD --setenv=DEVICE=vulkan \
+  --setenv=PARALLEL=0 --setenv=THREADS=20 --setenv=GAMES=25000 --setenv=SEED_BASE=30000060 \
+  --setenv=RUN=deep6 --setenv=START=17 --setenv=LAB3_CONCURRENT=16 --setenv=PYTHONUNBUFFERED=1 \
+  --setenv=PATH="$PATH" timeout --kill-after=30s 3h lab3/loop.sh 2,3,4,5 30
+```
+
+Suivi : `lab3/runs/deep6/log.txt` ; arrêt : `systemctl --user stop lab3-deep6`.
+
+Premier pas (c017) : la boucle accélérée tourne de bout en bout en **407 s par pas** (parties
+260 s, apprentissage 111 s dont 35 de chargement et compactage, duel 36 s), contre ~1 070 la
+nuit dernière. c017 contre c000 : −3,4 ± 3,3 (arrêt après 184 donnes, « 0 plutôt que 3 »).
+
 ### Reprise généraliste depuis c060, arrêt à la validation de c016 (23 octobre)
 
 Campagne locale du 23 octobre, de 03:55:58 à 07:56:47 CEST, environ 4 h : 16 cycles de 25 000
