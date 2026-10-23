@@ -500,6 +500,23 @@ service `lab3-deep6-cont`, lancé à 20:20, jusqu'à c060). Deux lenteurs trouv�
   (`posix_fadvise`). c057 : 136 s au lieu de 201 (chargement 24 s, entraînement 104 s) sur une
   fenêtre plus grande (15,4 millions).
 
+Pas 51 à 60, fini à 21:56. Duels contre c000, tous « gain de 3 points plutôt que 0 », de +3,4 à
++9,5 (c058 +8,3, c059 +9,5, c060 +5,7). Confirmations sur 920 donnes neuves (graine 1005) :
+
+| Duel | Score | 2 joueurs | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- |
+| c060 contre c050 | **+1,7 ± 1,5** | +2,2 | +2,9 | −0,6 | +2,5 |
+| c060 contre c000 | **+6,4 ± 1,5** | +3,0 | +5,4 | +8,3 | +8,7 |
+
+Le continu garde le rythme du taux plus bas (+1,7 en 10 pas, contre +2,9 pour c050 contre c040),
+sans gain net de plus : pas significatif. Face à c000, la progression continue (c040 +4,9,
+c050 +5,8, c060 +6,4). Gardé pour la suite (rien ne dit qu'il nuit, et il évite de remonter le
+taux à chaque pas).
+
+Essai 3 : n = 800 pour les recherches complètes, en continu depuis c060 (même taux), c061 à
+c070 (service `lab3-deep6-n800`, lancé à 22:00) ; mesure : c070 contre c060. Disque : 138 Go
+libres, ~6,3 Go par cycle (le `.pos` en fait 5,3).
+
 Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
 (`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En
 RAM, la fenêtre aurait pris ~31 Go vers c060 sur les 32 du PC ; mappée, le noyau peut rendre les
