@@ -5,8 +5,10 @@
 #     cycles jusqu'au cycle k (lab3/py/train.py, TRAIN cœurs), et les parties du cycle k+1 jouées
 #     par le réseau k−1 (PLAY cœurs) : un cycle de retard, comme les joueurs d'AlphaZero et de
 #     KataGo pendant que le réseau apprend ;
-#   - puis les arènes du réseau k face à Difficile et Normale, à P joueurs (mêmes donnes à chaque
-#     pas).
+#   - puis, tous les ARENA_EVERY pas et au dernier, le duel du réseau k contre REF (c000 par défaut)
+#     aux tailles P, mêmes donnes à chaque fois (graine 1004), arrêté par le test séquentiel. Les
+#     arènes face aux IA du jeu (Difficile, Normale) ne mesurent plus les progrès à ce niveau
+#     (lab2/journal.md) et prenaient la moitié d'un pas.
 # Le réseau de départ c000 est le généraliste de lab2 (lab3/nets/start.bin, son c060). Il joue
 # d'abord, avec tous les cœurs, les cycles 1 à F qui remplissent la fenêtre minimale
 # (lab3/py/data.py : `filled`, F = 4 à 4 joueurs) ; le premier pas est F (réseau cF entraîné depuis
@@ -15,14 +17,15 @@
 #   lab3/loop.sh P N      remplit la fenêtre, puis fait les pas F à N du réseau à P joueurs ; une
 #                         étape déjà faite est sautée (reprise)
 #
-# Parties : lab3/data/pP/cNNN ; réseaux : lab3/runs/pP/cNNN.bin ; arènes
-# lab3/runs/pP/arena-cNNN-{hard,normal}.tsv ; journal lab3/runs/pP/log.txt (durée de chaque
+# Parties : lab3/data/pP/cNNN ; réseaux : lab3/runs/pP/cNNN.bin ; duels
+# lab3/runs/pP/duel-cNNN-REF.tsv ; journal lab3/runs/pP/log.txt (durée de chaque
 # étape). Sur AWS : --save lab3/data/pP,lab3/runs/pP. Réglages (essais sur mini) : GAMES, DEALS,
 # PLAY, TRAIN ; DEVICE=vulkan : le réseau des parties sur GPU (`lab3 selfplay --device vulkan`).
 # L'entraînement Python prend le GPU quand il y en a un, indépendamment de DEVICE.
-# MMAP=1 : fenêtre lue depuis les fichiers, seuls les lots sont copiés en RAM.
+# La fenêtre de l'apprentissage est lue sous forme compacte (lab3/py/data.py, `pack` : un fichier
+# `.pos.packed.npz` fait une fois à côté de chaque `.pos`), en RAM.
 # Sur GPU : étapes successives par défaut (PARALLEL=0), THREADS fils de jeu (tous les cœurs par
-# défaut). TRAIN règle seulement les opérations CPU de PyTorch ; aucun cœur ne lui est réservé.
+# défaut) ; les parties du cycle k+1 y sont jouées par le réseau k, qui vient d'apprendre. TRAIN règle seulement les opérations CPU de PyTorch ; aucun cœur ne lui est réservé.
 # Sur CPU : PARALLEL=1 conserve le recouvrement historique avec PLAY et TRAIN cœurs.
 # SEED_BASE=30000060 : continuer les graines après les 60 cycles de lab2 (défaut : 30000000).
 # Pour une liste, les chemins utilisent des tirets (p2-3-4-5) : une virgule sépare les options
@@ -33,7 +36,12 @@ P=${1:?le nombre de joueurs}
 GROUP=${P//,/-}
 LAST=${2:?le nombre de pas}
 GAMES=${GAMES:-25000}
+# le duel de mesure (`arenas`) : contre REF, n = 200 des deux côtés, DEALS donnes au plus, arrêté
+# dès que le test séquentiel conclut entre un gain de STOP points et rien (labtools/README.md)
 DEALS=${DEALS:-460}
+REF=${REF:-c000}
+STOP=${STOP:-3}
+ARENA_EVERY=${ARENA_EVERY:-4}
 SEED_BASE=${SEED_BASE:-30000000}
 DEVICE=${DEVICE:-cpu}
 case "$DEVICE" in
@@ -50,8 +58,6 @@ else
   THREADS=$PLAY
   TRAIN=${TRAIN:-4}
 fi
-train_args=()
-[ "${MMAP:-0}" != 1 ] || train_args+=(--mmap)
 DATA=lab3/data/p$GROUP
 OUT=lab3/runs/p$GROUP
 TMP=lab3/data/tmp
@@ -65,8 +71,13 @@ filled() { # cycle : oui si la fenêtre minimale est remplie, non sinon
   (cd lab3/py && .venv/bin/python -c "from data import filled; print('oui' if filled('../data/p$GROUP', '$1') else 'non')")
 }
 
-player() { # le réseau qui joue le cycle k : c000 jusqu'au premier pas compris, puis k−2
-  if [ "$1" -le $((first + 1)) ]; then echo c000; else name $(($1 - 2)); fi
+player() { # le réseau qui joue le cycle k. En parallèle : c000 jusqu'au premier pas compris, puis
+  # k−2 (le cycle k se joue pendant l'apprentissage de k−1). En successif : le dernier appris, k−1.
+  if [ "$PARALLEL" = 1 ]; then
+    if [ "$1" -le $((first + 1)) ]; then echo c000; else name $(($1 - 2)); fi
+  else
+    if [ "$1" -le "$first" ]; then echo c000; else name $(($1 - 1)); fi
+  fi
 }
 
 games() { # cycle, réseau, cœurs : écrites à part, puis déplacées. Un cycle fini a ses fichiers
@@ -93,7 +104,7 @@ train() { # réseau, réseau de départ
   [ -f "$OUT/$c.bin" ] && return 0
   start=$(date +%s)
   if ! (cd lab3/py && .venv/bin/python train.py --cycles "../data/p$GROUP" --last "$c" --init "../runs/p$GROUP/$prev.bin" \
-    --out "../runs/p$GROUP/$c.tmp.bin" --threads "$TRAIN" "${train_args[@]}") > "$OUT/$c-train.log" 2>&1; then
+    --out "../runs/p$GROUP/$c.tmp.bin" --threads "$TRAIN") > "$OUT/$c-train.log" 2>&1; then
     tail -20 "$OUT/$c-train.log"
     return 1
   fi
@@ -102,19 +113,16 @@ train() { # réseau, réseau de départ
   sed 's/^/    /' "$OUT/$c-train.log" | grep -v "écrit" | tee -a "$OUT/log.txt"
 }
 
-arenas() { # réseau
-  local c=$1 field seed start
-  for field in hard normal; do
-    [ -f "$OUT/arena-$c-$field.tsv" ] && continue
-    start=$(date +%s)
-    seed=1002
-    [ "$field" = normal ] && seed=1003
-    $LAB arena --hero "az:net=$OUT/$c.bin,n=200" --field "$field" --players "$P" --deals "$DEALS" --seed "$seed" \
-      --threads "$THREADS" --out "$OUT/arena-$c-$field.tmp" > "$OUT/arena-$c-$field.txt"
-    mv "$OUT/arena-$c-$field.tmp" "$OUT/arena-$c-$field.tsv"
-    log "$c face à $field : $(($(date +%s) - start)) s, \
-$(python3 labtools/score.py "$OUT/arena-$c-$field.tsv" --role 0 | grep '^score')"
-  done
+arenas() { # réseau, pas : son duel contre REF, tous les ARENA_EVERY pas et au dernier
+  local c=$1 k=$2 start
+  [ $((k % ARENA_EVERY)) -eq 0 ] || [ "$k" -eq "$LAST" ] || return 0
+  [ -f "$OUT/duel-$c-$REF.tsv" ] && return 0
+  start=$(date +%s)
+  $LAB arena --hero "az:net=$OUT/$c.bin,n=200" --field "az:net=$OUT/$REF.bin,n=200" --players "$P" \
+    --deals "$DEALS" --seed 1004 --stop "$STOP" --threads "$THREADS" --out "$OUT/duel-$c-$REF.tmp" \
+    > "$OUT/duel-$c-$REF.txt"
+  mv "$OUT/duel-$c-$REF.tmp" "$OUT/duel-$c-$REF.tsv"
+  log "$c face à $REF : $(($(date +%s) - start)) s, $(grep -E '^(arrêt|test séquentiel)' "$OUT/duel-$c-$REF.txt")"
 }
 
 # en cas d'arrêt, les étapes lancées en même temps s'arrêtent aussi (par numéro de processus)
@@ -135,7 +143,9 @@ done
 
 for k in $(seq "$first" "$LAST"); do
   c=$(name "$k")
-  prev=$(player $((k + 1)))
+  # le départ de l'apprentissage : le dernier réseau appris (en parallèle, c'est aussi celui qui
+  # joue le cycle k+1 pendant ce temps)
+  if [ "$k" -le "$first" ]; then prev=c000; else prev=$(name $((k - 1))); fi
   # les parties du cycle k (déjà jouées au pas précédent, sauf à une reprise)
   games "$c" "$(player "$k")" "$THREADS"
   if [ "$PARALLEL" = 1 ]; then
@@ -154,5 +164,5 @@ for k in $(seq "$first" "$LAST"); do
     # Un seul utilisateur du GPU : les parties du cycle suivant seront jouées au tour suivant.
     train "$c" "$prev"
   fi
-  arenas "$c"
+  arenas "$c" "$k"
 done

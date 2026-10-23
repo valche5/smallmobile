@@ -127,44 +127,132 @@ def in_validation(keys, share):
     return keys % np.uint64(10_000) < np.uint64(round(share * 10_000))
 
 
-class MappedRecords:
-    """Les fichiers d'une fenêtre, sans copie complète en RAM ; seuls les lots sont copiés."""
+# La forme compacte d'un fichier de positions (`pack`), à côté de lui : ce qui n'est pas vide d'un
+# enregistrement de 6 210 octets, ~1,9 Ko par position (octets non nuls des régions et de la partie,
+# un indice de 16 bits et une valeur chacun ; politique des seuls coups possibles ; voisines et
+# propriétaires des régions présentes). La fenêtre entière tient alors en RAM : lue au hasard dans
+# les fichiers mappés, elle faisait attendre l'apprentissage 80 ms par lot de 512 (lab3/journal.md).
+PACKED = ".packed.npz"
+# les octets des régions puis ceux de la partie, en un seul vecteur creux
+SPARSE = REGIONS * NODE + GLOBAL
+
+
+def pack(f):
+    """La forme compacte du fichier de positions `f` (faite une fois, puis relue)."""
+    out = f.with_name(f.name + PACKED)
+    if out.exists() and out.stat().st_mtime >= f.stat().st_mtime:
+        return out
+    r = np.fromfile(f, dtype=RECORD)
+    n = len(r)
+    counts = games(f, n)
+    keys = np.repeat(map_keys(r[np.cumsum(counts) - counts]), counts) if n else np.empty(0, np.uint64)
+    present = np.arange(REGIONS)[None, :] < r["regions"][:, None].astype(np.int64)
+    dense = np.concatenate([r["node"].reshape(n, -1), r["glob"]], 1)
+    pos, col = np.nonzero(dense)
+    legal = r["policy"] != ILLEGAL
+    lpos, key = np.nonzero(legal)
+    tmp = out.with_name(out.name + ".tmp")
+    with open(tmp, "wb") as fh:
+        np.savez(
+            fh,
+            players=r["players"],
+            regions=r["regions"],
+            weight=r["weight"],
+            win=r["win"],
+            gain=r["gain"],
+            keys=keys,
+            owner=r["owner"][present],
+            adj=r["adj"][present],
+            nz_count=np.bincount(pos, minlength=n).astype(np.uint16),
+            nz_idx=col.astype(np.uint16),
+            nz_val=dense[pos, col],
+            pol_count=np.bincount(lpos, minlength=n).astype(np.uint16),
+            pol_key=key.astype(np.uint16),
+            pol_val=r["policy"][lpos, key],
+        )
+    tmp.rename(out)
+    return out
+
+
+def _segments(begin, count, sel):
+    """Les éléments des positions `sel` dans un tableau à la suite (`begin`, `count` par position) :
+    leur indice, la position de chacun dans `sel`, et son rang dans sa position."""
+    c = count[sel].astype(np.int64)
+    first = np.cumsum(c) - c
+    rank = np.arange(int(c.sum())) - np.repeat(first, c)
+    return np.repeat(begin[sel], c) + rank, np.repeat(np.arange(len(sel)), c), rank
+
+
+class Packed:
+    """Une fenêtre sous forme compacte, en RAM (`pack`) ; `take` redonne les champs pleins de
+    `RECORD` d'un lot, `packed["weight"]` les petits champs d'une position."""
+
+    SMALL = ("players", "regions", "weight", "win", "gain", "keys")
+    SEGMENTED = (("owner", "regions"), ("adj", "regions"), ("nz_idx", "nz_count"), ("nz_val", "nz_count"),
+                 ("pol_key", "pol_count"), ("pol_val", "pol_count"))
 
     def __init__(self, files):
-        self.parts = [np.memmap(f, dtype=RECORD, mode="r", shape=(n,)) for f, n in files if n]
-        self.ends = np.cumsum([len(p) for p in self.parts])
-        self.dtype = RECORD
+        parts = [np.load(f) for f in files]
+        small = {k: np.concatenate([p[k] for p in parts]) for k in self.SMALL + ("nz_count", "pol_count")}
+        self.__dict__.update(small)
+        # les grands tableaux remplis fichier par fichier : pas de copie entière en plus
+        for name, _ in self.SEGMENTED:
+            total = sum(p[name].shape[0] for p in parts)
+            first = parts[0][name] if parts else np.empty(0, np.uint8)
+            arr = np.empty((total,) + first.shape[1:], first.dtype)
+            at = 0
+            for p in parts:
+                a = p[name]
+                arr[at : at + len(a)] = a
+                at += len(a)
+                del a
+            setattr(self, name, arr)
+        def begin(count):
+            c = count.astype(np.int64)
+            return np.cumsum(c) - c
+        self.rows_at, self.nz_at, self.pol_at = begin(self.regions), begin(self.nz_count), begin(self.pol_count)
 
     def __len__(self):
-        return int(self.ends[-1]) if len(self.ends) else 0
+        return len(self.players)
 
-    def __getitem__(self, index):
-        if isinstance(index, str):
-            # Les poids de tirage sont petits (4 octets par position), contrairement aux entrées.
-            return np.concatenate([p[index] for p in self.parts]) if self.parts else np.empty(0, RECORD[index])
-        if isinstance(index, slice):
-            index = np.arange(*index.indices(len(self)))
-        idx = np.asarray(index, dtype=np.int64)
-        idx = np.where(idx < 0, idx + len(self), idx)
-        if np.any((idx < 0) | (idx >= len(self))):
-            raise IndexError("position hors de la fenêtre")
-        flat = idx.reshape(-1)
-        blocks = np.searchsorted(self.ends, flat, side="right")
-        out = np.empty(len(flat), dtype=RECORD)
-        for block in np.unique(blocks):
-            mask = blocks == block
-            start = self.ends[block - 1] if block else 0
-            out[mask] = self.parts[block][flat[mask] - start]
-        return out.reshape(idx.shape)[()] if idx.ndim == 0 else out.reshape(idx.shape)
+    def __getitem__(self, name):
+        return getattr(self, name)
+
+    def take(self, sel):
+        """Les champs pleins (`RECORD`) des positions `sel`."""
+        n = len(sel)
+        out = {k: getattr(self, k)[sel] for k in ("players", "regions", "weight", "win", "gain")}
+        ids, b, rank = _segments(self.rows_at, self.regions, sel)
+        out["owner"] = np.full((n, REGIONS), OFF_MAP, np.uint8)
+        out["owner"][b, rank] = self.owner[ids]
+        out["adj"] = np.zeros((n, REGIONS), np.uint64)
+        out["adj"][b, rank] = self.adj[ids]
+        ids, b, _ = _segments(self.nz_at, self.nz_count, sel)
+        dense = np.zeros((n, SPARSE), np.uint8)
+        dense[b, self.nz_idx[ids]] = self.nz_val[ids]
+        out["node"] = np.ascontiguousarray(dense[:, : REGIONS * NODE]).reshape(n, REGIONS, NODE)
+        out["glob"] = np.ascontiguousarray(dense[:, REGIONS * NODE :])
+        ids, b, _ = _segments(self.pol_at, self.pol_count, sel)
+        out["policy"] = np.full((n, KEYS), ILLEGAL, np.uint16)
+        out["policy"][b, self.pol_key[ids]] = self.pol_val[ids]
+        return out
 
 
-def load(paths, keep=None, mmap=False):
+def load_packed(paths):
+    """La fenêtre des fichiers (ou dossiers) donnés, sous forme compacte (`Packed`), et la clé de la
+    partie de chaque position (`map_keys`)."""
+    files = []
+    for path in paths:
+        p = Path(path)
+        files += sorted(p.rglob("*" + SUFFIX)) if p.is_dir() else [p]
+    recs = Packed([pack(f) for f in files])
+    return recs, recs.keys
+
+
+def load(paths, keep=None):
     """Les enregistrements des fichiers (ou dossiers) donnés, en un seul tableau, et la clé de la
     partie de chacun (`map_keys`, pour séparer la validation). `keep` : ne garder que certaines
-    parties (fonction des clés qui rend un masque, comme `in_validation`). `mmap` garde les fichiers
-    sur disque et ne copie en RAM que les lots demandés (sans filtre `keep`)."""
-    if mmap and keep is not None:
-        raise ValueError("mmap ne prend pas de filtre keep")
+    parties (fonction des clés qui rend un masque, comme `in_validation`)."""
     files = []
     for path in paths:
         p = Path(path)
@@ -177,10 +265,6 @@ def load(paths, keep=None, mmap=False):
         keys = np.repeat(map_keys(m[np.cumsum(counts) - counts]), counts)
         del m
         plan.append((f, count, keys, None if keep is None else keep(keys)))
-    if mmap:
-        recs = MappedRecords([(f, count) for f, count, _, _ in plan])
-        keys = np.concatenate([keys for _, _, keys, _ in plan]) if plan else np.empty(0, dtype=np.uint64)
-        return recs, keys
     total = sum(len(keys) if sel is None else int(sel.sum()) for _, _, keys, sel in plan)
     recs = np.empty(total, dtype=RECORD)
     out = np.empty(total, dtype=np.uint64)

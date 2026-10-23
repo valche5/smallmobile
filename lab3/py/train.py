@@ -24,13 +24,15 @@ Validation en 32 bits. Sans `torch.compile` : sur c7a.16xlarge, 16 cœurs, bf16,
 import argparse
 import math
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-from data import ILLEGAL, OFF_MAP, OWNERS, chosen, in_validation, load as load_data
+from data import ILLEGAL, OFF_MAP, OWNERS, Packed, chosen, in_validation, load_packed
 from model import GAIN_SCALE, export, load as load_net, unpack_adj
 
 LR = 5e-4
@@ -41,31 +43,57 @@ USES = 4
 # poids des pièces gagnées et des propriétaires dans la perte (KataGo : 1,5 pour la propriété)
 GAIN_WEIGHT = 0.25
 OWN_WEIGHT = 1.5
-# part des parties gardées pour la validation (`in_validation`)
+# part des parties gardées pour la validation (`in_validation`), et de celles qui servent à la
+# mesurer : un sous-ensemble fixe des premières (mêmes parties d'un pas à l'autre, ~40 000 positions
+# pour une fenêtre de 6,8 millions ; la validation entière prenait jusqu'à 45 s)
 VAL_SHARE = 0.05
+VAL_MEASURE = 0.006
+# lots préparés d'avance (`batches`)
+AHEAD = 3
+def fields(recs, sel):
+    """Les champs pleins des positions `sel` : d'une fenêtre compacte (`Packed`), ou d'un tableau
+    d'enregistrements."""
+    if isinstance(recs, Packed):
+        return recs.take(sel)
+    recs_sel = recs[sel]
+    # Copie obligatoire : le pas d'un enregistrement (6210 octets) n'aligne pas les f32.
+    # Avec une seule position, NumPy juge la vue contiguë et ascontiguousarray la garde,
+    # mais PyTorch refuse encore son pas de 6210 octets. copy remet aussi ce pas à plat.
+    return {name: recs_sel[name].copy(order="C") for name in recs_sel.dtype.names}
+
+
 def batches(recs, idx, size, device):
-    for start in range(0, len(idx), size):
-        sel = np.sort(idx[start : start + size])
-        recs_sel = recs[sel]
-        # Copie obligatoire : le pas d'un enregistrement (6210 octets) n'aligne pas les f32.
-        # Avec une seule position, NumPy juge la vue contiguë et ascontiguousarray la garde,
-        # mais PyTorch refuse encore son pas de 6210 octets. copy remet aussi ce pas à plat.
-        r = {name: recs_sel[name].copy(order="C") for name in recs_sel.dtype.names}
-        policy = torch.from_numpy(r["policy"].astype(np.int32)).to(device)
-        legal = policy != ILLEGAL
-        policy = torch.where(legal, policy, 0).float()
-        yield dict(
-            node=torch.from_numpy(r["node"]).to(device),
-            glob=torch.from_numpy(r["glob"]).to(device),
-            adj=unpack_adj(torch.from_numpy(r["adj"].astype(np.int64)).to(device)),
-            regions=torch.from_numpy(r["regions"].astype(np.int64)).to(device),
-            players=torch.from_numpy(r["players"].astype(np.int64)).to(device),
-            legal=legal,
-            policy=policy / policy.sum(1, keepdim=True).clamp(min=1),
-            win=torch.from_numpy(r["win"]).to(device),
-            gain=torch.from_numpy(r["gain"]).to(device) / GAIN_SCALE,
-            owner=torch.from_numpy(r["owner"].astype(np.int64)).to(device),
-        )
+    """Les lots des positions `idx`, de `size` positions, sur `device` ; chacun préparé d'avance
+    dans un autre fil (`AHEAD` lots), pendant que le GPU calcule les précédents."""
+    starts = range(0, len(idx), size)
+    with ThreadPoolExecutor(1) as pool:
+        ahead = deque()
+        for start in starts:
+            ahead.append(pool.submit(fields, recs, np.sort(idx[start : start + size])))
+            if len(ahead) <= AHEAD:
+                continue
+            yield tensors(ahead.popleft().result(), device)
+        while ahead:
+            yield tensors(ahead.popleft().result(), device)
+
+
+def tensors(r, device):
+    """Un lot (`fields`) en tenseurs, cibles normalisées."""
+    policy = torch.from_numpy(r["policy"].astype(np.int32)).to(device)
+    legal = policy != ILLEGAL
+    policy = torch.where(legal, policy, 0).float()
+    return dict(
+        node=torch.from_numpy(r["node"]).to(device),
+        glob=torch.from_numpy(r["glob"]).to(device),
+        adj=unpack_adj(torch.from_numpy(r["adj"].astype(np.int64)).to(device)),
+        regions=torch.from_numpy(r["regions"].astype(np.int64)).to(device),
+        players=torch.from_numpy(r["players"].astype(np.int64)).to(device),
+        legal=legal,
+        policy=policy / policy.sum(1, keepdim=True).clamp(min=1),
+        win=torch.from_numpy(r["win"]).to(device),
+        gain=torch.from_numpy(r["gain"]).to(device) / GAIN_SCALE,
+        owner=torch.from_numpy(r["owner"].astype(np.int64)).to(device),
+    )
 
 
 METRICS = ("politique", "valeur", "pièces", "propriétaires", "précision", "brier")
@@ -126,7 +154,6 @@ def main():
     ap.add_argument("--init", required=True, help="le réseau qui a joué le dernier cycle (.bin)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--threads", type=int, help="cœurs de PyTorch")
-    ap.add_argument("--mmap", action="store_true", help="lire les lots depuis les fichiers, sans charger toute la fenêtre en RAM")
     ap.add_argument("--seed", type=int, default=0, help="ordre des lots")
     args = ap.parse_args()
 
@@ -135,18 +162,18 @@ def main():
         torch.set_num_threads(args.threads)
     start = time.time()
     dirs, new = chosen(args.cycles, args.last)
-    recs, keys = load_data(dirs, mmap=args.mmap)
+    recs, keys = load_packed(dirs)
     rng = np.random.default_rng(args.seed)
     # validation sur des parties entières, choisies par une règle fixe (`in_validation`) : aucune
     # position d'une partie vue à l'entraînement, ni par ce réseau ni par les suivants
     is_val = in_validation(keys, VAL_SHARE)
-    val_idx, train_idx = np.flatnonzero(is_val), np.flatnonzero(~is_val)
+    val_idx, train_idx = np.flatnonzero(in_validation(keys, VAL_MEASURE)), np.flatnonzero(~is_val)
     # au moins 20 lots : le taux en un cycle (OneCycleLR) demande une montée d'au moins un lot
     steps = max(20, math.ceil(USES * new / BATCH))
     print(
         f"fenêtre {dirs[0].name}…{dirs[-1].name} : {len(recs)} positions de {len(np.unique(keys))} parties "
         f"({len(val_idx)} positions pour la validation) ; {new} nouvelles, {steps} lots ; "
-        f"chargement {time.time() - start:.0f} s ; {device}, {'fichiers mappés' if args.mmap else 'données en RAM'}",
+        f"chargement {time.time() - start:.0f} s ; {device}",
         flush=True,
     )
 

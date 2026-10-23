@@ -45,14 +45,28 @@ Celui de lab2 (voir son journal), sauf :
   cycles, 275 000 parties).
 - **Ordre des étapes** : sur GPU (`DEVICE=vulkan`), génération, entraînement et arènes sont
   successifs par défaut (`PARALLEL=0`) : pas de partage statique des cœurs ni de concurrence entre
-  Vulkan et ROCm. La génération et les arènes utilisent `THREADS` fils (tous par défaut) ; `TRAIN`
-  règle les opérations CPU de PyTorch (4 par défaut), sans réservation de cœurs. Sur CPU,
-  `PARALLEL=1` garde la recette AWS historique : 48 fils pour les parties et 16 pour l'apprentissage
-  simultanés, tous les 64 pour le remplissage et les arènes.
-- **Mémoire sur le PC** : `MMAP=1 lab3/loop.sh …` passe `--mmap` à `train.py` : les fichiers
-  `.pos` restent mappés en lecture et seuls les lots sont copiés. La fenêtre et le tirage pondéré
-  restent les mêmes ; le système peut libérer leurs pages pour les autres applications. Sans
-  cette option, le chargement complet en RAM reste le défaut.
+  Vulkan et ROCm. Les parties du cycle k+1 y sont jouées par le réseau k, qui vient d'apprendre
+  (jusqu'au 23 octobre midi, par k−1 : un retard qui ne servait qu'au recouvrement). La
+  génération et les arènes utilisent `THREADS` fils (tous par défaut) ; `TRAIN` règle les
+  opérations CPU de PyTorch (4 par défaut), sans réservation de cœurs. Sur CPU, `PARALLEL=1` garde
+  la recette AWS historique : 48 fils pour les parties et 16 pour l'apprentissage simultanés, tous
+  les 64 pour le remplissage et les arènes.
+- **Mesure de chaque pas** (depuis le 23 octobre midi) : tous les `ARENA_EVERY` pas (4) et au
+  dernier, un duel contre `REF` (c000), n = 200 des deux côtés, 460 donnes au plus (graine 1004),
+  arrêté par le test séquentiel « 3 points ou rien » (`STOP`). Les arènes face à Difficile et
+  Normale à chaque pas prenaient la moitié d'un pas (~540 s sur 1 070) et ne mesurent plus les
+  progrès à ce niveau (lab2/journal.md, troisième boucle). Un duel sur le CPU (20 fils) :
+  ~860 s quand le test ne conclut qu'à la fin (c015 contre c000), soit ~215 s par pas.
+- **Fenêtre en RAM, sous forme compacte** (`data.py`, `pack`, `Packed`) : chaque fichier `.pos`
+  a, à côté, un `.pos.packed.npz` fait une fois (~25 s par cycle de 25 000 parties) : les octets
+  non nuls des régions et de la partie (indice de 16 bits, valeur), la politique des seuls coups
+  possibles, voisines et propriétaires des régions présentes : 1 938 octets par position au lieu de
+  6 210. La fenêtre de 6,8 millions de positions passe de ~42 Go (plus que les 31 Go du PC : lue
+  au hasard dans les fichiers mappés, 81 ms par lot de 512, contre 8,6 ms de calcul sur le GPU)
+  à 13,2 Go en RAM ; un lot se redéploie en 2 ms, dans un autre fil pendant que le GPU calcule.
+  Champs identiques au bit près aux fichiers (test `test_train.py`, et sur des lots réels).
+  Apprentissage de c016 sur cette fenêtre : 284 → **56 s**. La validation se mesure sur un
+  sous-ensemble fixe des parties réservées (`VAL_MEASURE`, ~40 000 positions) : 45 → 2 s.
 - **Témoin de l'arène** : l'Expert de lab2 (`lab2:net=lab2/nets/….bin,n=…`, `lab2/brain`), tel
   qu'il joue dans le jeu ; plus de témoin lab1.
 - **Moteur de génération des parties** (`selfplay::run`, `batch`, demande de l'utilisateur :
@@ -394,7 +408,10 @@ pondérées également, intervalles à 95 %. Les résultats de c060 sont ceux ar
 
 **Aucun gain démontré face à c060.** Comparaison appariée sur les donnes communes avec
 `labtools/score.py` : c015 − c060 = **−0,9 ± 2,8 points face à Difficile**, **−2,2 ± 2,5 face à
-Normale**, les deux indécis. C'est une comparaison de performances contre les IA du jeu, pas
+Normale**, les deux indécis. Duel direct ensuite (23 octobre, 460 donnes, graine 1004, n = 200
+des deux côtés, 859 s sur le CPU) : **c015 contre c000 = −0,0 ± 2,2 points** (2 joueurs +0,2,
+3 joueurs −1,8, 4 joueurs −2,4, 5 joueurs −3,0 d'avance moyenne) ; test séquentiel : « 0 plutôt
+que 3 points ». C'est une comparaison de performances contre les IA du jeu, pas
 un duel direct entre ces réseaux. Les conclusions de lab2 sur les limites de ces adversaires
 restent valables. Rapports : `runs/p2-3-4-5/comparison-c015-c060-{hard,normal}.txt`.
 
