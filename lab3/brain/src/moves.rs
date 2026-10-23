@@ -145,6 +145,41 @@ pub fn legal(g: &Game, k: &Knowledge) -> Moves {
     out
 }
 
+/// Ce que la descente d'une recherche doit savoir d'une position (`forced`) : son seul coup
+/// possible, s'il n'y en a qu'un ; sinon ses coups, s'ils ont été calculés.
+pub enum Forced {
+    One(Move),
+    Several(Option<Moves>),
+}
+
+/// `legal`, réduit à savoir si un seul coup est possible. En conquête, la fin des conquêtes l'est
+/// toujours : un autre coup suffit (déclin, abandon, berserk, la première région qui est une
+/// cible), sans calculer les cibles de toutes les régions, le plus cher de la descente d'une
+/// recherche. Dans les autres phases, `legal`, bon marché.
+pub fn forced(g: &Game, k: &Knowledge) -> Forced {
+    let s = &g.state;
+    if s.phase != Phase::Conquest {
+        let legal = legal(g, k);
+        return if legal.len() == 1 { Forced::One(legal[0].mv) } else { Forced::Several(Some(legal)) };
+    }
+    let army = s.turn.army.expect("peuple en action");
+    let rs = *s.race(army);
+    let t = &s.turn;
+    let abandon = t.conquests == 0 && !t.die_rolled && t.berserk_die.is_none();
+    let other = g.can_decline().is_ok()
+        || (abandon && g.owned(army).iter().any(|r| g.can_abandon(r).is_ok()))
+        || (rs.has(Power::Berserk) && t.berserk_die.is_none() && rs.hand >= 1)
+        || {
+            // comme `conquest`, région par région
+            let hold = g.foothold(army);
+            (0..g.map.len()).any(|i| {
+                let x = g.target(i, hold);
+                x.reachable() && (x.sorcery.allowed() || x.dragon.allowed() || (rs.hand >= 1 && x.kind != TargetKind::None))
+            })
+        };
+    if other { Forced::Several(None) } else { Forced::One(Move::EndConquest) }
+}
+
 fn conquest(g: &Game, out: &mut Moves) {
     let s = &g.state;
     let army = s.turn.army.expect("peuple en action");

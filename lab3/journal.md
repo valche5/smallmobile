@@ -190,6 +190,20 @@ Celui de lab2 (voir son journal), sauf :
   20 fils) : **~2 760 positions/s** (16 parties par fil ; 2 660 avec 24), contre ~2 100 ; les
   fils de jeu calculent ~90 % du temps, attendent 3 % : le jeu et la recherche sont de nouveau
   le frein.
+- **Profil du jeu et de la recherche** (`perf record --call-graph=fp`, binaire avec pointeurs de
+  cadre, selfplay GPU à 2 700 positions/s) : coups possibles (`moves::legal`, surtout
+  `Game::targets` : portée, coût, modificateurs de chaque région) 33 % des cycles, encodage 19 %,
+  arbre ~13 %, échange avec le GPU ~8 %, coups joués 5 %, allocations ~5 %, empreintes 4 % ; le
+  fil « gpu » un cœur entier (il surveille les fins en boucle). La descente calculait tous les
+  coups de chaque position traversée, pour savoir seulement si elle était forcée, puis les jetait
+  quand le nœud existait déjà. Chercher d'abord l'enfant sans coup forcé est faux : le même
+  résultat public du hasard peut être suivi d'un coup forcé dans un monde et pas dans un autre
+  (le marché vient de la pioche cachée). `moves::forced` répond à la seule question : en
+  conquête, un coup autre que la fin suffit (déclin, abandon, berserk, la première région qui est
+  une cible, `Game::target` région par région) ; les coups ne sont calculés en entier qu'aux
+  feuilles. Recherche identique au bit près (empreintes `lab3 speed` et selfplay de contrôle,
+  test `forced_moves_agree_with_legal`) ; selfplay de contrôle 8,65 → 7,08 s ; selfplay GPU
+  2 760 → **~3 300 positions/s**, GPU 940 000 évaluations/s, fils de jeu en attente 10 %.
 - **Deux défauts du compilateur de RADV** (Mesa 26.2.4, ACO, gfx1201), trouvés en comparant son
   assembleur (`RADV_DEBUG=shaders`) pour des variantes justes et fausses du shader. (1) En formant
   des paires d'instructions VOPD, ACO met une addition avec l'instruction qui produit l'une de ses

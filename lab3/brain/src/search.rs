@@ -701,22 +701,26 @@ impl Az {
                     // le coup, puis les coups forcés qui suivent, et le résultat de leur hasard
                     kw.play(&mut w, &mv).expect("coup possible");
                     let mut hash = fold(0, moves::chance(&w, &mv));
-                    let legal = loop {
+                    // les coups forcés qui suivent (sans calculer tous les coups d'une position qui
+                    // n'en a pas : `moves::forced`)
+                    let known = loop {
                         if w.state.phase == Phase::GameOver {
                             break None;
                         }
-                        let legal = moves::legal(&w, &kw);
-                        if legal.len() > 1 {
-                            break Some(legal);
+                        match moves::forced(&w, &kw) {
+                            moves::Forced::One(only) => {
+                                kw.play(&mut w, &only).expect("coup forcé");
+                                hash = fold(hash, moves::chance(&w, &only));
+                            }
+                            moves::Forced::Several(legal) => break Some(legal),
                         }
-                        kw.play(&mut w, &legal[0].mv).expect("coup forcé");
-                        hash = fold(hash, moves::chance(&w, &legal[0].mv));
                     };
-                    let Some(legal) = legal else { break End::Over(self.terminal(&w)) };
+                    let Some(known) = known else { break End::Over(self.terminal(&w)) };
                     if let Some(child) = tree.child(e, hash) {
                         node = child;
                         continue;
                     }
+                    let legal = known.unwrap_or_else(|| moves::legal(&w, &kw));
                     // une position nouvelle : son évaluation, gardée ou demandée (une fois par tour)
                     let encoded = encode(&w, &kw);
                     let fp = fingerprint(&encoded, &legal);

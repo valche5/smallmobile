@@ -76,6 +76,37 @@ fn random_game(
     }
 }
 
+/// `moves::forced` dit comme `legal` si une position n'a qu'un coup possible (et lequel).
+#[test]
+fn forced_moves_agree_with_legal() {
+    let mut rng = Rng::new(17);
+    let mut seen = [0usize; 3];
+    for game in 0..60u64 {
+        let table = Table::new(2 + game as usize % 4, 900 + game);
+        let (mut g, mut k) = (table.game(game as u32), Knowledge::default());
+        random_game(&mut g, &mut k, &mut rng.fork(), |g, k, legal| match moves::forced(g, k) {
+            moves::Forced::One(only) => {
+                seen[0] += 1;
+                assert_eq!(legal.len(), 1);
+                assert_eq!(legal[0].mv, only);
+            }
+            moves::Forced::Several(Some(all)) => {
+                seen[1] += 1;
+                assert!(legal.len() > 1);
+                assert_eq!(
+                    all.iter().map(|c| (c.key, c.mv)).collect::<Vec<_>>(),
+                    legal.iter().map(|c| (c.key, c.mv)).collect::<Vec<_>>()
+                );
+            }
+            moves::Forced::Several(None) => {
+                seen[2] += 1;
+                assert!(legal.len() > 1, "{:?}", legal.iter().map(|c| c.mv).collect::<Vec<_>>());
+            }
+        });
+    }
+    assert!(seen.iter().all(|&n| n > 50), "{seen:?}");
+}
+
 #[test]
 fn every_legal_move_can_be_played() {
     let mut rng = Rng::new(7);
