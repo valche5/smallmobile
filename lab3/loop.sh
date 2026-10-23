@@ -54,6 +54,9 @@ SEED_BASE=${SEED_BASE:-30000000}
 SIMS=${SIMS:-200}
 # taux maximal de chaque cycle d'apprentissage (train.py, `--lr`)
 LR=${LR:-5e-4}
+# CONTINUOUS=1 : l'optimiseur et la moyenne des poids passent d'un pas à l'autre (cNNN.state.pt),
+# taux LR constant, le réseau qui joue est la moyenne (train.py, « En continu »)
+CONTINUOUS=${CONTINUOUS:-0}
 DEVICE=${DEVICE:-cpu}
 case "$DEVICE" in
   cpu) PARALLEL=${PARALLEL:-1} ;;
@@ -113,11 +116,12 @@ games() { # cycle, réseau, cœurs : écrites à part, puis déplacées. Un cycl
 }
 
 train() { # réseau, réseau de départ
-  local c=$1 prev=$2 start
+  local c=$1 prev=$2 start state=()
   [ -f "$OUT/$c.bin" ] && return 0
   start=$(date +%s)
+  [ "$CONTINUOUS" = 1 ] && state=(--state-in "../runs/$RUN/$prev.state.pt" --state-out "../runs/$RUN/$c.state.pt")
   if ! (cd lab3/py && .venv/bin/python train.py --cycles "../data/$RUN" --last "$c" --init "../runs/$RUN/$prev.bin" \
-    --out "../runs/$RUN/$c.tmp.bin" --threads "$TRAIN" --lr "$LR") > "$OUT/$c-train.log" 2>&1; then
+    --out "../runs/$RUN/$c.tmp.bin" --threads "$TRAIN" --lr "$LR" "${state[@]}") > "$OUT/$c-train.log" 2>&1; then
     tail -20 "$OUT/$c-train.log"
     return 1
   fi

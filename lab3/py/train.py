@@ -19,10 +19,19 @@ en bf16 (`torch.autocast`, poids et optimiseur en 32 bits, comme AlphaZero sur T
 rapide sur les processeurs qui ont AVX-512 BF16, 2,7 fois sur GPU (RX 9070 XT, 22 octobre).
 Validation en 32 bits. Sans `torch.compile` : sur c7a.16xlarge, 16 cœurs, bf16, 3 % gagnés pour 9
 à 18 s de compilation par cycle (mesure du 21 octobre).
+
+En continu (`--state-out`, piste du plateau, lab3/journal.md) : l'optimiseur, le réseau qui apprend et
+une moyenne de ses poids passent d'un pas à l'autre (`--state-in`), le taux reste constant (montée
+de `WARMUP` lots au premier pas seulement), et le réseau exporté, qui joue, est la moyenne
+(exponentielle, `EMA` par lot), comme les réseaux du selfplay de KataGo. Sans cela, chaque pas
+repart d'un AdamW neuf et remonte au taux maximal, ce qui écarte un réseau mûr du point où le pas
+précédent l'avait posé.
 """
 
 import argparse
+import copy
 import math
+import os
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -50,6 +59,10 @@ VAL_SHARE = 0.05
 VAL_MEASURE = 0.006
 # lots préparés d'avance (`batches`)
 AHEAD = 3
+# en continu : moyenne des poids sur ~5 000 lots (les trois quarts d'un pas de 25 000 parties), et
+# montée du taux au premier pas
+EMA = 0.9998
+WARMUP = 500
 def fields(recs, sel):
     """Les champs pleins des positions `sel` : d'une fenêtre compacte (`Packed`), ou d'un tableau
     d'enregistrements."""
@@ -155,7 +168,9 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--threads", type=int, help="cœurs de PyTorch")
     ap.add_argument("--seed", type=int, default=0, help="ordre des lots")
-    ap.add_argument("--lr", type=float, default=LR, help="taux maximal du cycle")
+    ap.add_argument("--lr", type=float, default=LR, help="taux maximal du cycle (le taux constant en continu)")
+    ap.add_argument("--state-in", help="en continu : l'état du pas précédent, s'il existe")
+    ap.add_argument("--state-out", help="en continu : l'état écrit pour le pas suivant")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -180,25 +195,51 @@ def main():
 
     net = load_net(args.init).to(device)
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=WEIGHT_DECAY)
-    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=steps, pct_start=0.1)
+    ema = None
+    if args.state_out:
+        state = None
+        if args.state_in and Path(args.state_in).exists():
+            state = torch.load(args.state_in, map_location=device)
+            net.load_state_dict(state["net"])
+            opt.load_state_dict(state["opt"])
+            for g in opt.param_groups:
+                g["lr"] = g["initial_lr"] = args.lr
+        ema = state["ema"] if state else [p.detach().clone() for p in net.parameters()]
+        print(f"en continu : {'état repris' if state else 'premier pas'}, taux {args.lr:g}", flush=True)
+        sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda i: 1.0 if state else min(1.0, (i + 1) / WARMUP))
+    else:
+        sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=steps, pct_start=0.1)
     # tirage avec remise, en proportion des poids
     weight = recs["weight"][train_idx].astype(np.float64)
     order = rng.choice(train_idx, size=steps * BATCH, p=weight / weight.sum())
     start = time.time()
     net.train()
     sums = np.zeros(len(METRICS))
+    params = list(net.parameters())
     for b in batches(recs, order, BATCH, device):
         sums += learn(net, opt, sched, b)
+        if ema:
+            with torch.no_grad():
+                torch._foreach_lerp_(ema, params, 1 - EMA)
     train_secs = time.time() - start
 
+    played = net
+    if ema:
+        tmp = Path(args.state_out + ".tmp")
+        torch.save({"net": net.state_dict(), "opt": opt.state_dict(), "ema": ema}, tmp)
+        os.replace(tmp, args.state_out)
+        played = copy.deepcopy(net)
+        with torch.no_grad():
+            for p, e in zip(played.parameters(), ema):
+                p.copy_(e)
     start = time.time()
-    val = validate(net, recs, val_idx, device)
+    val = validate(played, recs, val_idx, device)
     print(f"entraînement ({train_secs:.0f} s) : {show(sums / steps)}")
     print(f"validation ({time.time() - start:.0f} s) : {show(val)}", flush=True)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    export(net, out)
+    export(played, out)
     print(f"écrit : {out}")
 
 

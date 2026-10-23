@@ -462,6 +462,13 @@ Piste 3 préparée : `LR` dans la boucle (`train.py --lr`, 5e-4 par défaut). Ch
 AdamW neuf et remonte au taux maximal ; une moyenne des poids pendant le cycle ferait doublon avec
 la descente de OneCycle, qui finit presque à zéro.
 
+Plus loin que la piste 3 : `CONTINUOUS=1` dans la boucle (`train.py --state-in/--state-out`).
+L'optimiseur AdamW, le réseau qui apprend et une moyenne exponentielle de ses poids (0,9998 par
+lot, ~5 000 lots) passent d'un pas à l'autre dans `runs/RUN/cNNN.state.pt` ; taux constant (`LR`,
+montée de 500 lots au premier pas seulement) ; le réseau exporté, qui joue et se mesure, est la
+moyenne, comme dans KataGo. Ordre prévu : piste 3 (c041–c050, `LR=1.5e-4`, OneCycle), puis le
+continu depuis c050.
+
 ### Reprise généraliste depuis c060, arrêt à la validation de c016 (23 octobre)
 
 Campagne locale du 23 octobre, de 03:55:58 à 07:56:47 CEST, environ 4 h : 16 cycles de 25 000
