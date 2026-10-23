@@ -27,7 +27,7 @@ use std::task::{Context, Poll, Waker};
 use smallmobile_kernel::ids::MAX_PLAYERS;
 use smallmobile_kernel::{Game, Map, Phase};
 
-use crate::encode::{Encoded, encode};
+use crate::encode::{Encoded, encode, encode_with};
 use crate::know::{Knowledge, determinize};
 use crate::moves::{self, Choice, Key, Move};
 use crate::net::{Eval, Net};
@@ -720,9 +720,12 @@ impl Az {
                         node = child;
                         continue;
                     }
-                    let legal = known.unwrap_or_else(|| moves::legal(&w, &kw));
+                    // une position nouvelle : les cibles des conquêtes une fois, pour ses coups et
+                    // son encodage
+                    let targets = (w.state.phase == Phase::Conquest).then(|| w.targets());
+                    let legal = known.unwrap_or_else(|| moves::legal_with(&w, &kw, targets.as_deref()));
                     // une position nouvelle : son évaluation, gardée ou demandée (une fois par tour)
-                    let encoded = encode(&w, &kw);
+                    let encoded = encode_with(&w, &kw, targets.as_deref());
                     let fp = fingerprint(&encoded, &legal);
                     if !evals.touch(fp) && !asked.iter().any(|&(f, _)| f == fp) {
                         asked.push((fp, leaves.len()));

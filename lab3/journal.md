@@ -204,6 +204,13 @@ Celui de lab2 (voir son journal), sauf :
   feuilles. Recherche identique au bit près (empreintes `lab3 speed` et selfplay de contrôle,
   test `forced_moves_agree_with_legal`) ; selfplay de contrôle 8,65 → 7,08 s ; selfplay GPU
   2 760 → **~3 300 positions/s**, GPU 940 000 évaluations/s, fils de jeu en attente 10 %.
+- **Encodage allégé, même entrées au bit près** (`encode_with`, `legal_with`) : les régions et les
+  jetons de chaque peuple relevés en un passage (au lieu d'un parcours de la carte par peuple et
+  par usage), les voisines tenues par l'armée par un ET de bits (`Map::hoods`), et à une feuille
+  en conquête les cibles calculées une fois pour ses coups et son encodage. Empreintes
+  inchangées ; selfplay de contrôle 7,08 → 6,38 s. Selfplay GPU ~3 360 positions/s (+2 %) : le
+  GPU est à son plafond (~950 000 évaluations/s, lots de ~150 positions), les fils de jeu
+  l'attendent 17 % du temps. Le frein est de nouveau le GPU.
 - **Deux défauts du compilateur de RADV** (Mesa 26.2.4, ACO, gfx1201), trouvés en comparant son
   assembleur (`RADV_DEBUG=shaders`) pour des variantes justes et fausses du shader. (1) En formant
   des paires d'instructions VOPD, ACO met une addition avec l'instruction qui produit l'une de ses

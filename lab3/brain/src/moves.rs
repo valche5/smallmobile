@@ -19,7 +19,7 @@
 
 use smallmobile_kernel::action::{Journal, Placement};
 use smallmobile_kernel::ids::{Power, Race};
-use smallmobile_kernel::rules::TargetKind;
+use smallmobile_kernel::rules::{Target, TargetKind};
 use smallmobile_kernel::state::Stage;
 use smallmobile_kernel::{Action, Game, Phase, Reason};
 
@@ -119,6 +119,11 @@ pub type Moves = Vec<Choice>;
 
 /// Les coups possibles du joueur qui doit agir (vide en fin de partie).
 pub fn legal(g: &Game, k: &Knowledge) -> Moves {
+    legal_with(g, k, None)
+}
+
+/// `legal`, avec les cibles des conquêtes (`Game::targets`) si elles sont déjà calculées.
+pub fn legal_with(g: &Game, k: &Knowledge, targets: Option<&[Target]>) -> Moves {
     let mut out = Vec::new();
     let s = &g.state;
     match s.phase {
@@ -130,7 +135,7 @@ pub fn legal(g: &Game, k: &Knowledge) -> Moves {
                 out.push(Choice { key: PICK + index as Key, mv: Move::Pick(index as u8) });
             }
         }
-        Phase::Conquest => conquest(g, &mut out),
+        Phase::Conquest => conquest(g, targets, &mut out),
         Phase::Redeploy => redeploy(g, k.redeploy, &mut out),
         Phase::Defend => {
             let race = s.defense[0].race;
@@ -180,7 +185,7 @@ pub fn forced(g: &Game, k: &Knowledge) -> Forced {
     if other { Forced::Several(None) } else { Forced::One(Move::EndConquest) }
 }
 
-fn conquest(g: &Game, out: &mut Moves) {
+fn conquest(g: &Game, targets: Option<&[Target]>, out: &mut Moves) {
     let s = &g.state;
     let army = s.turn.army.expect("peuple en action");
     let rs = *s.race(army);
@@ -198,7 +203,15 @@ fn conquest(g: &Game, out: &mut Moves) {
     if rs.has(Power::Berserk) && t.berserk_die.is_none() && rs.hand >= 1 {
         out.push(Choice { key: BERSERK, mv: Move::Berserk });
     }
-    for x in g.targets().iter().filter(|x| x.reachable()) {
+    let computed;
+    let targets = match targets {
+        Some(t) => t,
+        None => {
+            computed = g.targets();
+            &computed[..]
+        }
+    };
+    for x in targets.iter().filter(|x| x.reachable()) {
         if x.sorcery.allowed() {
             out.push(region(Kind::Sorcery, x.region));
         }

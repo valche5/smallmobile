@@ -12,7 +12,8 @@
 //!   partie (`know::History`) : de quoi deviner son style.
 
 use smallmobile_kernel::ids::{MAX_PLAYERS, Power, Race};
-use smallmobile_kernel::rules::TargetKind;
+use smallmobile_kernel::collections::RegionSet;
+use smallmobile_kernel::rules::{Target, TargetKind};
 use smallmobile_kernel::state::{Occupant, Stage};
 use smallmobile_kernel::{Game, Phase};
 
@@ -144,6 +145,11 @@ pub fn relative(q: usize, me: usize, n: usize) -> usize {
 /// Encode la position du point de vue du joueur qui doit agir, avec ce qu'il sait (`Knowledge` :
 /// cartes connues au fond de la pioche des peuples, histoire des joueurs).
 pub fn encode(g: &Game, k: &Knowledge) -> Encoded {
+    encode_with(g, k, None)
+}
+
+/// `encode`, avec les cibles des conquêtes (`Game::targets`) si elles sont déjà calculées.
+pub fn encode_with(g: &Game, k: &Knowledge, targets: Option<&[Target]>) -> Encoded {
     let known_tail = k.race_tail;
     let s = &g.state;
     let n = s.player_count();
@@ -153,9 +159,25 @@ pub fn encode(g: &Game, k: &Knowledge) -> Encoded {
     assert!(regions <= REGIONS, "carte trop grande pour le réseau");
     let mut e = Encoded { regions, players: n, node: [[0; NODE]; REGIONS], global: [0; GLOBAL] };
 
+    // les régions et les jetons de chaque peuple, en un passage
+    let (mut owned, mut on_board) = ([RegionSet::EMPTY; Race::COUNT], [0i32; Race::COUNT]);
+    for (i, r) in s.regions[..regions].iter().enumerate() {
+        if let Occupant::Race(race) = r.occupant {
+            owned[race.index()].insert(i);
+            on_board[race.index()] += r.tokens;
+        }
+    }
     let army = s.turn.army.filter(|_| matches!(s.phase, Phase::Conquest | Phase::Redeploy));
-    let army_owned = army.map_or(Default::default(), |a| g.owned(a));
-    let targets = if s.phase == Phase::Conquest { Some(g.targets()) } else { None };
+    let army_owned = army.map_or(RegionSet::EMPTY, |a| owned[a.index()]);
+    let computed;
+    let targets = match (s.phase == Phase::Conquest, targets) {
+        (false, _) => None,
+        (true, Some(t)) => Some(t),
+        (true, None) => {
+            computed = g.targets();
+            Some(&computed[..])
+        }
+    };
     let abandon = s.phase == Phase::Conquest;
 
     for (i, def) in g.map.regions.iter().enumerate() {
@@ -206,7 +228,7 @@ pub fn encode(g: &Game, k: &Knowledge) -> Encoded {
         }
         put(&mut x[N_READIED], s.turn.readied[i]);
         x[N_ARMY] = army_owned.contains(i) as u8;
-        let near = def.adj.iter().filter(|&&a| army_owned.contains(a as usize)).count();
+        let near = RegionSet(g.map.hoods[i].adj.0 & army_owned.0).len();
         put(&mut x[N_ARMY_NEAR], near as i32);
     }
 
@@ -253,14 +275,14 @@ pub fn encode(g: &Game, k: &Knowledge) -> Encoded {
             x[b + P_RACE + race.index()] = 1;
             x[b + P_POWER + rs.power.index()] = 1;
             put(&mut x[b + P_HAND], rs.hand);
-            put(&mut x[b + P_REGIONS], g.owned(race).len() as i32);
-            put(&mut x[b + P_TOKENS], g.tokens_on_board(race));
+            put(&mut x[b + P_REGIONS], owned[race.index()].len() as i32);
+            put(&mut x[b + P_TOKENS], on_board[race.index()]);
         }
         let mut declined_regions = 0;
         for &race in p.declined.iter() {
             x[b + P_DECLINED_RACES + race.index()] = 1;
             x[b + P_DECLINED_POWERS + s.race(race).power.index()] = 1;
-            declined_regions += g.owned(race).len() as i32;
+            declined_regions += owned[race.index()].len() as i32;
         }
         put(&mut x[b + P_DECLINED_REGIONS], declined_regions);
         x[b + P_ATTACKED] = t.attacked.contains(q) as u8;
