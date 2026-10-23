@@ -41,6 +41,7 @@ use crate::encode::{Encoded, GLOBAL, NODE, REGIONS, encode, relative};
 use crate::gpu::Gpu;
 use crate::know::Knowledge;
 use crate::moves::{self, KEYS, Key};
+use crate::net::Eval;
 use crate::rand::{Rng, mix};
 use crate::table::{Outcome, Table};
 
@@ -416,17 +417,17 @@ pub fn moves_file(path: &Path) -> std::path::PathBuf {
     name.into()
 }
 
-/// Parties que mène chaque fil en même temps, par groupe : leurs positions à évaluer forment un
-/// groupe (`Batch`). Sur le processeur du fil, un groupe de 8, évalué couche après couche (ses
-/// évaluations gardées et les poids d'une couche tiennent dans le cache du cœur) ; avec le GPU,
-/// quatre groupes de 32 : le fil fait avancer les uns pendant que le GPU évalue les autres, et le GPU
-/// reçoit de grands lots (les groupes de tous les fils ; Vulkan, 22 octobre : 1 029 positions/s avec
-/// deux groupes, 1 130 avec quatre). Un fil garde tout ce qu'il touche (parties,
-/// évaluations gardées, groupes) : rien de modifiable n'est partagé entre les cœurs, hormis le
-/// compteur des parties (une fois par partie).
+/// Parties que mène chaque fil en même temps. Sur le processeur du fil, un groupe de 8 dont les
+/// positions à évaluer sont évaluées ensemble, couche après couche (`Batch::submit` ; ses
+/// évaluations gardées et les poids d'une couche tiennent dans le cache du cœur). Avec le GPU,
+/// `GPU_GAMES` parties reprises une par une : chacune envoie les positions d'un tour de sa
+/// recherche (~4 en moyenne, `az::CONSIDERED` au plus) dès qu'elle les a, et reprend dès qu'elles
+/// sont évaluées ; le fil fait avancer les autres entre-temps. Peu de parties par fil : leurs arbres
+/// tiennent dans les caches. Un fil garde tout ce qu'il touche (parties, évaluations gardées) :
+/// rien de modifiable n'est partagé entre les cœurs, hormis le compteur des parties (une fois par
+/// partie) et l'anneau du GPU.
 const CONCURRENT: usize = 8;
-const GPU_GROUPS: usize = 4;
-const GPU_CONCURRENT: usize = 32;
+const GPU_GAMES: usize = 24;
 
 /// Une partie finie : ses positions (enregistrements) et sa ligne de journal (`GameLog`).
 pub struct Finished {
@@ -458,8 +459,12 @@ const PACE: Duration = Duration::from_secs(10);
 
 /// Le rythme du selfplay, toutes les `PACE` jusqu'à `stopped` : positions retenues par seconde sur la
 /// dernière période, pas depuis le départ, pour lire le régime établi en une minute, quel que soit le
-/// nombre de parties ; avec `profile`, la répartition du temps des fils de jeu sur la même période.
+/// nombre de parties ; avec `profile`, la répartition du temps des fils de jeu sur la même période,
+/// et les évaluations envoyées au GPU.
 fn pace(stopped: &Receiver<()>, threads: usize, profile: bool) {
+    use crate::batch::{SENT, SENT_LOTS, SENT_POSITIONS};
+    let sent = || SENT.each_ref().map(|s| s.load(Ordering::Relaxed));
+    let mut last_sent = sent();
     let now = || {
         (
             Instant::now(),
@@ -475,6 +480,16 @@ fn pace(stopped: &Receiver<()>, threads: usize, profile: bool) {
         eprintln!("rythme : {:.0} positions/s sur les {secs:.0} dernières s", (next.1 - last.1) as f64 / secs);
         if profile {
             eprintln!("{}", split(spent, secs * threads as f64));
+            let now_sent = sent();
+            let (lots, positions) =
+                (now_sent[SENT_LOTS] - last_sent[SENT_LOTS], now_sent[SENT_POSITIONS] - last_sent[SENT_POSITIONS]);
+            eprintln!(
+                "GPU : {:.0} évaluations/s, {:.0} lots/s de {:.0} positions en moyenne",
+                positions as f64 / secs,
+                lots as f64 / secs,
+                positions as f64 / lots.max(1) as f64
+            );
+            last_sent = now_sent;
         }
         last = next;
     }
@@ -491,16 +506,56 @@ fn split(spent: [u64; 3], all: f64) -> String {
     )
 }
 
+/// Une partie en cours (`game`).
+type Running<'a> = Pin<Box<dyn Future<Output = std::io::Result<Finished>> + 'a>>;
+
+/// La partie de la place `slot` avance jusqu'à ses prochaines évaluations ; une partie finie
+/// (`record`) laisse sa place à la suivante (`start`). Faux : plus de partie à commencer.
+fn advance<'a>(
+    slot: &mut Option<(usize, Running<'a>)>,
+    mut start: impl FnMut() -> Option<(usize, Running<'a>)>,
+    record: &mut impl FnMut(usize, Finished) -> std::io::Result<()>,
+) -> std::io::Result<bool> {
+    let mut cx = Context::from_waker(Waker::noop());
+    loop {
+        if slot.is_none() {
+            let Some(started) = start() else { return Ok(false) };
+            *slot = Some(started);
+        }
+        let (i, running) = slot.as_mut().expect("une partie");
+        let Poll::Ready(finished) = running.as_mut().poll(&mut cx) else { return Ok(true) };
+        let i = *i;
+        *slot = None;
+        record(i, finished?)?;
+    }
+}
+
 /// Des parties d'entraînement en parallèle, un fichier par fil dans `dir` (avec `games_file` et
-/// `moves_file`). Chaque fil mène ses parties par groupes (`CONCURRENT`) : chacune avance jusqu'à sa
-/// prochaine évaluation, puis le groupe est évalué d'un coup, par le processeur du fil ou par `gpu`.
-/// Sans GPU, chaque partie est la même, au bit près, que jouée seule (`Direct`).
+/// `moves_file`). Chaque fil mène plusieurs parties (`CONCURRENT`, `GPU_GAMES`) : chacune avance
+/// jusqu'à ses prochaines évaluations ; sur le processeur, le groupe est évalué d'un coup ; avec
+/// `gpu`, chaque partie envoie les siennes et reprend dès qu'elles sont là. Sans GPU, chaque partie
+/// est la même, au bit près, que jouée seule (`Direct`).
 pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Result<()> {
-    let (mut groups, mut concurrent) = if gpu.is_some() { (GPU_GROUPS, GPU_CONCURRENT) } else { (1, CONCURRENT) };
+    // le GPU, une partie à la fois ; le processeur (ou les évaluations instantanées des profils,
+    // `LAB3_INSTANT`), par groupes
+    let stream = gpu.filter(|_| std::env::var_os("LAB3_INSTANT").is_none());
+    let (mut groups, mut concurrent) = if stream.is_some() { (1, GPU_GAMES) } else { (1, CONCURRENT) };
     // essais et profils : `LAB3_GROUPS`, `LAB3_CONCURRENT`
     let env = |key: &str| std::env::var(key).ok().and_then(|v| v.parse().ok());
     groups = env("LAB3_GROUPS").unwrap_or(groups);
     concurrent = env("LAB3_CONCURRENT").unwrap_or(concurrent);
+    // les places de chaque fil dans l'anneau du GPU : au plus un tour de recherche en vol par
+    // partie, elles doivent tous les tenir
+    let mut lanes = stream.map(|gpu| gpu.lanes(cfg.threads)).unwrap_or_default();
+    if let Some(lane) = lanes.first()
+        && concurrent * crate::az::CONSIDERED > lane.free()
+    {
+        return Err(std::io::Error::other(format!(
+            "{concurrent} parties par fil : jusqu'à {} positions en vol, l'anneau du GPU en tient {} par fil",
+            concurrent * crate::az::CONSIDERED,
+            lane.free()
+        )));
+    }
     std::fs::create_dir_all(dir)?;
     let next = AtomicUsize::new(0);
     let positions = AtomicUsize::new(0);
@@ -513,6 +568,7 @@ pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Res
         let mut handles = Vec::new();
         for t in 0..cfg.threads {
             let (next, positions) = (&next, &positions);
+            let lane = (!lanes.is_empty()).then(|| lanes.remove(0));
             // nommé, pour les profils (`perf report --sort comm`)
             let thread = std::thread::Builder::new().name(format!("jeu-{t:02}"));
             handles.push(thread.spawn_scoped(scope, move || -> std::io::Result<()> {
@@ -520,54 +576,72 @@ pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Res
                 let mut out = BufWriter::new(File::create(&path)?);
                 let mut games = BufWriter::new(File::create(games_file(&path))?);
                 let mut logs = BufWriter::new(File::create(moves_file(&path))?);
-                let batches: Vec<Batch> = (0..groups).map(|_| Batch::new(&az.net, gpu)).collect();
-                type Game<'a> = Pin<Box<dyn Future<Output = std::io::Result<Finished>> + 'a>>;
-                let mut slots: Vec<Vec<Option<(usize, Game)>>> =
-                    (0..groups).map(|_| (0..concurrent).map(|_| None).collect()).collect();
-                let mut cx = Context::from_waker(Waker::noop());
-                loop {
-                    let mut live = false;
-                    for (batch, slots) in batches.iter().zip(&mut slots) {
-                        batch.collect();
-                        // chaque partie avance jusqu'à sa prochaine évaluation ; une partie finie laisse
-                        // sa place à la suivante
-                        for slot in slots.iter_mut() {
-                            loop {
-                                if slot.is_none() {
-                                    let i = next.fetch_add(1, Ordering::Relaxed);
-                                    if i >= cfg.games {
-                                        break;
-                                    }
-                                    *slot = Some((i, Box::pin(game(i, cfg, az, batch))));
-                                }
-                                let (i, running) = slot.as_mut().expect("une partie");
-                                let Poll::Ready(finished) = running.as_mut().poll(&mut cx) else { break };
-                                let (i, finished) = (*i, finished?);
-                                *slot = None;
-                                out.write_all(&finished.records)?;
-                                games.write_all(&(finished.positions as u32).to_le_bytes())?;
-                                writeln!(logs, "{}", finished.line)?;
-                                let count = finished.positions;
-                                let total = positions.fetch_add(count, Ordering::Relaxed) + count;
-                                let secs = start.elapsed().as_secs_f64();
-                                eprintln!(
-                                    "partie {}/{} ({} j.) : {count} positions, {total} en tout, {:.0} positions/s",
-                                    i + 1,
-                                    cfg.games,
-                                    finished.players,
-                                    total as f64 / secs
-                                );
+                let mut record = |i: usize, finished: Finished| -> std::io::Result<()> {
+                    out.write_all(&finished.records)?;
+                    games.write_all(&(finished.positions as u32).to_le_bytes())?;
+                    writeln!(logs, "{}", finished.line)?;
+                    let count = finished.positions;
+                    let total = positions.fetch_add(count, Ordering::Relaxed) + count;
+                    let secs = start.elapsed().as_secs_f64();
+                    eprintln!(
+                        "partie {}/{} ({} j.) : {count} positions, {total} en tout, {:.0} positions/s",
+                        i + 1,
+                        cfg.games,
+                        finished.players,
+                        total as f64 / secs
+                    );
+                    Ok(())
+                };
+                // la partie suivante, jouée avec les évaluations de `batch`
+                let start_game = |batch| {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    (i < cfg.games).then(|| (i, Box::pin(game(i, cfg, az, batch)) as Running))
+                };
+                if let Some(gpu) = stream {
+                    let batch = Batch::new(&az.net, Some((gpu, lane.expect("les places du fil"))));
+                    let mut slots: Vec<Option<(usize, Running)>> = (0..concurrent).map(|_| None).collect();
+                    // les parties à reprendre, avec leurs évaluations ; celles qui attendent le GPU,
+                    // dans l'ordre de leurs envois (celui où il les évalue)
+                    let mut ready: Vec<(usize, Option<Vec<Eval>>)> = (0..concurrent).map(|s| (s, None)).collect();
+                    let mut waiting = std::collections::VecDeque::new();
+                    loop {
+                        while let Some((s, evals)) = ready.pop() {
+                            if let Some(evals) = evals {
+                                batch.resume(evals);
+                            }
+                            if advance(&mut slots[s], || start_game(&batch), &mut record)? {
+                                waiting.push_back((s, batch.send().expect("une partie qui attend a ses positions")));
                             }
                         }
-                        if slots.iter().any(Option::is_some) {
-                            live = true;
-                            batch.submit();
+                        // la plus vieille attente, puis celles déjà évaluées
+                        let Some((s, sent)) = waiting.pop_front() else { break };
+                        ready.push((s, Some(batch.receive(sent))));
+                        while waiting.front().is_some_and(|(_, sent)| gpu.done(sent)) {
+                            let (s, sent) = waiting.pop_front().expect("une attente");
+                            ready.push((s, Some(batch.receive(sent))));
                         }
                     }
-                    if !live {
-                        break;
+                } else {
+                    let batches: Vec<Batch> = (0..groups).map(|_| Batch::new(&az.net, None)).collect();
+                    let mut slots: Vec<Vec<Option<(usize, Running)>>> =
+                        (0..groups).map(|_| (0..concurrent).map(|_| None).collect()).collect();
+                    loop {
+                        let mut live = false;
+                        for (batch, slots) in batches.iter().zip(&mut slots) {
+                            for slot in slots.iter_mut() {
+                                advance(slot, || start_game(batch), &mut record)?;
+                            }
+                            if slots.iter().any(Option::is_some) {
+                                live = true;
+                                batch.submit();
+                            }
+                        }
+                        if !live {
+                            break;
+                        }
                     }
                 }
+                drop(record);
                 out.flush()?;
                 logs.flush()?;
                 games.flush()

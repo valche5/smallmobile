@@ -139,6 +139,37 @@ Celui de lab2 (voir son journal), sauf :
   10 %) ; 8 × 32 ~1 655 (attente 4 %) : doubler les parties par fil ôte l'attente mais le jeu coûte
   d'autant plus (caches), aucun gain. Les 1 510 et 1 539 des mesures sur un nombre fixe de parties
   comptent la fin, où les fils n'ont plus assez de parties.
+- **Simulations groupées par tour de la racine** (`search::Az::run`, réglage `batch`). Une
+  partie ne cherchait qu'une feuille à la fois : pour remplir les lots du GPU, il fallait 128
+  parties par fil, dont les arbres débordaient les caches (sans réseau, 41 millions de cycles
+  par position contre 31 à 8 parties par fil, 23 000 défauts L3 contre 500, répartis sur tout
+  l'arbre). Le halving séquentiel avance par tours où chaque coup encore retenu à la racine
+  reçoit une visite : ces simulations suivent des coups différents de la racine, donc des
+  sous-arbres disjoints. Elles descendent toutes, leurs positions nouvelles sont évaluées
+  ensemble, puis elles remontent dans l'ordre ; seuls les choix de la racine se font au début du
+  tour, sans les valeurs des simulations du même tour. n = 200, 16 coups : 49 tours de 16, 8, 4
+  puis 2 simulations, ~4 positions par tour. `batch=1` redonne l'ancienne recherche au bit près
+  (empreintes de `lab3 speed` et du selfplay de contrôle). Selfplay GPU (c060, 20 fils), régime
+  établi : 3 × 8 parties par fil ~1 750 positions/s (2 × 8, 2 × 12, 2 × 16, 4 × 8 : 1 700 à
+  1 750), contre ~1 650 avec 4 × 32 avant. Les fils de jeu attendent alors 30 à 40 %, mais le GPU
+  n'est pas plein : ses horodatages donnent ~770 000 positions par seconde de calcul (1,1 million
+  en lots de 2 048, `bench-vulkan --stream`) pour ~500 000 demandées ; tous les réglages (groupes,
+  emplacements, lots de 60 à 430 positions) butent sur ces 500 000 : l'aller-retour des lots
+  limitait (le compteur `gpu_busy_percent`, 92 %, compte toute activité).
+- **Flot continu** (`gpu.rs`) : chaque fil de jeu a ses places dans un anneau de la mémoire que lit
+  le GPU (16 384 places en tout) et y écrit lui-même les positions d'une partie, puis leurs places
+  à la suite dans une file d'ordre (65 536 numéros) ; un fil « gpu » soumet d'un calcul les numéros
+  écrits à la suite (2 calculs en vol au plus : pendant que l'un tourne, le suivant grossit) et note
+  leur fin ; le fil de jeu lit les sorties sur place et reprend la partie dès qu'elles sont là, une
+  partie à la fois (24 par fil). Plus de fil d'envoi ni de réception, plus de copie, plus de
+  groupes. Premier essai, des places à la suite dans l'ordre des envois : un fil lent à relire
+  bloquait tout (l'anneau se renouvelle en ~27 ms ; un fil voulait écrire sur sa propre place pas
+  encore lue) ; d'où la file d'ordre, dont un numéro revient dès que le GPU l'a calculé. Les
+  écritures dans la mémoire du GPU (write-combining) passent une barrière avant leurs marques.
+  Selfplay GPU (c060, 20 fils) : ~2 100 positions/s (jusqu'à 2 400), ~600 000 évaluations/s,
+  lots de 240 à 420 positions ; fils de jeu 70 % de calcul, fil « gpu » 13 % d'un cœur. Le GPU
+  tourne alors à 1,6-1,75 GHz au lieu de 3,3 (`pp_dpm_sclk`, réglage `auto`) : pas assez chargé,
+  son pilote baisse l'horloge, ce qui ralentit chaque calcul et allonge l'attente des fils.
 - **Deux défauts du compilateur de RADV** (Mesa 26.2.4, ACO, gfx1201), trouvés en comparant son
   assembleur (`RADV_DEBUG=shaders`) pour des variantes justes et fausses du shader. (1) En formant
   des paires d'instructions VOPD, ACO met une addition avec l'instruction qui produit l'une de ses

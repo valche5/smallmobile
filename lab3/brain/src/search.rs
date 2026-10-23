@@ -20,7 +20,7 @@
 //! politique de l'auto-apprentissage. Le réseau ne voit que ce que sait le joueur (`encode`).
 
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
@@ -34,8 +34,9 @@ use crate::net::{Eval, Net};
 use crate::outcome::Outcome;
 use crate::rand::Rng;
 
-/// Coups retenus à la racine.
-const CONSIDERED: usize = 16;
+/// Coups retenus à la racine : aussi les positions qu'une recherche fait évaluer ensemble, au plus
+/// (un tour du halving, `Az::run`).
+pub const CONSIDERED: usize = 16;
 /// Les valeurs complétées des coups, ramenées entre 0 et 1 dans le nœud, sont multipliées par
 /// `(VISIT_INIT + visites du coup le plus vu) × VALUE_SCALE` (réglages de mctx, la bibliothèque de
 /// DeepMind) : plus la recherche avance, plus elles l'emportent sur les logits du réseau.
@@ -51,11 +52,14 @@ const SCALE: f32 = 8.0;
 #[derive(Clone, Copy, Debug)]
 pub struct Config {
     pub iterations: usize,
+    /// Simulations d'un tour du halving menées ensemble, au plus (`Az::run`) ; 0 : tout le tour.
+    /// 1 : une à la fois, la recherche d'avant le 23 octobre au bit près (comparaisons en arène).
+    pub batch: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { iterations: 200 }
+        Config { iterations: 200, batch: 0 }
     }
 }
 
@@ -67,6 +71,7 @@ impl Config {
             let (k, v) = part.split_once('=')?;
             match k {
                 "n" => cfg.iterations = v.parse().ok()?,
+                "batch" => cfg.batch = v.parse().ok()?,
                 _ => return None,
             }
         }
@@ -292,6 +297,36 @@ fn considered_visits(m: usize, n: usize) -> Vec<u32> {
     out
 }
 
+/// Une simulation d'un tour (`Az::run`), descendue : son chemin (`Tree::path`, de `path.0` à
+/// `path.1`), puis une partie finie ou une position nouvelle, atteinte par le coup `edge` avec ce
+/// résultat du hasard, et l'empreinte de son évaluation.
+struct Leaf {
+    path: (usize, usize),
+    end: End,
+}
+
+enum End {
+    Over(Value),
+    New { seat: Seat, legal: Vec<Choice>, edge: usize, hash: u64, fp: u128 },
+}
+
+/// Ce que lit `Az::judge` d'une position : le joueur qui agit, le nombre de joueurs, leurs pièces.
+#[derive(Clone, Copy)]
+struct Seat {
+    me: usize,
+    n: usize,
+    coins: PerPlayer,
+}
+
+impl Seat {
+    fn of(w: &Game) -> Seat {
+        let s = &w.state;
+        let mut coins = [0.0; MAX_PLAYERS];
+        coins.iter_mut().zip(&s.players).for_each(|(c, p)| *c = p.coins as f32);
+        Seat { me: s.actor().expect("un joueur doit agir"), n: s.player_count(), coins }
+    }
+}
+
 /// Un tirage de la loi de Gumbel.
 fn gumbel(rng: &mut Rng) -> f32 {
     -(-(rng.unit().max(1e-12)).ln()).ln() as f32
@@ -299,18 +334,38 @@ fn gumbel(rng: &mut Rng) -> f32 {
 
 /// D'où viennent les évaluations du réseau : tout de suite (`Direct` : le jeu, l'arène), ou
 /// groupées avec celles d'autres parties (la génération de parties du labo) ; la recherche attend
-/// la sienne.
+/// les siennes. L'évaluation attendue ne garde pas la position (`use<'s, Self>`) : la recherche en
+/// demande plusieurs à la fois (`Az::run`).
 pub trait Oracle {
-    fn eval(&self, net: &Net, e: &Encoded, map: &Map) -> impl Future<Output = Eval>;
+    fn eval<'s>(&'s self, net: &Net, e: &Encoded, map: &Map) -> impl Future<Output = Eval> + use<'s, Self>;
 }
 
 /// Chaque évaluation tout de suite, seule.
 pub struct Direct;
 
 impl Oracle for Direct {
-    fn eval(&self, net: &Net, e: &Encoded, map: &Map) -> impl Future<Output = Eval> {
+    fn eval<'s>(&'s self, net: &Net, e: &Encoded, map: &Map) -> impl Future<Output = Eval> + use<'s> {
         std::future::ready(net.eval(e, map))
     }
+}
+
+/// Toutes les évaluations demandées, dans l'ordre, une fois arrivées.
+async fn all<F: Future>(mut futures: Vec<Pin<Box<F>>>) -> Vec<F::Output> {
+    let mut done: Vec<Option<F::Output>> = futures.iter().map(|_| None).collect();
+    std::future::poll_fn(|cx| {
+        let mut ready = true;
+        for (f, d) in futures.iter_mut().zip(&mut done) {
+            if d.is_none() {
+                match f.as_mut().poll(cx) {
+                    Poll::Ready(out) => *d = Some(out),
+                    Poll::Pending => ready = false,
+                }
+            }
+        }
+        if ready { Poll::Ready(()) } else { Poll::Pending }
+    })
+    .await;
+    done.into_iter().map(|d| d.expect("arrivée")).collect()
 }
 
 /// Le résultat d'un calcul qui n'attend jamais (évaluations `Direct`).
@@ -371,22 +426,21 @@ impl Evals {
         }
     }
 
-    /// L'évaluation de la position : gardée (elle sert alors à la recherche en cours), ou demandée à
-    /// `oracle`.
-    async fn get(&mut self, net: &Net, e: &Encoded, map: &Map, legal: &[Choice], oracle: &impl Oracle) -> &Judged {
+    /// L'évaluation d'empreinte `fp` est-elle gardée ? Elle sert alors à la recherche en cours.
+    fn touch(&mut self, fp: u128) -> bool {
         let search = self.search;
-        match self.known.entry(fingerprint(e, legal)) {
-            Entry::Occupied(kept) => {
-                let kept = kept.into_mut();
-                kept.search = search;
-                &kept.judged
-            }
-            Entry::Vacant(place) => {
-                let eval = oracle.eval(net, e, map).await;
-                let logits = legal.iter().map(|c| eval.logits[c.key as usize]).collect();
-                &place.insert(Kept { search, judged: Judged { win: eval.win, gain: eval.gain, logits } }).judged
-            }
-        }
+        self.known.get_mut(&fp).map(|k| k.search = search).is_some()
+    }
+
+    /// Garde une évaluation du réseau : sa valeur et les logits des coups possibles.
+    fn keep(&mut self, fp: u128, eval: Eval, legal: &[Choice]) {
+        let logits = legal.iter().map(|c| eval.logits[c.key as usize]).collect();
+        let judged = Judged { win: eval.win, gain: eval.gain, logits };
+        self.known.insert(fp, Kept { search: self.search, judged });
+    }
+
+    fn judged(&self, fp: u128) -> &Judged {
+        &self.known[&fp].judged
     }
 }
 
@@ -474,22 +528,16 @@ impl Az {
 
     /// Le nom affiché : le réseau et les réglages.
     pub fn describe(&self) -> String {
-        format!("az({}, n={})", self.label, self.cfg.iterations)
+        match self.cfg.batch {
+            0 => format!("az({}, n={})", self.label, self.cfg.iterations),
+            b => format!("az({}, n={}, batch={b})", self.label, self.cfg.iterations),
+        }
     }
 
-    /// Une position nouvelle : ses coups et leurs logits, et la valeur que lui donne le réseau.
-    /// Ses coups vont à la suite de ceux de `tree`, le nœud à la fin de ses nœuds.
-    async fn expand(
-        &self,
-        evals: &mut Evals,
-        tree: &mut Tree,
-        w: &Game<'_>,
-        k: &Knowledge,
-        legal: &[Choice],
-        oracle: &impl Oracle,
-    ) -> Value {
-        let judged = evals.get(&self.net, &encode(w, k), w.map, legal, oracle).await;
-        let value = self.judge(w, judged);
+    /// Une position nouvelle, évaluée (`judged`) : ses coups et leurs logits, et la valeur que lui
+    /// donne le réseau. Ses coups vont à la suite de ceux de `tree`, le nœud à la fin de ses nœuds.
+    fn expand(&self, tree: &mut Tree, seat: &Seat, legal: &[Choice], judged: &Judged) -> Value {
+        let value = self.judge(seat, judged);
         let first = tree.edges.len() as u32;
         // les probabilités a priori : la softmax des logits, une fois pour toutes
         let mut priors = std::mem::take(&mut tree.scratch.values);
@@ -504,20 +552,18 @@ impl Az {
         }));
         tree.scratch.values = priors;
         tree.edges.extend(legal.iter().map(|c| Edge { hash: 0, child: NONE, more: NONE, key: c.key, mv: c.mv }));
-        let actor = w.state.actor().expect("un joueur doit agir");
+        let actor = seat.me;
         tree.nodes.push(Node { first, len: legal.len() as u32, raw: value[actor], actor: actor as u8 });
         value
     }
 
     /// La valeur que le réseau donne à une position (joueurs réels).
-    fn judge(&self, w: &Game, eval: &Judged) -> Value {
-        let s = &w.state;
-        let me = s.actor().expect("un joueur doit agir");
-        let n = s.player_count();
+    fn judge(&self, seat: &Seat, eval: &Judged) -> Value {
+        let Seat { me, n, coins } = *seat;
         let mut finals = [0.0f32; MAX_PLAYERS];
         for r in 0..n {
             let q = (me + r) % n;
-            finals[q] = s.players[q].coins as f32 + eval.gain[r];
+            finals[q] = coins[q] + eval.gain[r];
         }
         self.blend(&absolute(&eval.win, me, n), &finals, n)
     }
@@ -595,69 +641,127 @@ impl Az {
         let mut tree = std::mem::take(&mut evals.tree);
         tree.clear();
         // la racine : ses visites et ses valeurs, pour le résultat
-        let mut root_total = self.expand(evals, &mut tree, root, k, &legal, oracle).await;
+        let encoded = encode(root, k);
+        let fp = fingerprint(&encoded, &legal);
+        if !evals.touch(fp) {
+            let eval = oracle.eval(&self.net, &encoded, root.map).await;
+            evals.keep(fp, eval, &legal);
+        }
+        let mut root_total = self.expand(&mut tree, &Seat::of(root), &legal, evals.judged(fp));
         let mut root_visits = 1u32;
         let noise: Vec<f32> = legal.iter().map(|_| if explore { gumbel(rng) } else { 0.0 }).collect();
         let schedule = considered_visits(CONSIDERED.min(legal.len()), iterations);
-        // le score d'un coup de la racine parmi ceux qui ont `visits` visites
-        let root_pick = |root: Node, edges: &[Stat], visits: u32, s: &mut Scratch| -> usize {
+        // le score d'un coup de la racine (`root_pick`, `root_picks`)
+        let root_score = |root: Node, edges: &[Stat], s: &mut Scratch| {
             root.completed_into(edges, s);
-            let completed = &s.values;
-            let score = |i: usize| noise[i] + edges[i].logit + completed[i];
+            s.values.iter_mut().enumerate().for_each(|(i, c)| *c += noise[i] + edges[i].logit);
+        };
+        // le meilleur coup de la racine parmi ceux qui ont `visits` visites
+        let root_pick = |root: Node, edges: &[Stat], visits: u32, s: &mut Scratch| -> usize {
+            root_score(root, edges, s);
+            let score = &s.values;
             (0..edges.len())
                 .filter(|&i| edges[i].visits == visits)
-                .max_by(|&a, &b| score(a).total_cmp(&score(b)))
+                .max_by(|&a, &b| score[a].total_cmp(&score[b]))
                 .expect("un coup retenu")
         };
-        for &considered in &schedule {
-            let mut w = determinize(root, k, rng);
-            let mut kw = *k;
+        // les `count` meilleurs, du meilleur au moins bon (à score égal, le dernier, comme `root_pick`)
+        let root_picks = |root: Node, edges: &[Stat], visits: u32, count: usize, s: &mut Scratch, out: &mut Vec<usize>| {
+            root_score(root, edges, s);
+            let score = &s.values;
+            out.clear();
+            out.extend((0..edges.len()).filter(|&i| edges[i].visits == visits));
+            out.sort_by(|&a, &b| score[b].total_cmp(&score[a]).then(b.cmp(&a)));
+            assert!(out.len() >= count, "des coups retenus");
+            out.truncate(count);
+        };
+        let (mut picks, mut leaves, mut asked, mut futures) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        // Un tour du halving séquentiel : les simulations d'une suite du calendrier à visites égales
+        // suivent chacune un coup différent de la racine, donc des sous-arbres disjoints. Elles
+        // descendent toutes, leurs positions nouvelles sont évaluées ensemble (un seul envoi au
+        // GPU par partie et par tour), puis elles remontent leurs valeurs, dans l'ordre. Seuls les
+        // choix de la racine diffèrent d'une recherche une simulation à la fois : ils sont faits au
+        // début du tour, sans les valeurs des simulations du même tour.
+        let mut at = 0;
+        while at < schedule.len() {
+            let considered = schedule[at];
+            let mut count = schedule[at..].iter().take_while(|&&c| c == considered).count();
+            if self.cfg.batch > 0 {
+                count = count.min(self.cfg.batch);
+            }
+            at += count;
+            let root_node = tree.nodes[0];
+            let stats = &tree.stats[root_node.first as usize..(root_node.first + root_node.len) as usize];
+            root_picks(root_node, stats, considered, count, &mut tree.scratch, &mut picks);
             tree.path.clear();
-            let mut node = 0u32;
-            let value: Value = loop {
-                let n = tree.nodes[node as usize];
-                let stats = &tree.stats[n.first as usize..(n.first + n.len) as usize];
-                let i = if node == 0 {
-                    root_pick(n, stats, considered, &mut tree.scratch)
-                } else {
-                    n.select(stats, &mut tree.scratch)
-                };
-                let e = n.first as usize + i;
-                let mv = tree.edges[e].mv;
-                tree.path.push((node, e as u32));
-                // le coup, puis les coups forcés qui suivent, et le résultat de leur hasard
-                kw.play(&mut w, &mv).expect("coup possible");
-                let mut hash = fold(0, moves::chance(&w, &mv));
-                let legal = loop {
-                    if w.state.phase == Phase::GameOver {
-                        break None;
+            leaves.clear();
+            asked.clear();
+            for &pick in &picks {
+                let mut w = determinize(root, k, rng);
+                let mut kw = *k;
+                let start = tree.path.len();
+                let mut node = 0u32;
+                let end = loop {
+                    let n = tree.nodes[node as usize];
+                    let stats = &tree.stats[n.first as usize..(n.first + n.len) as usize];
+                    let i = if node == 0 { pick } else { n.select(stats, &mut tree.scratch) };
+                    let e = n.first as usize + i;
+                    let mv = tree.edges[e].mv;
+                    tree.path.push((node, e as u32));
+                    // le coup, puis les coups forcés qui suivent, et le résultat de leur hasard
+                    kw.play(&mut w, &mv).expect("coup possible");
+                    let mut hash = fold(0, moves::chance(&w, &mv));
+                    let legal = loop {
+                        if w.state.phase == Phase::GameOver {
+                            break None;
+                        }
+                        let legal = moves::legal(&w, &kw);
+                        if legal.len() > 1 {
+                            break Some(legal);
+                        }
+                        kw.play(&mut w, &legal[0].mv).expect("coup forcé");
+                        hash = fold(hash, moves::chance(&w, &legal[0].mv));
+                    };
+                    let Some(legal) = legal else { break End::Over(self.terminal(&w)) };
+                    if let Some(child) = tree.child(e, hash) {
+                        node = child;
+                        continue;
                     }
-                    let legal = moves::legal(&w, &kw);
-                    if legal.len() > 1 {
-                        break Some(legal);
+                    // une position nouvelle : son évaluation, gardée ou demandée (une fois par tour)
+                    let encoded = encode(&w, &kw);
+                    let fp = fingerprint(&encoded, &legal);
+                    if !evals.touch(fp) && !asked.iter().any(|&(f, _)| f == fp) {
+                        asked.push((fp, leaves.len()));
+                        futures.push(Box::pin(oracle.eval(&self.net, &encoded, w.map)));
                     }
-                    kw.play(&mut w, &legal[0].mv).expect("coup forcé");
-                    hash = fold(hash, moves::chance(&w, &legal[0].mv));
+                    break End::New { seat: Seat::of(&w), legal, edge: e, hash, fp };
                 };
-                let Some(legal) = legal else { break self.terminal(&w) };
-                if let Some(child) = tree.child(e, hash) {
-                    node = child;
-                    continue;
+                leaves.push(Leaf { path: (start, tree.path.len()), end });
+            }
+            for (eval, &(fp, leaf)) in all(std::mem::take(&mut futures)).await.into_iter().zip(&asked) {
+                let End::New { legal, .. } = &leaves[leaf].end else { unreachable!("une position à évaluer") };
+                evals.keep(fp, eval, legal);
+            }
+            for leaf in &leaves {
+                let value = match &leaf.end {
+                    End::Over(value) => *value,
+                    End::New { seat, legal, edge, hash, fp } => {
+                        let id = tree.nodes.len() as u32;
+                        let value = self.expand(&mut tree, seat, legal, evals.judged(*fp));
+                        tree.add_child(*edge, *hash, id);
+                        value
+                    }
+                };
+                for &(nd, e) in &tree.path[leaf.path.0..leaf.path.1] {
+                    if nd == 0 {
+                        root_visits += 1;
+                        root_total.iter_mut().zip(value).for_each(|(t, v)| *t += v);
+                    }
+                    let actor = tree.nodes[nd as usize].actor as usize;
+                    let stat = &mut tree.stats[e as usize];
+                    stat.visits += 1;
+                    stat.value += value[actor];
                 }
-                let id = tree.nodes.len() as u32;
-                let value = self.expand(evals, &mut tree, &w, &kw, &legal, oracle).await;
-                tree.add_child(e, hash, id);
-                break value;
-            };
-            for &(nd, e) in &tree.path {
-                if nd == 0 {
-                    root_visits += 1;
-                    root_total.iter_mut().zip(value).for_each(|(t, v)| *t += v);
-                }
-                let actor = tree.nodes[nd as usize].actor as usize;
-                let stat = &mut tree.stats[e as usize];
-                stat.visits += 1;
-                stat.value += value[actor];
             }
         }
         let root_node = tree.nodes[0];

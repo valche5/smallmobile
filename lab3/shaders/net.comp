@@ -74,6 +74,11 @@ layout(push_constant) uniform Params {
     uint adj_off;
     uint regions_off;
     uint layers;
+    // les positions du calcul : les places de l'anneau rangées dans la file d'ordre (`order_off`,
+    // `ring` numéros), à partir de son numéro `first`
+    uint first;
+    uint ring;
+    uint order_off;
 } p;
 
 // la table en tête des poids (f32), puis les positions des poids en bf16 (dans `wb`) : node_in et
@@ -206,7 +211,7 @@ void relu(inout ACC c) {
 }
 
 void main() {
-    uint pos = gl_WorkGroupID.x;
+    uint pos = inp[(p.order_off >> 2) + (p.first + gl_WorkGroupID.x) % p.ring];
     uint t = gl_LocalInvocationID.x;
     uint sg = gl_SubgroupID;
     uint n = sg % NT;

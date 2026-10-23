@@ -394,7 +394,8 @@ fn the_search_sees_only_what_the_player_knows() {
 fn evaluations_kept_from_search_to_search_change_nothing() {
     use smallmobile_lab3::az::{Az, Config, Evals};
     // un réseau dont les réponses varient d'une position à l'autre
-    let az = Az::new(Config { iterations: 30 }, std::sync::Arc::new(random_net()), "hasard".into());
+    let az =
+        Az::new(Config { iterations: 30, ..Config::default() }, std::sync::Arc::new(random_net()), "hasard".into());
     let mut rng = Rng::new(31);
     let mut checked = 0;
     for game in 0..4u64 {
@@ -474,12 +475,12 @@ fn vulkan_check(bytes: Vec<u8>, seed: u64) {
         });
     }
     let items: Vec<_> = positions.iter().map(|(e, t, _)| (e, &tables[*t].map)).collect();
-    // deux groupes envoyés ensemble : évalués dans le même lot, chacun reçoit les siennes
+    // deux envois à la suite : chacun reçoit les siennes
     let half = items.len() / 2;
-    let players = |r: std::ops::Range<usize>| positions[r].iter().map(|(e, _, _)| e.players).collect::<Vec<_>>();
-    let first = gpu.submit(&items[..half], players(0..half).into_iter());
-    let second = gpu.submit(&items[half..], players(half..items.len()).into_iter());
-    let far: Vec<_> = first.wait().into_iter().chain(second.wait()).collect();
+    let mut lane = gpu.lanes(1).pop().unwrap();
+    let first = lane.send(&gpu, &items[..half]);
+    let second = lane.send(&gpu, &items[half..]);
+    let far: Vec<_> = lane.take(&gpu, first).into_iter().chain(lane.take(&gpu, second)).collect();
     // les plus grands écarts : victoire, pièces, logits des coups possibles
     let mut worst = [0.0f32; 3];
     for (i, (e, t, legal)) in positions.iter().enumerate() {
@@ -508,7 +509,8 @@ fn vulkan_check(bytes: Vec<u8>, seed: u64) {
 fn the_engine_plays_each_game_as_if_alone() {
     use smallmobile_lab3::az::{Az, Config, Direct, now};
     use smallmobile_lab3::selfplay::{self, Options};
-    let az = Az::new(Config { iterations: 12 }, std::sync::Arc::new(random_net()), "hasard".into());
+    let az =
+        Az::new(Config { iterations: 12, ..Config::default() }, std::sync::Arc::new(random_net()), "hasard".into());
     let dir = std::env::temp_dir().join(format!("smallmobile-engine-{}", std::process::id()));
     let opts = Options { full_share: 0.5, fast: 4 };
     let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 12, threads: 2, seed: 17, opts };

@@ -3,13 +3,11 @@
 //! compilé par `glslc` à la construction), sur n'importe quel GPU qui a Vulkan (AMD, NVIDIA ;
 //! llvmpipe, le Vulkan de Mesa sur processeur, pour les tests sans GPU).
 //!
-//! Le flot : les fils de jeu envoient leurs groupes (`gpu::Gpu::submit`) ; un fil « envoi » les
-//! recopie dans un emplacement libre de la mémoire que le GPU lit directement (`SLOTS` emplacements,
-//! mémoire du GPU visible de l'hôte, sinon mémoire de l'hôte visible du GPU), et soumet le lot : un
-//! seul calcul, un groupe de travail par position, tout le réseau dans la mémoire partagée du
-//! groupe. Un fil « réception » attend la fin de chaque lot (sémaphore à compteur), lit les sorties
-//! là où le GPU les a écrites et répond aux fils de jeu. Pendant que le GPU calcule un lot, le
-//! suivant se remplit.
+//! Le flot (`gpu::Gpu`) : les fils de jeu écrivent leurs positions dans un anneau de la mémoire que
+//! le GPU lit directement (`RING` positions ; mémoire du GPU visible de l'hôte, sinon mémoire de
+//! l'hôte visible du GPU) ; un fil soumet les calculs des positions écrites (`Engine::submit`) :
+//! un groupe de travail par position, tout le réseau dans la mémoire partagée du groupe ; le GPU
+//! écrit les sorties dans un anneau que les fils de jeu lisent sur place.
 //!
 //! Calcul en f32 ; les sommes ne se font pas dans le même ordre que sur le processeur (écarts de
 //! l'ordre de 1e-6).
@@ -20,23 +18,24 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
-use std::sync::mpsc;
 
 use ash::vk;
 
 use crate::encode::{GLOBAL, NODE, REGIONS};
-use crate::gpu::{Job, Reply};
 use crate::moves::{GLOBAL_KEYS, KEYS};
-use crate::net::{Eval, REGION_KINDS};
+use crate::net::{Eval, Position, REGION_KINDS};
 
-/// Lots en vol : pendant que le GPU en calcule un, les autres se remplissent ou se lisent. Mesuré le
-/// 22 octobre (RX 9070 XT, selfplay, 20 fils) : 943, 1 142, 1 222 et 892 positions/s avec 2, 3, 4 et 6
-/// (plus d'emplacements, plus petits lots).
-pub const SLOTS: usize = 12;
+/// Places de l'anneau des entrées et de celui des sorties (`gpu::Gpu`) : toutes les positions en
+/// vol, écrites, en calcul ou pas encore lues.
+pub const RING: usize = 16384;
+/// Numéros de la file d'ordre : la place de chaque position à calculer, dans l'ordre des envois.
+pub const ORDER: usize = 65536;
+/// Calculs en vol au plus (commandes, horodatages).
+pub const COMMANDS: usize = 4;
 /// Files de calcul au plus : les lots de files différentes peuvent se chevaucher sur le GPU. Sur
 /// RADV, deux files ralentissent (836 positions/s au lieu de 1 222, 4 emplacements).
 const QUEUES: u32 = 1;
-/// Positions au plus par lot.
+/// Positions au plus par calcul.
 pub const MAX_BATCH: usize = 2048;
 /// Nombres rendus par position : les logits des coups, puis la tête de valeur.
 const OUT: usize = KEYS + 10;
@@ -216,13 +215,15 @@ impl Weights {
     }
 }
 
-/// Où sont les entrées des positions dans un emplacement (octets) : le format de `gpu::Job`.
+/// Où sont les entrées des positions dans l'anneau (octets), et la file d'ordre (`ORDER` numéros
+/// de places).
 #[derive(Clone, Copy)]
 struct InputLayout {
     node: usize,
     glob: usize,
     adj: usize,
     regions: usize,
+    order: usize,
     size: usize,
 }
 
@@ -233,11 +234,12 @@ impl InputLayout {
         let glob = up(node + max * REGIONS * NODE);
         let adj = up(glob + max * GLOBAL);
         let regions = up(adj + max * REGIONS * 8);
-        InputLayout { node, glob, adj, regions, size: up(regions + max) }
+        let order = up(regions + max);
+        InputLayout { node, glob, adj, regions, order, size: order + ORDER * 4 }
     }
 }
 
-/// Le profil (`LAB3_VULKAN_PROFILE`) : un horodatage au début et à la fin de chaque lot.
+/// Le profil (`LAB3_VULKAN_PROFILE`) : un horodatage au début et à la fin de chaque calcul.
 struct Profile {
     queries: vk::QueryPool,
     /// Nanosecondes par unité d'horodatage.
@@ -246,28 +248,28 @@ struct Profile {
     totals: Mutex<(u64, u64, f64)>,
 }
 
-/// Le réseau sur un GPU, avec `SLOTS` emplacements d'entrées et de sorties.
+/// Le réseau sur un GPU, avec un anneau de `RING` positions (entrées et sorties).
 pub struct Engine {
     _entry: ash::Entry,
     instance: ash::Instance,
     device: ash::Device,
-    /// Les files de calcul ; l'emplacement `s` passe par la file `s % queues.len()`.
+    /// Les files de calcul ; seule la première sert aux calculs.
     queues: Vec<vk::Queue>,
     command_pool: vk::CommandPool,
     commands: Vec<vk::CommandBuffer>,
     descriptor_pool: vk::DescriptorPool,
     set_layout: vk::DescriptorSetLayout,
-    sets: Vec<vk::DescriptorSet>,
+    set: vk::DescriptorSet,
     layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
     module: vk::ShaderModule,
     buffers: Vec<(vk::Buffer, vk::DeviceMemory)>,
-    inputs: Vec<*mut u8>,
-    outputs: Vec<*const f32>,
-    /// Un sémaphore à compteur par emplacement : il dit la fin de chacun de ses lots.
-    timelines: Vec<vk::Semaphore>,
-    /// La dernière valeur promise de chaque sémaphore : un seul fil soumet à la fois.
-    submitted: Mutex<Vec<u64>>,
+    input: *mut u8,
+    output: *const f32,
+    /// Un sémaphore à compteur : il passe à `n` à la fin du `n`-ième calcul.
+    timeline: vk::Semaphore,
+    /// Le nombre de calculs soumis : un seul fil soumet à la fois.
+    submitted: Mutex<u64>,
     profile: Option<Profile>,
     weights: Weights,
     input_layout: InputLayout,
@@ -282,9 +284,9 @@ pub struct Engine {
     prof: *mut u32,
 }
 
-// SAFETY : les pointeurs sont ceux de la mémoire projetée (`prof` : lu seulement par `bench`), qui vit autant que l'`Engine` ; chaque
-// emplacement n'est touché que par le fil qui le tient (voir `serve`), la file et les commandes
-// sous `submitted`.
+// SAFETY : les pointeurs sont ceux de la mémoire projetée (`prof` : lu seulement par `bench`), qui
+// vit autant que l'`Engine` ; chaque position de l'anneau n'est touchée que par qui la tient
+// (`gpu::Gpu`), la file et les commandes sous `submitted`.
 unsafe impl Send for Engine {}
 unsafe impl Sync for Engine {}
 
@@ -394,17 +396,17 @@ impl Engine {
                 commands: Vec::new(),
                 descriptor_pool: vk::DescriptorPool::null(),
                 set_layout: vk::DescriptorSetLayout::null(),
-                sets: Vec::new(),
+                set: vk::DescriptorSet::null(),
                 layout: vk::PipelineLayout::null(),
                 pipeline: vk::Pipeline::null(),
                 module: vk::ShaderModule::null(),
                 buffers: Vec::new(),
-                inputs: Vec::new(),
-                outputs: Vec::new(),
-                timelines: Vec::new(),
-                submitted: Mutex::new(vec![0; SLOTS]),
+                input: std::ptr::null_mut(),
+                output: std::ptr::null(),
+                timeline: vk::Semaphore::null(),
+                submitted: Mutex::new(0),
                 profile: None,
-                input_layout: InputLayout::new(max),
+                input_layout: InputLayout::new(RING),
                 weights,
                 max,
                 name,
@@ -419,7 +421,7 @@ impl Engine {
                     .create_query_pool(
                         &vk::QueryPoolCreateInfo::default()
                             .query_type(vk::QueryType::TIMESTAMP)
-                            .query_count(2 * SLOTS as u32),
+                            .query_count(2 * COMMANDS as u32),
                         None,
                     )
                     .map_err(vk_err("horodatages"))?;
@@ -576,24 +578,17 @@ impl Engine {
                 self.weights.data16.len() * 2,
             );
             self.device.unmap_memory(smem16);
-            // entrées : écrites par l'hôte, lues par le GPU (de préférence dans sa mémoire, si
-            // l'hôte la voit) ; sorties : écrites par le GPU, lues par l'hôte (de préférence en
-            // cache de l'hôte)
-            let mut slots = Vec::new();
-            for _ in 0..SLOTS {
-                let (ibuf, imem) =
-                    self.buffer(memory, self.input_layout.size, storage, &[M::DEVICE_LOCAL | host, host])?;
-                let (obuf, omem) = self.buffer(memory, self.max * OUT * 4, storage, &[host | M::HOST_CACHED, host])?;
-                let map = |m| self.device.map_memory(m, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty());
-                let ip = map(imem).map_err(vk_err("projection"))?;
-                let op = map(omem).map_err(vk_err("projection"))?;
-                self.inputs.push(ip as *mut u8);
-                self.outputs.push(op as *const f32);
-                slots.push((ibuf, obuf));
-            }
+            // l'anneau des entrées : écrites par l'hôte, lues par le GPU (de préférence dans sa
+            // mémoire, si l'hôte la voit) ; celui des sorties : écrites par le GPU, lues par l'hôte
+            // (de préférence en cache de l'hôte)
+            let (ibuf, imem) = self.buffer(memory, self.input_layout.size, storage, &[M::DEVICE_LOCAL | host, host])?;
+            let (obuf, omem) = self.buffer(memory, RING * OUT * 4, storage, &[host | M::HOST_CACHED, host])?;
+            let map = |m| self.device.map_memory(m, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty());
+            self.input = map(imem).map_err(vk_err("projection"))? as *mut u8;
+            self.output = map(omem).map_err(vk_err("projection"))? as *const f32;
 
             // les durées par étape (`phases`) : toujours là, pour une seule disposition
-            let (pbuf, pmem) = self.buffer(memory, self.max * 16 * 4, storage, &[host])?;
+            let (pbuf, pmem) = self.buffer(memory, RING * 16 * 4, storage, &[host])?;
             let pp = self
                 .device
                 .map_memory(pmem, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
@@ -613,7 +608,7 @@ impl Engine {
             self.set_layout = d
                 .create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings), None)
                 .map_err(vk_err("disposition"))?;
-            let push = [vk::PushConstantRange::default().stage_flags(vk::ShaderStageFlags::COMPUTE).size(20)];
+            let push = [vk::PushConstantRange::default().stage_flags(vk::ShaderStageFlags::COMPUTE).size(32)];
             let set_layouts = [self.set_layout];
             self.layout = d
                 .create_pipeline_layout(
@@ -621,41 +616,34 @@ impl Engine {
                     None,
                 )
                 .map_err(vk_err("disposition"))?;
-            let sizes = [vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(5 * SLOTS as u32)];
+            let sizes = [vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(5)];
             self.descriptor_pool = d
-                .create_descriptor_pool(
-                    &vk::DescriptorPoolCreateInfo::default().max_sets(SLOTS as u32).pool_sizes(&sizes),
-                    None,
-                )
+                .create_descriptor_pool(&vk::DescriptorPoolCreateInfo::default().max_sets(1).pool_sizes(&sizes), None)
                 .map_err(vk_err("réserve"))?;
-            let layouts = vec![self.set_layout; SLOTS];
-            self.sets = d
+            let layouts = [self.set_layout];
+            self.set = d
                 .allocate_descriptor_sets(
                     &vk::DescriptorSetAllocateInfo::default()
                         .descriptor_pool(self.descriptor_pool)
                         .set_layouts(&layouts),
                 )
-                .map_err(vk_err("descripteurs"))?;
-            for (&set, &(ibuf, obuf)) in self.sets.iter().zip(&slots) {
-                let infos: Vec<[vk::DescriptorBufferInfo; 1]> = [wbuf, ibuf, obuf, w16buf, pbuf]
-                    .iter()
-                    .map(|&b| [vk::DescriptorBufferInfo::default().buffer(b).range(vk::WHOLE_SIZE)])
-                    .collect();
-                let writes: Vec<_> = infos
-                    .iter()
-                    .enumerate()
-                    .map(|(i, info)| {
-                        vk::WriteDescriptorSet::default()
-                            .dst_set(set)
-                            .dst_binding(i as u32)
-                            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                            .buffer_info(info)
-                    })
-                    .collect();
-                d.update_descriptor_sets(&writes, &[]);
-            }
+                .map_err(vk_err("descripteurs"))?[0];
+            let infos: Vec<[vk::DescriptorBufferInfo; 1]> = [wbuf, ibuf, obuf, w16buf, pbuf]
+                .iter()
+                .map(|&b| [vk::DescriptorBufferInfo::default().buffer(b).range(vk::WHOLE_SIZE)])
+                .collect();
+            let writes: Vec<_> = infos
+                .iter()
+                .enumerate()
+                .map(|(i, info)| {
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(self.set)
+                        .dst_binding(i as u32)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(info)
+                })
+                .collect();
+            d.update_descriptor_sets(&writes, &[]);
 
             let code = match (self.bf16, self.phases) {
                 (true, true) => NET16_PROF_SPV,
@@ -705,16 +693,13 @@ impl Engine {
                     &vk::CommandBufferAllocateInfo::default()
                         .command_pool(self.command_pool)
                         .level(vk::CommandBufferLevel::PRIMARY)
-                        .command_buffer_count(SLOTS as u32),
+                        .command_buffer_count(COMMANDS as u32),
                 )
                 .map_err(vk_err("commandes"))?;
-            for _ in 0..SLOTS {
-                let mut kind = vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
-                let sem = d
-                    .create_semaphore(&vk::SemaphoreCreateInfo::default().push_next(&mut kind), None)
-                    .map_err(vk_err("sémaphore"))?;
-                self.timelines.push(sem);
-            }
+            let mut kind = vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
+            self.timeline = d
+                .create_semaphore(&vk::SemaphoreCreateInfo::default().push_next(&mut kind), None)
+                .map_err(vk_err("sémaphore"))?;
 
             // la copie des poids, une fois
             let cb = self.commands[0];
@@ -730,45 +715,59 @@ impl Engine {
         }
     }
 
-    /// La mémoire des entrées de l'emplacement `slot`.
+    /// La mémoire des entrées de l'anneau.
     #[allow(clippy::mut_from_ref)]
-    fn input(&self, slot: usize) -> &mut [u8] {
-        // SAFETY : mémoire projetée de `input_layout.size` octets ; l'emplacement appartient à
-        // l'appelant (`serve`)
-        unsafe { std::slice::from_raw_parts_mut(self.inputs[slot], self.input_layout.size) }
+    fn input(&self) -> &mut [u8] {
+        // SAFETY : mémoire projetée de `input_layout.size` octets ; chaque position n'est écrite que
+        // par qui la tient (`gpu::Gpu`)
+        unsafe { std::slice::from_raw_parts_mut(self.input, self.input_layout.size) }
     }
 
-    /// Les sorties de l'emplacement `slot` : `OUT` nombres par position.
-    fn output(&self, slot: usize) -> &[f32] {
-        // SAFETY : mémoire projetée de `max · OUT` nombres
-        unsafe { std::slice::from_raw_parts(self.outputs[slot], self.max * OUT) }
+    /// Les sorties de la position `cell` de l'anneau : `OUT` nombres.
+    pub(crate) fn output(&self, cell: usize) -> &[f32] {
+        // SAFETY : mémoire projetée de `RING · OUT` nombres
+        unsafe { std::slice::from_raw_parts(self.output.add(cell * OUT), OUT) }
     }
 
-    /// Range les positions du groupe `job` à partir de la position `at` de l'emplacement `slot`.
-    fn write(&self, slot: usize, at: usize, job: &Job) {
-        let (l, input) = (self.input_layout, self.input(slot));
-        let mut put = |off: usize, size: usize, data: &[u8]| {
-            input[off + at * size..off + (at + job.count) * size].copy_from_slice(data);
-        };
-        put(l.node, REGIONS * NODE, &job.node);
-        put(l.glob, GLOBAL, &job.glob);
-        put(l.adj, REGIONS * 8, &job.adj);
-        put(l.regions, 1, &job.regions);
+    /// Écrit la position `p` à la place `cell` de l'anneau : ses régions présentes, la partie, les
+    /// voisines (bits), le nombre de régions.
+    pub(crate) fn write<P: Position + ?Sized>(&self, cell: usize, p: &P) {
+        let (l, input) = (self.input_layout, self.input());
+        let e = p.encoded();
+        let node = l.node + cell * REGIONS * NODE;
+        input[node..node + e.regions * NODE].copy_from_slice(e.node[..e.regions].as_flattened());
+        let glob = l.glob + cell * GLOBAL;
+        input[glob..glob + GLOBAL].copy_from_slice(&e.global);
+        let adj = l.adj + cell * REGIONS * 8;
+        for (i, out) in input[adj..adj + REGIONS * 8].as_chunks_mut::<8>().0.iter_mut().enumerate() {
+            let bits = if i < e.regions { p.adj(i).iter().fold(0u64, |b, &j| b | 1 << j) } else { 0 };
+            *out = bits.to_le_bytes();
+        }
+        input[l.regions + cell] = e.regions as u8;
     }
 
-    /// Soumet le calcul des `count` positions de l'emplacement `slot` ; rend la valeur du
-    /// sémaphore qui dira sa fin (`wait`).
-    fn submit(&self, slot: usize, count: usize) -> Result<u64, String> {
-        assert!(count <= self.max, "lot trop grand");
+    /// Range la place `cell` au numéro `at` de la file d'ordre.
+    pub(crate) fn order(&self, at: usize, cell: usize) {
+        let o = self.input_layout.order + at * 4;
+        self.input()[o..o + 4].copy_from_slice(&(cell as u32).to_le_bytes());
+    }
+
+    /// Soumet le calcul des `count` positions de la file d'ordre à partir de son numéro `first`
+    /// (les suivantes reprennent au début) ; rend le numéro du calcul, que prend le sémaphore à sa
+    /// fin (`wait`). `COMMANDS` calculs en vol au plus.
+    pub(crate) fn submit(&self, first: usize, count: usize) -> Result<u64, String> {
+        assert!(count <= self.max && first < ORDER, "calcul trop grand");
         let mut submitted = self.submitted.lock().expect("verrou");
-        let cb = self.commands[slot];
+        let value = *submitted + 1;
+        let at = (value % COMMANDS as u64) as usize;
+        let cb = self.commands[at];
         let l = self.input_layout;
-        let params: Vec<u8> = [l.node, l.glob, l.adj, l.regions, self.weights.layers as usize]
+        let params: Vec<u8> = [l.node, l.glob, l.adj, l.regions, self.weights.layers as usize, first, ORDER, l.order]
             .iter()
             .flat_map(|&v| (v as u32).to_le_bytes())
             .collect();
-        // SAFETY : la commande de l'emplacement n'est plus en vol (l'appelant a attendu sa fin) ;
-        // un seul fil soumet à la fois (`submitted`)
+        // SAFETY : la commande n'est plus en vol (au plus `COMMANDS` calculs, l'appelant a attendu
+        // les plus vieux) ; un seul fil soumet à la fois (`submitted`)
         unsafe {
             let d = &self.device;
             d.reset_command_buffer(cb, vk::CommandBufferResetFlags::empty()).map_err(vk_err("commandes"))?;
@@ -778,15 +777,15 @@ impl Engine {
             )
             .map_err(vk_err("commandes"))?;
             if let Some(p) = &self.profile {
-                d.cmd_reset_query_pool(cb, p.queries, 2 * slot as u32, 2);
-                d.cmd_write_timestamp(cb, vk::PipelineStageFlags::TOP_OF_PIPE, p.queries, 2 * slot as u32);
+                d.cmd_reset_query_pool(cb, p.queries, 2 * at as u32, 2);
+                d.cmd_write_timestamp(cb, vk::PipelineStageFlags::TOP_OF_PIPE, p.queries, 2 * at as u32);
             }
             d.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, self.pipeline);
-            d.cmd_bind_descriptor_sets(cb, vk::PipelineBindPoint::COMPUTE, self.layout, 0, &[self.sets[slot]], &[]);
+            d.cmd_bind_descriptor_sets(cb, vk::PipelineBindPoint::COMPUTE, self.layout, 0, &[self.set], &[]);
             d.cmd_push_constants(cb, self.layout, vk::ShaderStageFlags::COMPUTE, 0, &params);
             d.cmd_dispatch(cb, count as u32, 1, 1);
             if let Some(p) = &self.profile {
-                d.cmd_write_timestamp(cb, vk::PipelineStageFlags::BOTTOM_OF_PIPE, p.queries, 2 * slot as u32 + 1);
+                d.cmd_write_timestamp(cb, vk::PipelineStageFlags::BOTTOM_OF_PIPE, p.queries, 2 * at as u32 + 1);
             }
             let to_host = [vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -801,34 +800,51 @@ impl Engine {
                 &[],
             );
             d.end_command_buffer(cb).map_err(vk_err("commandes"))?;
-            submitted[slot] += 1;
-            let values = [submitted[slot]];
+            let values = [value];
             let mut timeline = vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&values);
-            let (cbs, sems) = ([cb], [self.timelines[slot]]);
+            let (cbs, sems) = ([cb], [self.timeline]);
             let info =
                 vk::SubmitInfo::default().command_buffers(&cbs).signal_semaphores(&sems).push_next(&mut timeline);
-            let queue = self.queues[slot % self.queues.len()];
-            d.queue_submit(queue, &[info], vk::Fence::null()).map_err(vk_err("envoi"))?;
+            d.queue_submit(self.queues[0], &[info], vk::Fence::null()).map_err(vk_err("envoi"))?;
         }
-        Ok(submitted[slot])
+        *submitted = value;
+        Ok(value)
     }
 
-    /// Attend la fin du lot de l'emplacement `slot` soumis avec la valeur `value`.
-    fn wait(&self, slot: usize, value: u64) -> Result<(), String> {
-        let (sems, values) = ([self.timelines[slot]], [value]);
+    /// Le numéro du dernier calcul fini (sans attendre).
+    pub(crate) fn completed(&self) -> Result<u64, String> {
+        // SAFETY : sémaphore vivant
+        unsafe { self.device.get_semaphore_counter_value(self.timeline) }.map_err(vk_err("sémaphore"))
+    }
+
+    /// Attend la fin du calcul `value`.
+    pub(crate) fn wait(&self, value: u64) -> Result<(), String> {
+        self.wait_for(value, u64::MAX).map(|_| ())
+    }
+
+    /// Attend la fin du calcul `value`, `timeout` ns au plus ; rend s'il est fini.
+    pub(crate) fn wait_for(&self, value: u64, timeout: u64) -> Result<bool, String> {
+        let (sems, values) = ([self.timeline], [value]);
         // SAFETY : sémaphore vivant ; l'attente peut se faire de n'importe quel fil
-        unsafe {
-            self.device.wait_semaphores(&vk::SemaphoreWaitInfo::default().semaphores(&sems).values(&values), u64::MAX)
+        let waited = unsafe {
+            self.device.wait_semaphores(&vk::SemaphoreWaitInfo::default().semaphores(&sems).values(&values), timeout)
+        };
+        match waited {
+            Ok(()) => Ok(true),
+            Err(vk::Result::TIMEOUT) => Ok(false),
+            Err(e) => Err(vk_err("attente")(e)),
         }
-        .map_err(vk_err("attente"))
     }
 
     /// Durée moyenne sur le GPU (ms) d'un lot de `count` positions de `regions` régions (en anneau,
     /// deux voisines chacune), sur `rounds` lots ; demande `LAB3_VULKAN_PROFILE`.
     pub fn bench(&self, count: usize, regions: usize, rounds: usize) -> Result<f64, String> {
         let l = self.input_layout;
-        let input = self.input(0);
+        let input = self.input();
         input.fill(0);
+        for at in 0..count {
+            self.order(at, at);
+        }
         for pos in 0..count {
             input[l.regions + pos] = regions as u8;
             for i in 0..regions {
@@ -841,39 +857,34 @@ impl Engine {
         *p.totals.lock().expect("verrou") = (0, 0, 0.0);
         for _ in 0..rounds {
             let v = self.submit(0, count)?;
-            self.wait(0, v)?;
-            self.profile_lot(0, count);
+            self.wait(v)?;
+            self.profile_lot(v, count);
         }
         let (lots, _, ns) = *p.totals.lock().expect("verrou");
         Ok(ns / 1e6 / lots.max(1) as f64)
     }
 
-    /// En flux : `lots` lots de `count` positions soumis à la suite, `SLOTS` en vol au plus, comme
-    /// le selfplay ; rend la durée murale totale (ms) et la somme des durées sur le GPU (ms). Leur
-    /// écart : ce que coûtent les soumissions et les fins de lot.
+    /// En flux : `lots` lots de `count` positions soumis à la suite, `COMMANDS` en vol au plus ;
+    /// rend la durée murale totale (ms) et la somme des durées sur le GPU (ms). Leur écart : ce que
+    /// coûtent les soumissions et les fins de lot.
     pub fn bench_stream(&self, count: usize, regions: usize, lots: usize) -> Result<(f64, f64), String> {
-        // les mêmes positions dans tous les emplacements
+        // les mêmes positions pour tous les lots
         self.bench(count, regions, 1)?;
-        let first = self.input(0).to_vec();
-        for slot in 1..SLOTS {
-            self.input(slot).copy_from_slice(&first);
-        }
         let p = self.profile.as_ref().ok_or("LAB3_VULKAN_PROFILE=1 attendu")?;
         *p.totals.lock().expect("verrou") = (0, 0, 0.0);
         let start = std::time::Instant::now();
         let mut pending = std::collections::VecDeque::new();
-        for k in 0..lots {
-            let slot = k % SLOTS;
-            if pending.len() == SLOTS {
-                let (s, v) = pending.pop_front().expect("un lot");
-                self.wait(s, v)?;
-                self.profile_lot(s, count);
+        for _ in 0..lots {
+            if pending.len() == COMMANDS {
+                let v = pending.pop_front().expect("un lot");
+                self.wait(v)?;
+                self.profile_lot(v, count);
             }
-            pending.push_back((slot, self.submit(slot, count)?));
+            pending.push_back(self.submit(0, count)?);
         }
-        for (s, v) in pending {
-            self.wait(s, v)?;
-            self.profile_lot(s, count);
+        for v in pending {
+            self.wait(v)?;
+            self.profile_lot(v, count);
         }
         let wall = start.elapsed().as_secs_f64() * 1e3;
         let (_, _, ns) = *p.totals.lock().expect("verrou");
@@ -888,7 +899,7 @@ impl Engine {
         }
         // SAFETY : mémoire projetée de `max · 16` nombres, que le GPU ne touche qu'entre `submit`
         // et `wait`
-        let prof = unsafe { std::slice::from_raw_parts_mut(self.prof, self.max * 16) };
+        let prof = unsafe { std::slice::from_raw_parts_mut(self.prof, RING * 16) };
         prof.fill(0);
         self.bench(count, regions, rounds)?;
         // chaque lot réécrit ses durées : celles du dernier
@@ -900,15 +911,16 @@ impl Engine {
         ))
     }
 
-    /// Ajoute au profil la durée du lot fini de l'emplacement `slot` (`count` positions).
-    fn profile_lot(&self, slot: usize, count: usize) {
+    /// Ajoute au profil la durée du calcul fini `value` (`count` positions).
+    pub(crate) fn profile_lot(&self, value: u64, count: usize) {
+        let at = (value % COMMANDS as u64) as u32;
         let Some(p) = &self.profile else { return };
         let mut stamps = [0u64; 2];
         // SAFETY : le lot est fini (`wait`) ; horodatages écrits par ses commandes
         let read = unsafe {
             self.device.get_query_pool_results(
                 p.queries,
-                2 * slot as u32,
+                2 * at,
                 &mut stamps,
                 vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,
             )
@@ -938,9 +950,7 @@ impl Drop for Engine {
                 );
                 d.destroy_query_pool(p.queries, None);
             }
-            for &sem in &self.timelines {
-                d.destroy_semaphore(sem, None);
-            }
+            d.destroy_semaphore(self.timeline, None);
             d.destroy_command_pool(self.command_pool, None);
             d.destroy_pipeline(self.pipeline, None);
             d.destroy_shader_module(self.module, None);
@@ -957,134 +967,8 @@ impl Drop for Engine {
     }
 }
 
-/// Un lot reçu : son emplacement revient à l'envoi quand le dernier groupe a lu ses sorties.
-struct Lot {
-    free: mpsc::Sender<usize>,
-    slot: usize,
-}
-
-impl Drop for Lot {
-    fn drop(&mut self) {
-        let _ = self.free.send(self.slot);
-    }
-}
-
-/// Les sorties d'un emplacement, lues par les fils de jeu.
-#[derive(Clone, Copy)]
-struct Outputs(*const f32);
-// SAFETY : mémoire projetée qui vit autant que l'`Engine`, lue seulement (voir `Lot`)
-unsafe impl Send for Outputs {}
-
 /// L'évaluation d'une position : `OUT` nombres rendus par le GPU.
-fn eval_of(players: usize, out: &[f32]) -> Eval {
+pub(crate) fn eval_of(players: usize, out: &[f32]) -> Eval {
     let v: &[f32; 10] = out[KEYS..OUT].try_into().expect("10 valeurs");
     Eval::from_heads(players, out[..KEYS].to_vec(), v)
-}
-
-/// Le service des fils de jeu (`gpu::Gpu::start`) : envoi et réception des lots, chacun
-/// sur son fil (voir l'en-tête).
-pub(crate) fn serve(net: &Path, jobs: mpsc::Receiver<Job>, ready: mpsc::Sender<Result<String, String>>) {
-    let engine = match Engine::new(net, MAX_BATCH) {
-        Ok(e) => e,
-        Err(e) => {
-            let _ = ready.send(Err(e));
-            return;
-        }
-    };
-    let _ = ready.send(Ok(engine.describe()));
-    let engine = &engine;
-    let (free, slots) = mpsc::channel::<usize>();
-    for s in 0..SLOTS {
-        free.send(s).expect("emplacements");
-    }
-    let (sent, received) = mpsc::channel::<(u64, usize, Vec<Job>)>();
-    let profile = engine.profile.is_some();
-    std::thread::scope(|scope| {
-        // réception : attend chaque lot, dans l'ordre, et rend son emplacement
-        let thread = std::thread::Builder::new().name("vulkan-réception".into());
-        thread
-            .spawn_scoped(scope, move || {
-                let mut busy = std::time::Duration::ZERO;
-                let start = std::time::Instant::now();
-                for (value, slot, batch) in received {
-                    engine.wait(slot, value).unwrap_or_else(|e| panic!("{e}"));
-                    let began = std::time::Instant::now();
-                    engine.profile_lot(slot, batch.iter().map(|j| j.count).sum());
-                    // chaque fil de jeu lit ses sorties lui-même ; l'emplacement revient quand tous
-                    // les groupes du lot les ont lues (ou abandonnées)
-                    let lot = std::sync::Arc::new(Lot { free: free.clone(), slot });
-                    let out = Outputs(engine.output(slot).as_ptr());
-                    let mut at = 0;
-                    for job in batch {
-                        let (lot, players, count) = (lot.clone(), job.players, job.count);
-                        let reply: Reply = Box::new(move || {
-                            // toute la structure (pas son seul champ, qui n'est pas `Send`)
-                            let (_lot, out) = (lot, out);
-                            // SAFETY : les sorties de ce lot, écrites par le GPU (lot fini) ;
-                            // l'emplacement n'est réutilisé qu'après la fin de `_lot`
-                            let out = unsafe { std::slice::from_raw_parts(out.0.add(at * OUT), count * OUT) };
-                            (0..count).map(|k| eval_of(players[k] as usize, &out[k * OUT..])).collect()
-                        });
-                        at += count;
-                        // un fil de jeu arrêté ne relit pas : rien à faire
-                        let _ = job.reply.send(reply);
-                    }
-                    busy += began.elapsed();
-                }
-                if profile {
-                    eprintln!("réception occupée {:.0} %", 100.0 * busy.as_secs_f64() / start.elapsed().as_secs_f64());
-                }
-            })
-            .expect("fil de réception");
-        // envoi : un emplacement libre, puis tous les groupes qui attendent (au moins un)
-        let mut carry: Option<Job> = None;
-        let (mut busy, mut idle_slot, mut idle_jobs) =
-            (std::time::Duration::ZERO, std::time::Duration::ZERO, std::time::Duration::ZERO);
-        let start = std::time::Instant::now();
-        loop {
-            let waited = std::time::Instant::now();
-            let Ok(slot) = slots.recv() else { break };
-            idle_slot += waited.elapsed();
-            let waited = std::time::Instant::now();
-            let first = match carry.take() {
-                Some(job) => job,
-                None => match jobs.recv() {
-                    Ok(job) => job,
-                    Err(_) => break,
-                },
-            };
-            idle_jobs += waited.elapsed();
-            let began = std::time::Instant::now();
-            let mut count = first.count;
-            let mut batch = vec![first];
-            for job in jobs.try_iter() {
-                if count + job.count > MAX_BATCH {
-                    carry = Some(job);
-                    break;
-                }
-                count += job.count;
-                batch.push(job);
-            }
-            let mut at = 0;
-            for job in &batch {
-                engine.write(slot, at, job);
-                at += job.count;
-            }
-            let value = engine.submit(slot, count).unwrap_or_else(|e| panic!("{e}"));
-            busy += began.elapsed();
-            if sent.send((value, slot, batch)).is_err() {
-                break;
-            }
-        }
-        if profile {
-            let all = start.elapsed().as_secs_f64() / 100.0;
-            eprintln!(
-                "envoi : occupé {:.0} %, attend un emplacement {:.0} %, attend des groupes {:.0} %",
-                busy.as_secs_f64() / all,
-                idle_slot.as_secs_f64() / all,
-                idle_jobs.as_secs_f64() / all
-            );
-        }
-        drop(sent);
-    });
 }

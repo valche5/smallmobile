@@ -29,7 +29,7 @@ pub struct Decision {
 
 impl Expert {
     pub fn new(net: Arc<Net>, iterations: usize) -> Expert {
-        Expert { search: Az::new(Config { iterations }, net, "expert".into()) }
+        Expert { search: Az::new(Config { iterations, ..Config::default() }, net, "expert".into()) }
     }
 
     /// La prochaine décision du joueur qui doit agir, en actions du noyau : un coup, ou toute une

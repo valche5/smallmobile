@@ -1,9 +1,10 @@
-//! Les évaluations groupées d'un fil de calcul. Chaque partie que mène le fil dépose sa position et
-//! attend (`Oracle`) ; le fil envoie le groupe (`submit`) : son processeur l'évalue aussitôt,
-//! couche après couche (`Net::eval_batch`), ou le GPU (`gpu::Gpu`) pendant que le fil fait avancer
-//! un autre groupe ; puis chaque partie reprend avec la sienne (`collect`). Le groupe, les parties
-//! et leurs évaluations gardées appartiennent au fil : aucune donnée modifiable n'est partagée
-//! entre les cœurs, seuls les poids du réseau, en lecture.
+//! Les évaluations d'un fil de calcul. Chaque partie que mène le fil dépose ses positions et attend
+//! (`Oracle`). Sur le processeur, le fil évalue d'un coup celles du groupe de parties qui attendent
+//! (`submit`), couche après couche (`Net::eval_batch`), puis chaque partie reprend avec les siennes.
+//! Avec le GPU, le fil envoie les positions d'une partie dès qu'elle les a déposées (`send`), fait
+//! avancer les autres, et la reprend quand ses évaluations sont là (`receive`, `resume`). Les
+//! parties et leurs évaluations gardées appartiennent au fil : aucune donnée modifiable n'est
+//! partagée entre les cœurs, seuls les poids du réseau, en lecture.
 
 use std::cell::RefCell;
 use std::pin::Pin;
@@ -14,16 +15,22 @@ use smallmobile_kernel::Map;
 
 use crate::az::Oracle;
 use crate::encode::{Encoded, REGIONS};
-use crate::gpu::{Gpu, Pending};
+use crate::gpu::{Gpu, Lane, Sent};
 use crate::net::{Eval, Net, Position};
 
-/// Le temps (ns) des fils de jeu, tous ensemble, pour leurs évaluations sur GPU : envoi des groupes
-/// (copie dans un `gpu::Job`), attente de la réponse, décodage des sorties (`TIME_*` ; affiché par
+/// Le temps (ns) des fils de jeu, tous ensemble, pour leurs évaluations sur GPU : écriture des
+/// positions dans l'anneau, attente des évaluations, lecture des sorties (`TIME_*` ; affiché par
 /// `selfplay::run` avec `LAB3_VULKAN_PROFILE`).
 pub static TIMES: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
 pub const TIME_SUBMIT: usize = 0;
 pub const TIME_WAIT: usize = 1;
 pub const TIME_DECODE: usize = 2;
+
+/// Les calculs soumis au GPU (`SENT_LOTS`) et leurs positions (`SENT_POSITIONS`), depuis le départ
+/// (`gpu::drive` ; affichés par `selfplay::pace`).
+pub static SENT: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+pub const SENT_LOTS: usize = 0;
+pub const SENT_POSITIONS: usize = 1;
 
 fn count(what: usize, since: std::time::Instant) {
     TIMES[what].fetch_add(since.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -31,13 +38,13 @@ fn count(what: usize, since: std::time::Instant) {
 
 pub struct Batch<'a> {
     net: &'a Net,
-    /// Le GPU qui évalue le groupe ; sans lui, le processeur du fil.
-    gpu: Option<&'a Gpu>,
+    /// Le GPU qui évalue les positions, et les places du fil dans son anneau ; sans lui, le
+    /// processeur du fil.
+    gpu: Option<(&'a Gpu, RefCell<Lane>)>,
     /// Les positions déposées depuis le dernier envoi, dans l'ordre des tickets.
     waiting: RefCell<Vec<Request>>,
-    /// Le groupe envoyé au GPU, pas encore repris.
-    sent: RefCell<Option<Pending>>,
-    /// Les évaluations du dernier envoi, par ticket, chacune prise par sa partie.
+    /// Les évaluations du dernier envoi (ou de la partie reprise), par ticket, chacune prise par sa
+    /// partie.
     done: RefCell<Vec<Option<Eval>>>,
     /// Profils (`LAB3_INSTANT=1`) : des évaluations instantanées, sans réseau (`instant`), pour
     /// mesurer le jeu et la recherche seuls.
@@ -63,46 +70,58 @@ impl Position for Request {
 }
 
 impl<'a> Batch<'a> {
-    pub fn new(net: &'a Net, gpu: Option<&'a Gpu>) -> Self {
+    pub fn new(net: &'a Net, gpu: Option<(&'a Gpu, Lane)>) -> Self {
         let instant = std::env::var_os("LAB3_INSTANT").is_some();
-        Batch { net, gpu, waiting: RefCell::default(), sent: RefCell::default(), done: RefCell::default(), instant }
+        let gpu = gpu.map(|(gpu, lane)| (gpu, RefCell::new(lane)));
+        Batch { net, gpu, waiting: RefCell::default(), done: RefCell::default(), instant }
     }
 
-    /// Envoie les positions en attente : le processeur du fil les évalue aussitôt ; le GPU, pendant
-    /// que le fil fait autre chose (`collect`).
+    /// Évalue les positions en attente sur le processeur du fil (ou instantanément, `instant`) ;
+    /// chaque partie trouvera les siennes en reprenant.
     pub fn submit(&self) {
         let waiting = std::mem::take(&mut *self.waiting.borrow_mut());
-        if self.instant {
-            *self.done.borrow_mut() = waiting.iter().map(|r| Some(instant(&r.e))).collect();
-            return;
-        }
-        match self.gpu {
-            Some(gpu) => {
-                let start = std::time::Instant::now();
-                let players = waiting.iter().map(|r| r.e.players);
-                *self.sent.borrow_mut() = Some(gpu.submit(&waiting, players));
-                count(TIME_SUBMIT, start);
-            }
-            None => *self.done.borrow_mut() = self.net.eval_batch(&waiting).into_iter().map(Some).collect(),
-        }
+        *self.done.borrow_mut() = if self.instant {
+            waiting.iter().map(|r| Some(instant(&r.e))).collect()
+        } else {
+            assert!(self.gpu.is_none(), "avec le GPU : `send`");
+            self.net.eval_batch(&waiting).into_iter().map(Some).collect()
+        };
     }
 
-    /// Les évaluations du dernier envoi au GPU (attend qu'elles arrivent) ; chaque partie trouvera la
-    /// sienne en reprenant. Rien à faire sans GPU.
-    pub fn collect(&self) {
-        if let Some(pending) = self.sent.borrow_mut().take() {
-            let start = std::time::Instant::now();
-            let reply = pending.receive();
-            count(TIME_WAIT, start);
-            let start = std::time::Instant::now();
-            *self.done.borrow_mut() = reply().into_iter().map(Some).collect();
-            count(TIME_DECODE, start);
+    /// Écrit au GPU les positions en attente (celles de la partie qui vient de s'arrêter) ; `None`
+    /// s'il n'y en a pas.
+    pub fn send(&self) -> Option<Sent> {
+        let waiting = std::mem::take(&mut *self.waiting.borrow_mut());
+        if waiting.is_empty() {
+            return None;
         }
+        let (gpu, lane) = self.gpu.as_ref().expect("un GPU");
+        let start = std::time::Instant::now();
+        let sent = lane.borrow_mut().send(gpu, &waiting);
+        count(TIME_SUBMIT, start);
+        Some(sent)
+    }
+
+    /// Les évaluations de `sent`, attendues et lues.
+    pub fn receive(&self, sent: Sent) -> Vec<Eval> {
+        let (gpu, lane) = self.gpu.as_ref().expect("un GPU");
+        let start = std::time::Instant::now();
+        gpu.wait(&sent);
+        count(TIME_WAIT, start);
+        let start = std::time::Instant::now();
+        let evals = lane.borrow_mut().take(gpu, sent);
+        count(TIME_DECODE, start);
+        evals
+    }
+
+    /// Avant de reprendre la partie qui attendait `evals` (`receive`) : elle les trouvera.
+    pub fn resume(&self, evals: Vec<Eval>) {
+        *self.done.borrow_mut() = evals.into_iter().map(Some).collect();
     }
 }
 
-impl Oracle for Batch<'_> {
-    fn eval(&self, net: &Net, e: &Encoded, map: &Map) -> impl Future<Output = Eval> {
+impl<'a> Oracle for Batch<'a> {
+    fn eval<'s>(&'s self, net: &Net, e: &Encoded, map: &Map) -> impl Future<Output = Eval> + use<'s, 'a> {
         assert!(std::ptr::eq(net, self.net), "un groupe, un réseau");
         let (mut adj, mut starts) = (Vec::new(), [0u16; REGIONS + 1]);
         for i in 0..e.regions {
