@@ -444,6 +444,13 @@ Suite, piste 2 : le même réseau de c031 à c040 avec n = 400 pour les recherch
 (`SIMS=400` ; duels toujours à n = 200), lancé à 15:40 de la même façon (`START=31`, jusqu'à
 c040).
 
+Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
+(`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En
+RAM, la fenêtre aurait pris ~31 Go vers c060 sur les 32 du PC ; mappée, le noyau peut rendre les
+pages. Lot de 512 : 11,3 ms (2 ms en RAM, 33,5 ms sans `MAP_POPULATE`, 81 ms pour l'ancien
+mmap des fichiers denses). Sur c032 : chargement 23 s au lieu de 45, entraînement 80 s au lieu
+de 72, 109 s en tout au lieu de 122 ; 7 Go utilisés.
+
 ### Reprise généraliste depuis c060, arrêt à la validation de c016 (23 octobre)
 
 Campagne locale du 23 octobre, de 03:55:58 à 07:56:47 CEST, environ 4 h : 16 cycles de 25 000

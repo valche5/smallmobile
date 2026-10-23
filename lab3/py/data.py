@@ -1,5 +1,8 @@
 """Les parties d'entraînement écrites par `lab3 selfplay` (voir lab3/src/selfplay.rs pour le format)."""
 
+import mmap
+import struct
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -130,8 +133,10 @@ def in_validation(keys, share):
 # La forme compacte d'un fichier de positions (`pack`), à côté de lui : ce qui n'est pas vide d'un
 # enregistrement de 6 210 octets, ~1,9 Ko par position (octets non nuls des régions et de la partie,
 # un indice de 16 bits et une valeur chacun ; politique des seuls coups possibles ; voisines et
-# propriétaires des régions présentes). La fenêtre entière tient alors en RAM : lue au hasard dans
-# les fichiers mappés, elle faisait attendre l'apprentissage 80 ms par lot de 512 (lab3/journal.md).
+# propriétaires des régions présentes). Lue au hasard dans les fichiers `.pos` mappés, la fenêtre
+# faisait attendre l'apprentissage 80 ms par lot de 512 (lab3/journal.md) ; sous forme compacte,
+# ses grands tableaux restent mappés dans ces fichiers (`_members`), et le cache du système en
+# garde ce qui tient en RAM : la fenêtre grandit (~24 Go à c040) sans déborder les 31 Go du PC.
 PACKED = ".packed.npz"
 # les octets des régions puis ceux de la partie, en un seul vecteur creux
 SPARSE = REGIONS * NODE + GLOBAL
@@ -174,6 +179,53 @@ def pack(f):
     return out
 
 
+def _members(path):
+    """Les tableaux d'un `.npz` non compressé (`np.savez`), mappés à leur place dans le fichier.
+    Toutes les pages sont installées à l'ouverture (`MAP_POPULATE`) : lues une fois à la suite,
+    puis aucune faute de page pendant l'apprentissage (sans elle, 33 ms par lot au lieu de 2). Ce
+    sont les pages du cache du système, qu'il reprend s'il manque de mémoire."""
+    out = {}
+    with zipfile.ZipFile(path) as z, open(path, "rb") as f:
+        whole = mmap.mmap(f.fileno(), 0, flags=mmap.MAP_SHARED | mmap.MAP_POPULATE, prot=mmap.PROT_READ)
+        for info in z.infolist():
+            assert info.compress_type == zipfile.ZIP_STORED, f"{path} : compressé"
+            f.seek(info.header_offset)
+            name_len, extra_len = struct.unpack("<HH", f.read(30)[26:30])
+            f.seek(info.header_offset + 30 + name_len + extra_len)
+            version = np.lib.format.read_magic(f)
+            read = np.lib.format.read_array_header_1_0 if version == (1, 0) else np.lib.format.read_array_header_2_0
+            shape, fortran, dtype = read(f)
+            assert not fortran
+            name = info.filename.removesuffix(".npy")
+            count = int(np.prod(shape))
+            out[name] = np.frombuffer(whole, dtype=dtype, count=count, offset=f.tell()).reshape(shape)
+    return out
+
+
+class Parts:
+    """Les mêmes tableaux de plusieurs fichiers, à la suite, sans les copier : `parts[ids]`."""
+
+    def __init__(self, arrays):
+        self.arrays = arrays
+        self.starts = np.cumsum([0] + [len(a) for a in arrays])
+
+    def __len__(self):
+        return int(self.starts[-1])
+
+    def __getitem__(self, ids):
+        first = self.arrays[0]
+        out = np.empty((len(ids),) + first.shape[1:], first.dtype)
+        # par fichier, dans l'ordre des indices
+        order = np.argsort(ids, kind="stable")
+        sorted_ids = ids[order]
+        cuts = np.searchsorted(sorted_ids, self.starts)
+        for f, a in enumerate(self.arrays):
+            lo, hi = cuts[f], cuts[f + 1]
+            if hi > lo:
+                out[order[lo:hi]] = a[sorted_ids[lo:hi] - self.starts[f]]
+        return out
+
+
 def _segments(begin, count, sel):
     """Les éléments des positions `sel` dans un tableau à la suite (`begin`, `count` par position) :
     leur indice, la position de chacun dans `sel`, et son rang dans sa position."""
@@ -184,29 +236,20 @@ def _segments(begin, count, sel):
 
 
 class Packed:
-    """Une fenêtre sous forme compacte, en RAM (`pack`) ; `take` redonne les champs pleins de
-    `RECORD` d'un lot, `packed["weight"]` les petits champs d'une position."""
+    """Une fenêtre sous forme compacte (`pack`) : ses petits champs en RAM (une soixantaine d'octets
+    par position), les grands mappés dans les fichiers (`Parts`) ; `take` redonne les champs pleins
+    de `RECORD` d'un lot, `packed["weight"]` les petits champs d'une position."""
 
     SMALL = ("players", "regions", "weight", "win", "gain", "keys")
     SEGMENTED = (("owner", "regions"), ("adj", "regions"), ("nz_idx", "nz_count"), ("nz_val", "nz_count"),
                  ("pol_key", "pol_count"), ("pol_val", "pol_count"))
 
     def __init__(self, files):
-        parts = [np.load(f) for f in files]
+        parts = [_members(f) for f in files]
         small = {k: np.concatenate([p[k] for p in parts]) for k in self.SMALL + ("nz_count", "pol_count")}
         self.__dict__.update(small)
-        # les grands tableaux remplis fichier par fichier : pas de copie entière en plus
         for name, _ in self.SEGMENTED:
-            total = sum(p[name].shape[0] for p in parts)
-            first = parts[0][name] if parts else np.empty(0, np.uint8)
-            arr = np.empty((total,) + first.shape[1:], first.dtype)
-            at = 0
-            for p in parts:
-                a = p[name]
-                arr[at : at + len(a)] = a
-                at += len(a)
-                del a
-            setattr(self, name, arr)
+            setattr(self, name, Parts([p[name] for p in parts]))
         def begin(count):
             c = count.astype(np.int64)
             return np.cumsum(c) - c
