@@ -173,6 +173,23 @@ Celui de lab2 (voir son journal), sauf :
   frein : horloge figée à 2 420 MHz (niveau `profile_peak`, demandé sans root par l'appel des
   outils de profilage, `amdgpu_cs_ctx_stable_pstate` de libdrm, rendu à `auto` à la fin du
   programme), même débit (2 030 positions/s, attente des fils 25 %).
+- **Le trajet d'une position dans le flot** (`LAB3_LATENCY=1`, avec `LAB3_VULKAN_PROFILE=1` :
+  horodatages du GPU ramenés à `CLOCK_MONOTONIC` par `VK_KHR_calibrated_timestamps`). Un calcul
+  soumis seul : appel de soumission ~30 µs, soumis → début sur le GPU 440 µs, calcul 280 µs (250
+  positions), fin → vue 90 µs, et **80 à 150 µs de trou sur le GPU avant chaque calcul**, même
+  avec 3 ou 4 calculs en vol (le trou baisse sans disparaître : un coût fixe par tâche du noyau,
+  changement de tâche et caches). Écrite → reprise : 1,27 ms, dont 0,23 de calcul ; les fils
+  attendent 25 à 30 % du temps.
+- **Étapes soumises d'avance** (`vulkan::STEPS`, `Engine::launch`) : trois commandes enregistrées
+  une fois, de 32 étapes chacune ; une étape attend un événement posé par l'hôte (`vkSetEvent`,
+  permis après la soumission hors passe de rendu, `vkCmdWaitEvents`), calcule les positions que
+  dit un petit tampon (dispatch indirect), puis pose un événement de fin que le fil « gpu » lit
+  (`vkGetEventStatus`) ; un tour fini est soumis à nouveau, derrière les autres. Une soumission
+  pour 32 calculs, sans tâche du noyau par calcul : trou avant un calcul ~30 µs, fin → vue 30 µs,
+  feu vert sans coût ; écrite → reprise ~0,8 ms ; lots de ~75 positions. Selfplay GPU (c060,
+  20 fils) : **~2 760 positions/s** (16 parties par fil ; 2 660 avec 24), contre ~2 100 ; les
+  fils de jeu calculent ~90 % du temps, attendent 3 % : le jeu et la recherche sont de nouveau
+  le frein.
 - **Deux défauts du compilateur de RADV** (Mesa 26.2.4, ACO, gfx1201), trouvés en comparant son
   assembleur (`RADV_DEBUG=shaders`) pour des variantes justes et fausses du shader. (1) En formant
   des paires d'instructions VOPD, ACO met une addition avec l'instruction qui produit l'une de ses

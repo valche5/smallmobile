@@ -79,7 +79,10 @@ layout(push_constant) uniform Params {
     uint first;
     uint ring;
     uint order_off;
+    // ou, si ce n'est pas ~0u, l'étape du flot dont le tampon des étapes donne `first` (`launch`)
+    uint step;
 } p;
+layout(std430, binding = 5) readonly buffer Steps { uvec4 steps[]; };
 
 // la table en tête des poids (f32), puis les positions des poids en bf16 (dans `wb`) : node_in et
 // node_pol (parties haute et basse ; node_pol complété à 16 sorties), puis n1 et n2 de chaque couche
@@ -211,7 +214,8 @@ void relu(inout ACC c) {
 }
 
 void main() {
-    uint pos = inp[(p.order_off >> 2) + (p.first + gl_WorkGroupID.x) % p.ring];
+    uint first = p.step == ~0u ? p.first : steps[p.step].w;
+    uint pos = inp[(p.order_off >> 2) + (first + gl_WorkGroupID.x) % p.ring];
     uint t = gl_LocalInvocationID.x;
     uint sg = gl_SubgroupID;
     uint n = sg % NT;

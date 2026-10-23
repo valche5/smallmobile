@@ -32,6 +32,13 @@ pub const RING: usize = 16384;
 pub const ORDER: usize = 65536;
 /// Calculs en vol au plus (commandes, horodatages).
 pub const COMMANDS: usize = 4;
+/// Le flot par étapes (`Engine::launch`) : `ROUNDS` commandes enregistrées une fois, de `STEPS`
+/// étapes chacune ; une étape attend son feu vert (un événement posé par l'hôte), calcule les
+/// positions que dit le tampon des étapes, puis signale sa fin (un autre événement). Une seule
+/// soumission pour `STEPS` calculs.
+pub const STEPS: usize = 32;
+pub const ROUNDS: usize = 3;
+pub const STEP_SLOTS: usize = STEPS * ROUNDS;
 /// Files de calcul au plus : les lots de files différentes peuvent se chevaucher sur le GPU. Sur
 /// RADV, deux files ralentissent (836 positions/s au lieu de 1 222, 4 emplacements).
 const QUEUES: u32 = 1;
@@ -246,6 +253,9 @@ struct Profile {
     period: f64,
     /// Lots, positions, durée totale sur le GPU (ns).
     totals: Mutex<(u64, u64, f64)>,
+    /// Avec `LAB3_LATENCY` : de quoi ramener les horodatages du GPU à l'horloge `CLOCK_MONOTONIC`
+    /// (`profile_lot`).
+    calibrated: Option<ash::khr::calibrated_timestamps::Device>,
 }
 
 /// Le réseau sur un GPU, avec un anneau de `RING` positions (entrées et sorties).
@@ -257,6 +267,13 @@ pub struct Engine {
     queues: Vec<vk::Queue>,
     command_pool: vk::CommandPool,
     commands: Vec<vk::CommandBuffer>,
+    /// Les commandes des étapes (`ROUNDS`), le tampon des étapes (par étape : groupes x, y, z, puis
+    /// le premier numéro de la file d'ordre), les feux verts et les fins.
+    rounds: Vec<vk::CommandBuffer>,
+    steps_buf: vk::Buffer,
+    steps: *mut u32,
+    go: Vec<vk::Event>,
+    fin: Vec<vk::Event>,
     descriptor_pool: vk::DescriptorPool,
     set_layout: vk::DescriptorSetLayout,
     set: vk::DescriptorSet,
@@ -380,6 +397,11 @@ impl Engine {
                 coop.p_next = &mut b16 as *mut Bf16Features as *mut std::ffi::c_void;
                 v13.p_next = &mut coop as *mut _ as *mut std::ffi::c_void;
             }
+            let latency =
+                std::env::var_os("LAB3_VULKAN_PROFILE").is_some() && std::env::var_os("LAB3_LATENCY").is_some();
+            if latency {
+                extensions.push(c"VK_KHR_calibrated_timestamps".as_ptr());
+            }
             v12.p_next = &mut v13 as *mut _ as *mut std::ffi::c_void;
             let mut info =
                 vk::DeviceCreateInfo::default().queue_create_infos(&queues).enabled_extension_names(&extensions);
@@ -394,6 +416,11 @@ impl Engine {
                 queues,
                 command_pool: vk::CommandPool::null(),
                 commands: Vec::new(),
+                rounds: Vec::new(),
+                steps_buf: vk::Buffer::null(),
+                steps: std::ptr::null_mut(),
+                go: Vec::new(),
+                fin: Vec::new(),
                 descriptor_pool: vk::DescriptorPool::null(),
                 set_layout: vk::DescriptorSetLayout::null(),
                 set: vk::DescriptorSet::null(),
@@ -421,12 +448,16 @@ impl Engine {
                     .create_query_pool(
                         &vk::QueryPoolCreateInfo::default()
                             .query_type(vk::QueryType::TIMESTAMP)
-                            .query_count(2 * COMMANDS as u32),
+                            .query_count(2 * (COMMANDS + STEP_SLOTS) as u32),
                         None,
                     )
                     .map_err(vk_err("horodatages"))?;
-                engine.profile = Some(Profile { queries, period: period as f64, totals: Mutex::new((0, 0, 0.0)) });
+                let calibrated =
+                    latency.then(|| ash::khr::calibrated_timestamps::Device::new(&engine.instance, &engine.device));
+                engine.profile =
+                    Some(Profile { queries, period: period as f64, totals: Mutex::new((0, 0, 0.0)), calibrated });
             }
+            engine.record_rounds()?;
             Ok(engine)
         }
     }
@@ -594,9 +625,18 @@ impl Engine {
                 .map_memory(pmem, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
                 .map_err(vk_err("projection"))?;
             self.prof = pp as *mut u32;
+            // le tampon des étapes, écrit par l'hôte, lu par le GPU (`launch`)
+            let indirect = vk::BufferUsageFlags::INDIRECT_BUFFER;
+            let (sbuf, smem) = self.buffer(memory, STEP_SLOTS * 16, storage | indirect, &[host])?;
+            self.steps_buf = sbuf;
+            let sp = self
+                .device
+                .map_memory(smem, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
+                .map_err(vk_err("projection"))?;
+            self.steps = sp as *mut u32;
 
             let d = &self.device;
-            let bindings: Vec<_> = (0..5)
+            let bindings: Vec<_> = (0..6)
                 .map(|b| {
                     vk::DescriptorSetLayoutBinding::default()
                         .binding(b)
@@ -608,7 +648,7 @@ impl Engine {
             self.set_layout = d
                 .create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings), None)
                 .map_err(vk_err("disposition"))?;
-            let push = [vk::PushConstantRange::default().stage_flags(vk::ShaderStageFlags::COMPUTE).size(32)];
+            let push = [vk::PushConstantRange::default().stage_flags(vk::ShaderStageFlags::COMPUTE).size(36)];
             let set_layouts = [self.set_layout];
             self.layout = d
                 .create_pipeline_layout(
@@ -616,7 +656,7 @@ impl Engine {
                     None,
                 )
                 .map_err(vk_err("disposition"))?;
-            let sizes = [vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(5)];
+            let sizes = [vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(6)];
             self.descriptor_pool = d
                 .create_descriptor_pool(&vk::DescriptorPoolCreateInfo::default().max_sets(1).pool_sizes(&sizes), None)
                 .map_err(vk_err("réserve"))?;
@@ -628,7 +668,7 @@ impl Engine {
                         .set_layouts(&layouts),
                 )
                 .map_err(vk_err("descripteurs"))?[0];
-            let infos: Vec<[vk::DescriptorBufferInfo; 1]> = [wbuf, ibuf, obuf, w16buf, pbuf]
+            let infos: Vec<[vk::DescriptorBufferInfo; 1]> = [wbuf, ibuf, obuf, w16buf, pbuf, sbuf]
                 .iter()
                 .map(|&b| [vk::DescriptorBufferInfo::default().buffer(b).range(vk::WHOLE_SIZE)])
                 .collect();
@@ -696,6 +736,19 @@ impl Engine {
                         .command_buffer_count(COMMANDS as u32),
                 )
                 .map_err(vk_err("commandes"))?;
+            self.rounds = d
+                .allocate_command_buffers(
+                    &vk::CommandBufferAllocateInfo::default()
+                        .command_pool(self.command_pool)
+                        .level(vk::CommandBufferLevel::PRIMARY)
+                        .command_buffer_count(ROUNDS as u32),
+                )
+                .map_err(vk_err("commandes"))?;
+            for _ in 0..STEP_SLOTS {
+                let event = |d: &ash::Device| d.create_event(&vk::EventCreateInfo::default(), None);
+                self.go.push(event(d).map_err(vk_err("événement"))?);
+                self.fin.push(event(d).map_err(vk_err("événement"))?);
+            }
             let mut kind = vk::SemaphoreTypeCreateInfo::default().semaphore_type(vk::SemaphoreType::TIMELINE);
             self.timeline = d
                 .create_semaphore(&vk::SemaphoreCreateInfo::default().push_next(&mut kind), None)
@@ -761,11 +814,7 @@ impl Engine {
         let value = *submitted + 1;
         let at = (value % COMMANDS as u64) as usize;
         let cb = self.commands[at];
-        let l = self.input_layout;
-        let params: Vec<u8> = [l.node, l.glob, l.adj, l.regions, self.weights.layers as usize, first, ORDER, l.order]
-            .iter()
-            .flat_map(|&v| (v as u32).to_le_bytes())
-            .collect();
+        let params = self.params(first, u32::MAX as usize);
         // SAFETY : la commande n'est plus en vol (au plus `COMMANDS` calculs, l'appelant a attendu
         // les plus vieux) ; un seul fil soumet à la fois (`submitted`)
         unsafe {
@@ -811,10 +860,115 @@ impl Engine {
         Ok(value)
     }
 
-    /// Le numéro du dernier calcul fini (sans attendre).
-    pub(crate) fn completed(&self) -> Result<u64, String> {
-        // SAFETY : sémaphore vivant
-        unsafe { self.device.get_semaphore_counter_value(self.timeline) }.map_err(vk_err("sémaphore"))
+    /// Les constantes du shader : les entrées, les couches, puis le calcul (`first` dans la file
+    /// d'ordre, ou celui que dit l'étape `step` du tampon des étapes, sinon `u32::MAX`).
+    fn params(&self, first: usize, step: usize) -> Vec<u8> {
+        let l = self.input_layout;
+        [l.node, l.glob, l.adj, l.regions, self.weights.layers as usize, first, ORDER, l.order, step]
+            .iter()
+            .flat_map(|&v| (v as u32).to_le_bytes())
+            .collect()
+    }
+
+    /// Enregistre une fois les commandes des étapes (`ROUNDS`, voir `STEPS`).
+    fn record_rounds(&mut self) -> Result<(), String> {
+        // SAFETY : commandes neuves, objets vivants
+        unsafe {
+            let d = &self.device;
+            for r in 0..ROUNDS {
+                let cb = self.rounds[r];
+                d.begin_command_buffer(cb, &vk::CommandBufferBeginInfo::default()).map_err(vk_err("commandes"))?;
+                if let Some(p) = &self.profile {
+                    d.cmd_reset_query_pool(cb, p.queries, 2 * (COMMANDS + r * STEPS) as u32, 2 * STEPS as u32);
+                }
+                for j in 0..STEPS {
+                    let s = r * STEPS + j;
+                    let query = 2 * (COMMANDS + s) as u32;
+                    // le feu vert de l'hôte, et ce qu'il a écrit avant (positions, tampon des étapes)
+                    let from_host = [vk::MemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::HOST_WRITE)
+                        .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ | vk::AccessFlags::SHADER_READ)];
+                    d.cmd_wait_events(
+                        cb,
+                        &[self.go[s]],
+                        vk::PipelineStageFlags::HOST,
+                        vk::PipelineStageFlags::DRAW_INDIRECT | vk::PipelineStageFlags::COMPUTE_SHADER,
+                        &from_host,
+                        &[],
+                        &[],
+                    );
+                    if let Some(p) = &self.profile {
+                        d.cmd_write_timestamp(cb, vk::PipelineStageFlags::TOP_OF_PIPE, p.queries, query);
+                    }
+                    d.cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, self.pipeline);
+                    d.cmd_bind_descriptor_sets(cb, vk::PipelineBindPoint::COMPUTE, self.layout, 0, &[self.set], &[]);
+                    d.cmd_push_constants(cb, self.layout, vk::ShaderStageFlags::COMPUTE, 0, &self.params(0, s));
+                    d.cmd_dispatch_indirect(cb, self.steps_buf, (s * 16) as u64);
+                    if let Some(p) = &self.profile {
+                        d.cmd_write_timestamp(cb, vk::PipelineStageFlags::BOTTOM_OF_PIPE, p.queries, query + 1);
+                    }
+                    // les sorties pour l'hôte, puis la fin de l'étape
+                    let to_host = [vk::MemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                        .dst_access_mask(vk::AccessFlags::HOST_READ)];
+                    d.cmd_pipeline_barrier(
+                        cb,
+                        vk::PipelineStageFlags::COMPUTE_SHADER,
+                        vk::PipelineStageFlags::HOST,
+                        vk::DependencyFlags::empty(),
+                        &to_host,
+                        &[],
+                        &[],
+                    );
+                    d.cmd_set_event(cb, self.fin[s], vk::PipelineStageFlags::ALL_COMMANDS);
+                }
+                d.end_command_buffer(cb).map_err(vk_err("commandes"))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Soumet les commandes des étapes `round` (elles attendront leurs feux verts) ; rend le
+    /// numéro de la soumission, que prend le sémaphore à la fin des `STEPS` étapes.
+    pub(crate) fn submit_round(&self, round: usize) -> Result<u64, String> {
+        let mut submitted = self.submitted.lock().expect("verrou");
+        let value = *submitted + 1;
+        let values = [value];
+        let mut timeline = vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&values);
+        let (cbs, sems) = ([self.rounds[round]], [self.timeline]);
+        let info = vk::SubmitInfo::default().command_buffers(&cbs).signal_semaphores(&sems).push_next(&mut timeline);
+        // SAFETY : les commandes de `round` ne sont plus en vol (l'appelant a attendu leur fin)
+        unsafe { self.device.queue_submit(self.queues[0], &[info], vk::Fence::null()) }.map_err(vk_err("envoi"))?;
+        *submitted = value;
+        Ok(value)
+    }
+
+    /// Donne le feu vert à l'étape `slot` : `count` positions de la file d'ordre à partir de `first`.
+    pub(crate) fn launch(&self, slot: usize, first: usize, count: usize) -> Result<(), String> {
+        assert!(count <= self.max && first < ORDER, "calcul trop grand");
+        // SAFETY : mémoire projetée de `STEP_SLOTS` × 4 nombres ; l'étape n'est pas en cours
+        unsafe {
+            let at = self.steps.add(slot * 4);
+            for (k, v) in [count as u32, 1, 1, first as u32].into_iter().enumerate() {
+                at.add(k).write_volatile(v);
+            }
+            self.device.set_event(self.go[slot]).map_err(vk_err("feu vert"))
+        }
+    }
+
+    /// L'étape `slot` est-elle finie ?
+    pub(crate) fn finished(&self, slot: usize) -> Result<bool, String> {
+        // SAFETY : événement vivant
+        unsafe { self.device.get_event_status(self.fin[slot]) }.map_err(vk_err("fin d'étape"))
+    }
+
+    /// Remet l'étape `slot`, finie, à son état de départ.
+    pub(crate) fn recycle(&self, slot: usize) -> Result<(), String> {
+        // SAFETY : événements vivants, que le GPU ne touche plus avant le prochain feu vert
+        unsafe {
+            self.device.reset_event(self.go[slot]).map_err(vk_err("feu vert"))?;
+            self.device.reset_event(self.fin[slot]).map_err(vk_err("fin d'étape"))
+        }
     }
 
     /// Attend la fin du calcul `value`.
@@ -912,15 +1066,25 @@ impl Engine {
     }
 
     /// Ajoute au profil la durée du calcul fini `value` (`count` positions).
-    pub(crate) fn profile_lot(&self, value: u64, count: usize) {
-        let at = (value % COMMANDS as u64) as u32;
-        let Some(p) = &self.profile else { return };
+    /// Avec `LAB3_LATENCY` : rend son début et sa fin sur le GPU, en ns de `CLOCK_MONOTONIC`.
+    pub(crate) fn profile_lot(&self, value: u64, count: usize) -> Option<(u64, u64)> {
+        self.profile_queries(2 * (value % COMMANDS as u64) as u32, count)
+    }
+
+    /// `profile_lot`, pour l'étape finie `slot`.
+    pub(crate) fn profile_step(&self, slot: usize, count: usize) -> Option<(u64, u64)> {
+        self.profile_queries(2 * (COMMANDS + slot) as u32, count)
+    }
+
+    /// Les deux horodatages à partir de `query`.
+    fn profile_queries(&self, query: u32, count: usize) -> Option<(u64, u64)> {
+        let p = self.profile.as_ref()?;
         let mut stamps = [0u64; 2];
         // SAFETY : le lot est fini (`wait`) ; horodatages écrits par ses commandes
         let read = unsafe {
             self.device.get_query_pool_results(
                 p.queries,
-                2 * at,
+                query,
                 &mut stamps,
                 vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,
             )
@@ -931,6 +1095,14 @@ impl Engine {
             totals.1 += count as u64;
             totals.2 += stamps[1].saturating_sub(stamps[0]) as f64 * p.period;
         }
+        // l'horloge du GPU et celle du processeur au même instant, puis les horodatages du lot
+        let c = p.calibrated.as_ref().filter(|_| read.is_ok())?;
+        let infos = [vk::TimeDomainKHR::DEVICE, vk::TimeDomainKHR::CLOCK_MONOTONIC]
+            .map(|d| vk::CalibratedTimestampInfoKHR::default().time_domain(d));
+        // SAFETY : appareil vivant, extension activée (`latency`)
+        let (now, _) = unsafe { c.get_calibrated_timestamps(&infos) }.ok()?;
+        let back = |stamp: u64| now[1] - (now[0].saturating_sub(stamp) as f64 * p.period) as u64;
+        Some((back(stamps[0]), back(stamps[1])))
     }
 }
 
@@ -951,6 +1123,9 @@ impl Drop for Engine {
                 d.destroy_query_pool(p.queries, None);
             }
             d.destroy_semaphore(self.timeline, None);
+            for &e in self.go.iter().chain(&self.fin) {
+                d.destroy_event(e, None);
+            }
             d.destroy_command_pool(self.command_pool, None);
             d.destroy_pipeline(self.pipeline, None);
             d.destroy_shader_module(self.module, None);

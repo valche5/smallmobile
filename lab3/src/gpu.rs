@@ -3,9 +3,10 @@
 //!
 //! - chaque fil de jeu a ses places dans l'anneau des entrées (`Lane`) ; il y écrit les positions
 //!   d'une partie, puis leurs places à la suite dans la file d'ordre (`Lane::send`) ;
-//! - le fil « gpu » (`drive`) soumet en un calcul les numéros de la file écrits à la suite
+//! - le fil « gpu » (`drive`) lance en un calcul les numéros de la file écrits à la suite
 //!   (`MAX_BATCH` au plus), tant qu'il y a moins de `IN_FLIGHT` calculs en vol, et note la fin de
-//!   chacun : pendant qu'un calcul tourne, le suivant grossit ;
+//!   chacun : pendant qu'un calcul tourne, le suivant grossit. Les calculs sont des étapes de
+//!   commandes soumises d'avance, qui attendent chacune leur feu vert (`vulkan::STEPS`) ;
 //! - le fil de jeu lit les sorties sur place, dans l'anneau des sorties (`Lane::take`), et reprend
 //!   ses places.
 //!
@@ -53,6 +54,83 @@ struct Ring {
     written: (std::sync::Mutex<()>, std::sync::Condvar),
     sleeping: std::sync::atomic::AtomicBool,
     stop: std::sync::atomic::AtomicBool,
+    /// Profils (`LAB3_LATENCY`) : pour chaque numéro de la file, les instants (`now`) où sa position
+    /// a été écrite, soumise, vue finie.
+    stamps: Option<Box<[[std::sync::atomic::AtomicU64; 3]]>>,
+}
+
+/// Le trajet des positions (`LAB3_LATENCY`), totaux depuis le départ, ns : écrite → soumise,
+/// soumise → vue finie (par position) ; puis, par envoi, écrite → reprise, et la fin du trajet :
+/// le fil de jeu attendait déjà (vue finie → réveillé) ou revenait plus tard (vue finie → repris).
+/// Affiché par `selfplay::pace` (`latency`).
+/// Puis, par calcul (avec aussi `LAB3_VULKAN_PROFILE`, horodatages du GPU) : l'appel de soumission,
+/// soumis → début sur le GPU, la durée sur le GPU, fin sur le GPU → vue par le fil « gpu », le trou
+/// sur le GPU depuis la fin du calcul d'avant.
+pub static LATENCY: [std::sync::atomic::AtomicU64; 15] = [const { std::sync::atomic::AtomicU64::new(0) }; 15];
+const L_QUEUED: usize = 0;
+const L_COMPUTED: usize = 1;
+const L_POSITIONS: usize = 2;
+const L_TRIP: usize = 3;
+const L_SENT: usize = 4;
+const L_WOKEN: usize = 5;
+const L_WAITED: usize = 6;
+const L_LATE: usize = 7;
+const L_IDLE: usize = 8;
+const L_CALCS: usize = 9;
+const L_SUBMIT: usize = 10;
+const L_TO_GPU: usize = 11;
+const L_RUN: usize = 12;
+const L_NOTICE: usize = 13;
+const L_GAP: usize = 14;
+
+/// L'instant présent pour `LATENCY` : ns de `CLOCK_MONOTONIC`, l'horloge où `vulkan::Engine`
+/// ramène celle du GPU.
+fn now() -> u64 {
+    #[repr(C)]
+    struct Timespec {
+        sec: i64,
+        nsec: i64,
+    }
+    unsafe extern "C" {
+        fn clock_gettime(clock: i32, at: *mut Timespec) -> i32;
+    }
+    let mut at = Timespec { sec: 0, nsec: 0 };
+    // SAFETY : `CLOCK_MONOTONIC` (1), structure de la taille attendue
+    unsafe { clock_gettime(1, &mut at) };
+    at.sec as u64 * 1_000_000_000 + at.nsec as u64
+}
+
+/// Le trajet moyen depuis `last` (totaux de `LATENCY`), en µs, ou `None` sans mesure.
+pub fn latency(last: &mut [u64; 15]) -> Option<String> {
+    use std::sync::atomic::Ordering;
+    let all: [u64; 15] = LATENCY.each_ref().map(|l| l.load(Ordering::Relaxed));
+    let d: [u64; 15] = std::array::from_fn(|i| all[i] - last[i]);
+    *last = all;
+    let per = |sum: usize, n: usize| d[sum] as f64 / 1e3 / d[n].max(1) as f64;
+    (d[L_POSITIONS] > 0).then(|| {
+        format!(
+            "trajet (µs) : écrite → soumise {:.0}, soumise → vue finie {:.0} ; écrite → reprise {:.0} ; \
+             le fil attendait déjà ({:.0} % des envois) : vue finie → réveillé {:.0} ; sinon vue finie → reprise {:.0}",
+            per(L_QUEUED, L_POSITIONS),
+            per(L_COMPUTED, L_POSITIONS),
+            per(L_TRIP, L_SENT),
+            100.0 * d[L_WAITED] as f64 / d[L_SENT].max(1) as f64,
+            per(L_WOKEN, L_WAITED),
+            per(L_LATE, L_IDLE),
+        ) + &if d[L_CALCS] > 0 {
+            format!(
+                "\nfil gpu (µs par calcul) : appel de soumission {:.0}, soumis → début GPU {:.0}, calcul {:.0}, \
+                 fin GPU → vue {:.0}, trou sur le GPU avant le calcul {:.0}",
+                per(L_SUBMIT, L_CALCS),
+                per(L_TO_GPU, L_CALCS),
+                per(L_RUN, L_CALCS),
+                per(L_NOTICE, L_CALCS),
+                per(L_GAP, L_CALCS),
+            )
+        } else {
+            String::new()
+        }
+    })
 }
 
 pub struct Gpu {
@@ -102,7 +180,7 @@ impl Lane {
 impl Gpu {
     /// Ouvre le GPU avec les poids `net` et lance le fil « gpu » ; rend aussi l'appareil qui calcule.
     pub fn start(net: &Path) -> Result<(Gpu, String), String> {
-        use crate::vulkan::{COMMANDS, Engine, MAX_BATCH, ORDER};
+        use crate::vulkan::{Engine, MAX_BATCH, ORDER, STEPS};
         use std::sync::atomic::{AtomicBool, AtomicU64};
         let engine = Engine::new(net, MAX_BATCH)?;
         let device = engine.describe();
@@ -115,9 +193,10 @@ impl Gpu {
             written: Default::default(),
             sleeping: AtomicBool::new(false),
             stop: AtomicBool::new(false),
+            stamps: std::env::var_os("LAB3_LATENCY").map(|_| (0..ORDER).map(|_| Default::default()).collect()),
         });
         let in_flight =
-            std::env::var("LAB3_IN_FLIGHT").ok().and_then(|v| v.parse().ok()).unwrap_or(IN_FLIGHT).clamp(1, COMMANDS);
+            std::env::var("LAB3_IN_FLIGHT").ok().and_then(|v| v.parse().ok()).unwrap_or(IN_FLIGHT).clamp(1, STEPS);
         let r = ring.clone();
         // nommé, pour les profils
         let thread = std::thread::Builder::new()
@@ -141,12 +220,48 @@ impl Gpu {
     /// Attend les évaluations de `sent`.
     pub fn wait(&self, sent: &Sent) {
         let r = &*self.ring;
+        if let Some(stamps) = &r.stamps {
+            self.measured_wait(sent, stamps);
+            return;
+        }
         while !self.done(sent) {
             let held = r.evaluated.0.lock().expect("verrou");
             if !self.done(sent) {
                 // le fil « gpu » réveille à chaque calcul fini ; le délai, par prudence
                 let _ = r.evaluated.1.wait_timeout(held, std::time::Duration::from_millis(1));
             }
+        }
+    }
+}
+
+#[cfg(feature = "vulkan")]
+impl Gpu {
+    /// `wait`, et le trajet de `sent` (`LATENCY`).
+    fn measured_wait(&self, sent: &Sent, stamps: &[[std::sync::atomic::AtomicU64; 3]]) {
+        use std::sync::atomic::Ordering;
+        let r = &*self.ring;
+        let called = now();
+        let already = self.done(sent);
+        while !self.done(sent) {
+            let held = r.evaluated.0.lock().expect("verrou");
+            if !self.done(sent) {
+                let _ = r.evaluated.1.wait_timeout(held, std::time::Duration::from_millis(1));
+            }
+        }
+        let woke = now();
+        let order = crate::vulkan::ORDER as u64;
+        let stamp = |t: u64, k: usize| stamps[(t % order) as usize][k].load(Ordering::Relaxed);
+        let last = sent.first + sent.cells.len() as u64 - 1;
+        let (written, finished) = (stamp(sent.first, 0), stamp(last, 2));
+        let add = |what: usize, v: u64| LATENCY[what].fetch_add(v, Ordering::Relaxed);
+        add(L_SENT, 1);
+        add(L_TRIP, woke.saturating_sub(written));
+        if already {
+            add(L_IDLE, 1);
+            add(L_LATE, called.saturating_sub(finished));
+        } else {
+            add(L_WAITED, 1);
+            add(L_WOKEN, woke.saturating_sub(finished));
         }
     }
 }
@@ -178,6 +293,12 @@ impl Lane {
             }
             r.engine.order((t % order) as usize, cell as usize);
         }
+        if let Some(stamps) = &r.stamps {
+            let at = now();
+            for j in 0..cells.len() as u64 {
+                stamps[((first + j) % order) as usize][0].store(at, Ordering::Relaxed);
+            }
+        }
         // les écritures dans la mémoire du GPU (write-combining) avant leurs marques : sans cette
         // barrière, le fil « gpu » pourrait soumettre une position encore à moitié écrite
         std::sync::atomic::fence(Ordering::SeqCst);
@@ -205,67 +326,122 @@ impl Lane {
     }
 }
 
-/// Le fil « gpu » : soumet les positions rangées à la suite dans la file d'ordre, note la fin des
-/// calculs, jusqu'à l'arrêt (`Gpu::drop`) une fois tout évalué.
+/// Le fil « gpu » : les commandes de `ROUNDS` × `STEPS` étapes sont soumises d'avance ; chaque
+/// calcul est un feu vert (`Engine::launch`) pour les numéros de la file d'ordre écrits à la suite,
+/// sa fin un événement que le fil surveille ; jusqu'à l'arrêt (`Gpu::drop`), une fois tout évalué.
+/// Une soumission pour `STEPS` calculs : pas de tâche du noyau par calcul, dont le GPU payait le
+/// changement (80 à 150 µs de trou avant chaque calcul soumis seul, 30 par étape, journal).
 #[cfg(feature = "vulkan")]
 fn drive(r: &Ring, in_flight: usize) {
     use crate::batch::{SENT, SENT_LOTS, SENT_POSITIONS};
-    use crate::vulkan::{MAX_BATCH, ORDER};
+    use crate::vulkan::{MAX_BATCH, ORDER, ROUNDS, STEP_SLOTS, STEPS};
     use std::sync::atomic::Ordering;
     let order = ORDER as u64;
     let fail = |e: String| -> ! { panic!("GPU : {e}") };
-    // le prochain numéro à soumettre ; les calculs en vol (numéro du calcul, fin, positions)
-    let mut next = 0u64;
-    let mut flight = std::collections::VecDeque::<(u64, u64, usize)>::new();
+    let e = &r.engine;
+    // la soumission en cours de chaque tour d'étapes ; les étapes qu'ils couvrent
+    let mut rounds: Vec<u64> = (0..ROUNDS).map(|k| e.submit_round(k).unwrap_or_else(|e| fail(e))).collect();
+    let mut covered = STEP_SLOTS as u64;
+    // la prochaine étape, le prochain numéro de la file ; les étapes en vol (étape, fin, positions,
+    // feu vert)
+    let (mut step, mut next) = (0u64, 0u64);
+    let mut flight = std::collections::VecDeque::<(u64, u64, usize, u64)>::new();
+    let mut last_end = 0u64;
     loop {
-        // les calculs finis, dans l'ordre
-        let finished = r.engine.completed().unwrap_or_else(|e| fail(e));
+        // les étapes finies, dans l'ordre ; un tour fini est soumis à nouveau, derrière les autres
         let mut woke = false;
-        while let Some(&(value, end, count)) = flight.front()
-            && value <= finished
-        {
-            r.engine.profile_lot(value, count);
+        while let Some(&(k, end, count, launched)) = flight.front() {
+            let slot = (k % STEP_SLOTS as u64) as usize;
+            if !e.finished(slot).unwrap_or_else(|e| fail(e)) {
+                break;
+            }
+            let ran = e.profile_step(slot, count);
+            if let (Some(_), Some((began, ended))) = (&r.stamps, ran) {
+                let add = |what: usize, v: u64| LATENCY[what].fetch_add(v, Ordering::Relaxed);
+                add(L_CALCS, 1);
+                add(L_TO_GPU, began.saturating_sub(launched));
+                add(L_RUN, ended.saturating_sub(began));
+                add(L_NOTICE, now().saturating_sub(ended));
+                if last_end > 0 {
+                    add(L_GAP, began.saturating_sub(last_end));
+                }
+                last_end = ended;
+            }
+            if let Some(stamps) = &r.stamps {
+                let at = now();
+                for t in end - count as u64..end {
+                    let s = &stamps[(t % order) as usize];
+                    LATENCY[L_COMPUTED].fetch_add(at.saturating_sub(s[1].load(Ordering::Relaxed)), Ordering::Relaxed);
+                    s[2].store(at, Ordering::Relaxed);
+                }
+            }
+            e.recycle(slot).unwrap_or_else(|e| fail(e));
             r.done.store(end, Ordering::Release);
             flight.pop_front();
             woke = true;
+            if slot % STEPS == STEPS - 1 {
+                let round = slot / STEPS;
+                e.wait(rounds[round]).unwrap_or_else(|e| fail(e));
+                rounds[round] = e.submit_round(round).unwrap_or_else(|e| fail(e));
+                covered += STEPS as u64;
+            }
         }
         if woke {
             let _held = r.evaluated.0.lock().expect("verrou");
             r.evaluated.1.notify_all();
         }
-        // les numéros écrits à la suite, en un calcul
-        if flight.len() < in_flight {
+        // les numéros écrits à la suite, en une étape
+        if flight.len() < in_flight && step < covered {
             let mut end = next;
             while end - next < MAX_BATCH as u64 && r.seq[(end % order) as usize].load(Ordering::Acquire) == end + 1 {
                 end += 1;
             }
             if end > next {
                 let count = (end - next) as usize;
-                let value = r.engine.submit((next % order) as usize, count).unwrap_or_else(|e| fail(e));
+                let slot = (step % STEP_SLOTS as u64) as usize;
+                let calling = now();
+                e.launch(slot, (next % order) as usize, count).unwrap_or_else(|e| fail(e));
+                let launched = now();
                 SENT[SENT_LOTS].fetch_add(1, Ordering::Relaxed);
                 SENT[SENT_POSITIONS].fetch_add(count as u64, Ordering::Relaxed);
-                flight.push_back((value, end, count));
+                if let Some(stamps) = &r.stamps {
+                    LATENCY[L_SUBMIT].fetch_add(launched - calling, Ordering::Relaxed);
+                    for t in next..end {
+                        let s = &stamps[(t % order) as usize];
+                        LATENCY[L_QUEUED]
+                            .fetch_add(launched.saturating_sub(s[0].load(Ordering::Relaxed)), Ordering::Relaxed);
+                        s[1].store(launched, Ordering::Relaxed);
+                    }
+                    LATENCY[L_POSITIONS].fetch_add(count as u64, Ordering::Relaxed);
+                }
+                flight.push_back((step, end, count, launched));
+                step += 1;
                 next = end;
                 continue;
             }
         }
-        match flight.front() {
-            // la fin du plus vieux calcul, ou de nouvelles positions dans 100 µs
-            Some(&(value, ..)) => {
-                r.engine.wait_for(value, 100_000).unwrap_or_else(|e| fail(e));
-            }
-            None => {
-                if r.stop.load(Ordering::Acquire) && r.head.load(Ordering::Acquire) == next {
-                    break;
+        if flight.is_empty() {
+            if r.stop.load(Ordering::Acquire) && r.head.load(Ordering::Acquire) == next {
+                // les étapes soumises sans calcul passent à vide, puis tout s'arrête
+                while step < covered {
+                    e.launch((step % STEP_SLOTS as u64) as usize, 0, 0).unwrap_or_else(|e| fail(e));
+                    step += 1;
                 }
-                // rien en vol : attend des positions (`Lane::send` réveille)
-                let held = r.written.0.lock().expect("verrou");
-                r.sleeping.store(true, Ordering::Release);
-                if r.seq[(next % order) as usize].load(Ordering::Acquire) != next + 1 {
-                    let _ = r.written.1.wait_timeout(held, std::time::Duration::from_millis(1));
+                for &v in &rounds {
+                    e.wait(v).unwrap_or_else(|e| fail(e));
                 }
-                r.sleeping.store(false, Ordering::Release);
+                break;
             }
+            // rien en vol : attend des positions (`Lane::send` réveille)
+            let held = r.written.0.lock().expect("verrou");
+            r.sleeping.store(true, Ordering::Release);
+            if r.seq[(next % order) as usize].load(Ordering::Acquire) != next + 1 {
+                let _ = r.written.1.wait_timeout(held, std::time::Duration::from_millis(1));
+            }
+            r.sleeping.store(false, Ordering::Release);
+        } else {
+            // une étape en vol : on la surveille (une lecture en mémoire)
+            std::thread::yield_now();
         }
     }
 }

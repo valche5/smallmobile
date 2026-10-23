@@ -423,11 +423,11 @@ pub fn moves_file(path: &Path) -> std::path::PathBuf {
 /// `GPU_GAMES` parties reprises une par une : chacune envoie les positions d'un tour de sa
 /// recherche (~4 en moyenne, `az::CONSIDERED` au plus) dès qu'elle les a, et reprend dès qu'elles
 /// sont évaluées ; le fil fait avancer les autres entre-temps. Peu de parties par fil : leurs arbres
-/// tiennent dans les caches. Un fil garde tout ce qu'il touche (parties, évaluations gardées) :
+/// tiennent dans les caches (23 octobre, c060, 20 fils : ~2 760 positions/s avec 16, 2 660 avec 24). Un fil garde tout ce qu'il touche (parties, évaluations gardées) :
 /// rien de modifiable n'est partagé entre les cœurs, hormis le compteur des parties (une fois par
 /// partie) et l'anneau du GPU.
 const CONCURRENT: usize = 8;
-const GPU_GAMES: usize = 24;
+const GPU_GAMES: usize = 16;
 
 /// Une partie finie : ses positions (enregistrements) et sa ligne de journal (`GameLog`).
 pub struct Finished {
@@ -465,6 +465,7 @@ fn pace(stopped: &Receiver<()>, threads: usize, profile: bool) {
     use crate::batch::{SENT, SENT_LOTS, SENT_POSITIONS};
     let sent = || SENT.each_ref().map(|s| s.load(Ordering::Relaxed));
     let mut last_sent = sent();
+    let mut trips = [0; 15];
     let now = || {
         (
             Instant::now(),
@@ -490,6 +491,9 @@ fn pace(stopped: &Receiver<()>, threads: usize, profile: bool) {
                 positions as f64 / lots.max(1) as f64
             );
             last_sent = now_sent;
+        }
+        if let Some(trip) = crate::gpu::latency(&mut trips) {
+            eprintln!("{trip}");
         }
         last = next;
     }
