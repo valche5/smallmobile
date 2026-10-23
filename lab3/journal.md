@@ -464,6 +464,11 @@ basses qu'à 5e-4 (valeur 1,012 → 1,003, propriétaires 0,514 → 0,510), vali
 pas encore mesuré : confirmation c044 contre c040 (920 donnes, graine 1005) à faire. Reprise :
 même commande avec `START=45`.
 
+Confirmation sur 920 donnes neuves (graine 1005) : **c044 contre c040 = +1,9 ± 1,5** (2 joueurs
++2,0, 3 +2,5, 4 +2,0, 5 +1,1) : même sens à toutes les tailles, pas encore significatif (1,3 écart
+type). Boucle reprise à 18:46 (`START=45`, jusqu'à c050, 90 min au plus) ; mesure prévue : c050
+contre c040.
+
 Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
 (`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En
 RAM, la fenêtre aurait pris ~31 Go vers c060 sur les 32 du PC ; mappée, le noyau peut rendre les
