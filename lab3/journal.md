@@ -515,7 +515,9 @@ taux à chaque pas).
 
 Essai 3 : n = 800 pour les recherches complètes, en continu depuis c060 (même taux), c061 à
 c070 (service `lab3-deep6-n800`, lancé à 22:00) ; mesure : c070 contre c060. Disque : 138 Go
-libres, ~6,3 Go par cycle (le `.pos` en fait 5,3).
+libres, ~6,3 Go par cycle (le `.pos` en fait 5,3). Ménage à 22:20 (fait par l'utilisateur) : positions et anciennes
+formes compactes de deep6 c017–c037, de p2-3-4-5, p4 et p4-zero, anciennes formes compactes de
+c038–c060 ; parties gardées (`.pos.games`, `.pos.moves`). 426 Go libres.
 
 Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
 (`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En
