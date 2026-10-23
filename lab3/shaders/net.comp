@@ -17,6 +17,8 @@
 #extension GL_KHR_cooperative_matrix : require
 #extension GL_KHR_memory_scope_semantics : require
 #extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+#extension GL_KHR_shader_subgroup_shuffle : require
 #extension GL_EXT_bfloat16 : require
 #extension GL_EXT_shader_explicit_arithmetic_types : require
 
@@ -159,22 +161,53 @@ float x_at(uint source, uint k, uint glob, uint gs) {
 }
 
 // le même produit pour H sorties, 4 à la fois par fil (lectures de 16 octets) : les entrées
-// partagées entre G4 groupes de fils, et douze lectures à la fois
+// partagées entre G4 groupes de fils, et seize lectures à la fois (un seul aller-retour vers la
+// mémoire pour 128 entrées ; avec douze, deux, et 10 % de positions en moins). Avec H = 128, un
+// groupe de fils est un sous-groupe : pour les entrées creuses (les octets de la partie, surtout des
+// zéros ; vout, sorties de relu, à moitié), ses 32 fils lisent 32 entrées à la fois, et seuls les
+// poids des entrées non nulles sont lus, dans le même ordre : la même somme. Sur une entrée dense
+// (cat), le vote et les échanges coûtent plus que les lectures évitées.
 void gemv4(uint source, uint wt, uint bt, uint k, bool relu, uint glob, uint gs) {
     uint t = gl_LocalInvocationID.x, o = 4u * (t % (H / 4u)), part = t / (H / 4u);
     uint per = (k + G4 - 1u) / G4;
     uint k0 = part * per, k1 = min(k, k0 + per);
     vec4 s = vec4(0.0);
     uint kk = k0;
-    for (; kk + 12u <= k1; kk += 12u) {
-        vec4 wv[12];
-        float xv[12];
-        for (uint q = 0u; q < 12u; q++) {
+    if (H == 128u && source != 0u) {
+        uint lane = gl_SubgroupInvocationID;
+        for (uint base = k0; base < k1; base += 32u) {
+            float xl = base + lane < k1 ? x_at(source, base + lane, glob, gs) : 0.0;
+            uint bits = subgroupBallot(xl != 0.0).x;
+            while (bits != 0u) {
+                vec4 wv[12];
+                float xv[12];
+                for (uint q = 0u; q < 12u; q++) {
+                    if (bits != 0u) {
+                        uint j = uint(findLSB(bits));
+                        bits &= bits - 1u;
+                        xv[q] = subgroupShuffle(xl, j);
+                        uint at = wt + (base + j) * H + o;
+                        wv[q] = vec4(w[at], w[at + 1u], w[at + 2u], w[at + 3u]);
+                    } else {
+                        xv[q] = 0.0;
+                        wv[q] = vec4(0.0);
+                    }
+                }
+                for (uint q = 0u; q < 12u; q++)
+                    s += xv[q] * wv[q];
+            }
+        }
+        kk = k1;
+    }
+    for (; kk + 16u <= k1; kk += 16u) {
+        vec4 wv[16];
+        float xv[16];
+        for (uint q = 0u; q < 16u; q++) {
             uint at = wt + (kk + q) * H + o;
             wv[q] = vec4(w[at], w[at + 1u], w[at + 2u], w[at + 3u]);
             xv[q] = x_at(source, kk + q, glob, gs);
         }
-        for (uint q = 0u; q < 12u; q++)
+        for (uint q = 0u; q < 16u; q++)
             s += xv[q] * wv[q];
     }
     for (; kk < k1; kk++) {

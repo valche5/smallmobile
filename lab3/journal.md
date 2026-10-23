@@ -211,6 +211,22 @@ Celui de lab2 (voir son journal), sauf :
   inchangées ; selfplay de contrôle 7,08 → 6,38 s. Selfplay GPU ~3 360 positions/s (+2 %) : le
   GPU est à son plafond (~950 000 évaluations/s, lots de ~150 positions), les fils de jeu
   l'attendent 17 % du temps. Le frein est de nouveau le GPU.
+- **Le shader, étape par étape** (`LAB3_VULKAN_PHASES=1`, lots de 512) : une position prend
+  ~134 µs du début à la fin de son groupe de travail (110 seule sur son unité de calcul, 147 à
+  deux), quel que soit le nombre de régions (24 ou 40) ; 128 positions à la fois (2 groupes par
+  unité, bornés ensemble par les registres, 192 par fil, et la mémoire partagée, 32 Ko) :
+  128 / 134 µs ≈ 950 000 positions/s, le plafond du selfplay. Le shader est limité par la latence,
+  pas par le calcul (~10 % de ce que peuvent les unités matricielles en bf16). Les étapes
+  globales (un vecteur par position : glob_in, part de g, g1, g2, politique de la partie,
+  valeur) en font ~40 %. Une position enregistrée coûte ~283 évaluations (recherches rapides de
+  la recette comprises, la moitié des simulations retombant sur une évaluation gardée).
+- **Produits matrice-vecteur raccourcis** (`gemv4`) : seize lectures de poids à la fois au lieu
+  de douze (un seul aller-retour vers la mémoire pour 128 entrées : part de g 12,6 → 8,7 µs ;
+  vingt-quatre n'aident pas g1 et ralentissent le reste) ; pour les entrées creuses (octets de la
+  partie, sorties de relu), un vote du sous-groupe ne garde que les entrées non nulles, dans le
+  même ordre (g2 12 → 8 µs ; sur l'entrée dense de g1, le vote coûte plus qu'il ne gagne, 14 →
+  25 µs : pas là). Écarts au processeur inchangés au bit près ; banc 821 000 → 907 000
+  positions/s de GPU ; selfplay GPU 3 360 → **~3 520 positions/s**, ~1 000 000 évaluations/s.
 - **Deux défauts du compilateur de RADV** (Mesa 26.2.4, ACO, gfx1201), trouvés en comparant son
   assembleur (`RADV_DEBUG=shaders`) pour des variantes justes et fausses du shader. (1) En formant
   des paires d'instructions VOPD, ACO met une addition avec l'instruction qui produit l'une de ses
