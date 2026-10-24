@@ -629,7 +629,7 @@ fn the_engine_plays_each_game_as_if_alone() {
     let az = Az::new(Config { iterations: 12 }, std::sync::Arc::new(random_net()), "hasard".into());
     let dir = std::env::temp_dir().join(format!("smallmobile-engine-{}", std::process::id()));
     let opts = Options { full_share: 0.5, fast: 4 };
-    let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 12, threads: 2, seed: 17, opts };
+    let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 12, threads: 2, seed: 17, opts, pos: true };
     selfplay::run(&cfg, &az, &dir, None).unwrap();
     // chaque partie écrite : sa ligne de journal et ses enregistrements
     let mut written = std::collections::HashMap::new();
@@ -852,7 +852,7 @@ fn each_choice_records_the_improved_policy_and_the_next_owners() {
     use smallmobile_lab3::selfplay::{self, GameLog, ILLEGAL, NOBODY, OFF_MAP, PROBABILITY, RECORD};
     let dir = std::env::temp_dir().join(format!("smallmobile-policy-{}", std::process::id()));
     let opts = selfplay::Options { full_share: 1.0, fast: 1 };
-    let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 8, threads: 2, seed: 12, opts };
+    let cfg = selfplay::Config { players: vec![2, 3, 4, 5], games: 8, threads: 2, seed: 12, opts, pos: true };
     selfplay::run(&cfg, &expert(2), &dir, None).unwrap();
     // le propriétaire de chaque région (joueur absolu)
     let owners = |g: &smallmobile_kernel::Game| -> Vec<Option<usize>> {
@@ -937,7 +937,7 @@ fn position_files_say_how_many_positions_each_game_has() {
     use smallmobile_lab3::selfplay;
     let dir = std::env::temp_dir().join(format!("smallmobile-games-{}", std::process::id()));
     let opts = selfplay::Options { full_share: 1.0, fast: 1 };
-    let cfg = selfplay::Config { players: vec![2, 3], games: 5, threads: 2, seed: 3, opts };
+    let cfg = selfplay::Config { players: vec![2, 3], games: 5, threads: 2, seed: 3, opts, pos: true };
     selfplay::run(&cfg, &expert(2), &dir, None).unwrap();
     let (mut total, mut positions) = (0, 0);
     for entry in std::fs::read_dir(&dir).unwrap() {
@@ -967,7 +967,7 @@ fn self_play_games_can_be_replayed() {
     use smallmobile_lab3::table::Outcome;
     let dir = std::env::temp_dir().join(format!("smallmobile-replay-{}", std::process::id()));
     let opts = selfplay::Options { full_share: 1.0, fast: 1 };
-    let cfg = selfplay::Config { players: vec![2, 4], games: 4, threads: 2, seed: 5, opts };
+    let cfg = selfplay::Config { players: vec![2, 4], games: 4, threads: 2, seed: 5, opts, pos: true };
     selfplay::run(&cfg, &expert(2), &dir, None).unwrap();
     let mut games = 0;
     for entry in std::fs::read_dir(&dir).unwrap() {

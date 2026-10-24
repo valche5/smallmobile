@@ -23,8 +23,9 @@
 # étape). Sur AWS : --save lab3/data/pP,lab3/runs/pP. Réglages (essais sur mini) : GAMES, DEALS,
 # PLAY, TRAIN ; DEVICE=vulkan : le réseau des parties sur GPU (`lab3 selfplay --device vulkan`).
 # L'entraînement Python prend le GPU quand il y en a un, indépendamment de DEVICE.
-# La fenêtre de l'apprentissage est lue sous forme compacte (lab3/py/data.py, `pack` : un fichier
-# `.pos.packed3.npz` fait une fois à côté de chaque `.pos`), mappée depuis les fichiers.
+# La fenêtre de l'apprentissage est lue sous forme compacte, mappée depuis les fichiers : écrite
+# par le selfplay (un dossier `.pos.compact` par fil, lab3/src/compact.rs), ou faite une fois depuis
+# les `.pos` des cycles d'avant (lab3/py/data.py, `pack`).
 # Sur GPU : étapes successives par défaut (PARALLEL=0), THREADS fils de jeu (tous les cœurs par
 # défaut) ; les parties du cycle k+1 y sont jouées par le réseau k, qui vient d'apprendre. TRAIN règle seulement les opérations CPU de PyTorch ; aucun cœur ne lui est réservé.
 # Sur CPU : PARALLEL=1 conserve le recouvrement historique avec PLAY et TRAIN cœurs.

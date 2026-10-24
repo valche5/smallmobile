@@ -1,9 +1,7 @@
-"""Les parties d'entraînement écrites par `lab3 selfplay` (voir lab3/src/selfplay.rs pour le format)."""
+"""Les parties d'entraînement écrites par `lab3 selfplay` : leur forme compacte (lab3/src/compact.rs),
+et les enregistrements pleins qu'elle redonne (`RECORD`, lab3/src/selfplay.rs)."""
 
 import mmap
-import os
-import struct
-import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +17,8 @@ OFF_MAP = 255
 # propriétaires possibles d'une région : personne, puis chaque joueur relatif
 OWNERS = 6
 
+# les champs pleins d'une position (`Packed.take`) ; aussi les fichiers `.pos` que le selfplay écrit
+# sur demande (`lab3 selfplay --pos true`, pour `lab3 check-net`)
 RECORD = np.dtype(
     [
         ("players", "u1"),
@@ -38,13 +38,11 @@ RECORD = np.dtype(
     ]
 )
 SUFFIX = ".pos"
-# fichier `x.pos.games` à côté de `x.pos` : le nombre de positions de chaque partie, dans l'ordre
-# (u32 petit-boutiste)
+# fichier `x.pos.games` : le nombre de positions de chaque partie, dans l'ordre (u32 petit-boutiste)
 GAMES = ".games"
-# fichier `x.pos.values` : la part de victoire attendue de chaque joueur relatif selon la recherche,
-# par position (f32 × 5 ; lab3/src/selfplay.rs, `values_file`). Absent des cycles d'avant le
-# 24 octobre : la valeur y est le résultat de la partie (`win`).
-VALUES = ".values"
+# la forme compacte écrite par le selfplay : un dossier `x.pos.compact` d'un `.npy` par tableau, à
+# côté de `x.pos.games`
+COMPACT = ".compact"
 
 
 # fenêtre (en positions) quand `total` positions ont été jouées : tout jusqu'à WINDOW_MIN, puis
@@ -135,116 +133,42 @@ def in_validation(keys, share):
     return keys % np.uint64(10_000) < np.uint64(round(share * 10_000))
 
 
-# La forme compacte d'un fichier de positions (`pack`), à côté de lui : ce qui n'est pas vide d'un
-# enregistrement de 6 210 octets, ~1,9 Ko par position (octets non nuls des régions et de la partie,
-# un indice de 16 bits et une valeur chacun ; politique des seuls coups possibles ; voisines et
-# propriétaires des régions présentes). Lue au hasard dans les fichiers `.pos` mappés, la fenêtre
-# faisait attendre l'apprentissage 80 ms par lot de 512 (lab3/journal.md) ; sous forme compacte,
-# ses grands tableaux restent mappés dans ces fichiers (`_members`), et le cache du système en
-# garde ce qui tient en RAM : la fenêtre grandit (~24 Go à c040) sans déborder les 31 Go du PC.
-PACKED = ".packed3.npz"
-# les octets des régions puis ceux de la partie, en un seul vecteur creux : où sont les non nuls (un
-# bit chacun : 10 octets par région présente, `GLOBAL_MASK` pour la partie), puis leurs valeurs
+# La forme compacte (lab3/src/compact.rs) : ce qui n'est pas vide d'un enregistrement de 6 210 octets,
+# ~900 octets par position. Ses grands tableaux restent mappés dans les fichiers (`_members`), et le
+# cache du système en garde ce qui tient en RAM : la fenêtre (~21 Go pour 24 millions de positions)
+# tient dans les 31 Go du PC (lab3/journal.md, « Fenêtre et suite de deep7 »).
+# les octets des régions puis ceux de la partie, en un seul vecteur creux
 SPARSE = REGIONS * NODE + GLOBAL
-GLOBAL_MASK = (GLOBAL + 7) // 8
-
-
-def pack(f):
-    """La forme compacte du fichier de positions `f` (faite une fois, puis relue). Par position :
-    ses régions présentes seulement, le masque de ses octets non nuls et leurs valeurs, ses coups
-    possibles seulement ; les adjacences d'une même carte une seule fois (seuls 3 % des blocs
-    diffèrent : la carte change peu d'une position à la suite). Les valeurs non nulles : un bit dit
-    si elle vaut 1 (62 % d'entre elles), un octet seulement pour les autres. ~880 octets par position
-    au lieu des 6 210 de `RECORD` (1 940 avec les index des non nuls et toutes les adjacences, 1 212
-    avec le masque des 48 régions et un octet par valeur)."""
-    out = f.with_name(f.name + PACKED)
-    if out.exists() and out.stat().st_mtime >= f.stat().st_mtime:
-        return out
-    r = np.fromfile(f, dtype=RECORD)
-    _forget(f)
-    n = len(r)
-    counts = games(f, n)
-    keys = np.repeat(map_keys(r[np.cumsum(counts) - counts]), counts) if n else np.empty(0, np.uint64)
-    present = np.arange(REGIONS)[None, :] < r["regions"][:, None].astype(np.int64)
-    dense = np.concatenate([r["node"].reshape(n, -1), r["glob"]], 1)
-    nonzero = dense != 0
-    node_nz = r["node"] != 0
-    assert not node_nz[~present].any(), f"{f} : une région absente a des entrées"
-    vals = dense[nonzero]
-    count = nonzero.sum(1)
-    big = vals != 1
-    blocks, block_of, rows = {}, np.empty(n, np.uint32), []
-    for i in range(n):
-        row = r["adj"][i, : r["regions"][i]]
-        block_of[i] = blocks.setdefault(row.tobytes(), len(blocks))
-        if block_of[i] == len(rows):
-            rows.append(row)
-    values = f.with_name(f.name + VALUES)
-    extra = {}
-    if values.exists():
-        extra["value"] = np.fromfile(values, dtype="<f4").reshape(r["win"].shape)
-    legal = r["policy"] != ILLEGAL
-    lpos, key = np.nonzero(legal)
-    tmp = out.with_name(out.name + ".tmp")
-    with open(tmp, "wb") as fh:
-        np.savez(
-            fh,
-            players=r["players"],
-            regions=r["regions"],
-            weight=r["weight"],
-            win=r["win"],
-            gain=r["gain"],
-            keys=keys,
-            owner=r["owner"][present],
-            adj=np.concatenate(rows) if rows else np.empty(0, np.uint64),
-            adj_count=np.array([len(row) for row in rows], np.uint8),
-            adj_block=block_of,
-            nz_count=count.astype(np.uint16),
-            nz_rows=np.packbits(node_nz[present], axis=1),
-            nz_glob=np.packbits(r["glob"] != 0, axis=1),
-            nz_ones=np.packbits(~big),
-            nz_big_count=np.bincount(np.repeat(np.arange(n), count)[big], minlength=n).astype(np.uint16),
-            nz_big=vals[big],
-            pol_count=np.bincount(lpos, minlength=n).astype(np.uint16),
-            pol_key=key.astype(np.uint16),
-            pol_val=r["policy"][lpos, key],
-            **extra,
-        )
-    tmp.rename(out)
-    _forget(out)
-    return out
-
-
-def _forget(f):
-    """Sort `f` du cache du système : la fenêtre mappée (`Packed`) y garde sa place."""
-    fd = os.open(f, os.O_RDONLY)
-    try:
-        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
-    finally:
-        os.close(fd)
 
 
 def _members(path):
-    """Les tableaux d'un `.npz` non compressé (`np.savez`), mappés à leur place dans le fichier.
+    """Les tableaux des `.npy` du dossier `path` (`COMPACT`), mappés à leur place dans les fichiers.
     Toutes les pages sont installées à l'ouverture (`MAP_POPULATE`) : lues une fois à la suite,
     puis aucune faute de page pendant l'apprentissage (sans elle, 33 ms par lot au lieu de 2). Ce
     sont les pages du cache du système, qu'il reprend s'il manque de mémoire."""
     out = {}
-    with zipfile.ZipFile(path) as z, open(path, "rb") as f:
-        whole = mmap.mmap(f.fileno(), 0, flags=mmap.MAP_SHARED | mmap.MAP_POPULATE, prot=mmap.PROT_READ)
-        for info in z.infolist():
-            assert info.compress_type == zipfile.ZIP_STORED, f"{path} : compressé"
-            f.seek(info.header_offset)
-            name_len, extra_len = struct.unpack("<HH", f.read(30)[26:30])
-            f.seek(info.header_offset + 30 + name_len + extra_len)
+    for npy in sorted(Path(path).glob("*.npy")):
+        with open(npy, "rb") as f:
+            whole = mmap.mmap(f.fileno(), 0, flags=mmap.MAP_SHARED | mmap.MAP_POPULATE, prot=mmap.PROT_READ)
             version = np.lib.format.read_magic(f)
             read = np.lib.format.read_array_header_1_0 if version == (1, 0) else np.lib.format.read_array_header_2_0
             shape, fortran, dtype = read(f)
             assert not fortran
-            name = info.filename.removesuffix(".npy")
-            count = int(np.prod(shape))
-            out[name] = np.frombuffer(whole, dtype=dtype, count=count, offset=f.tell()).reshape(shape)
+            out[npy.stem] = np.frombuffer(whole, dtype=dtype, count=int(np.prod(shape)), offset=f.tell()).reshape(shape)
     return out
+
+
+def _keys(p, f):
+    """Les clés des parties (`map_keys`) d'une forme compacte `p`, d'après la première position de
+    chacune (`f` : son dossier, pour ses `.games`)."""
+    counts = games(f.with_name(f.name.removesuffix(COMPACT)), len(p["players"]))
+    first = np.cumsum(counts) - counts
+    blocks = p["adj_count"].astype(np.int64)
+    regions = p["regions"][first]
+    ids, b, rank = _segments((np.cumsum(blocks) - blocks)[p["adj_block"][first]], regions, np.arange(len(first)))
+    adj = np.zeros((len(first), REGIONS), np.uint64)
+    adj[b, rank] = p["adj"][ids]
+    return np.repeat(map_keys({"players": p["players"][first], "regions": regions, "adj": adj}), counts)
 
 
 class Parts:
@@ -301,18 +225,19 @@ def _segments(begin, count, sel):
 
 
 class Packed:
-    """Une fenêtre sous forme compacte (`pack`) : ses petits champs en RAM (une soixantaine d'octets
-    par position), les grands mappés dans les fichiers (`Parts`) ; `take` redonne les champs pleins
-    de `RECORD` d'un lot, `packed["weight"]` les petits champs d'une position."""
+    """Une fenêtre sous forme compacte (`COMPACT`) : ses petits champs en RAM (une soixantaine
+    d'octets par position), les grands mappés dans les fichiers (`Parts`) ; `take` redonne les champs
+    pleins de `RECORD` d'un lot (et la valeur de la recherche), `packed["weight"]` les petits champs
+    d'une position."""
 
-    SMALL = ("players", "regions", "weight", "win", "gain", "keys")
+    SMALL = ("players", "regions", "weight", "win", "gain", "value", "keys")
     MAPPED = ("owner", "adj", "nz_rows", "nz_glob", "nz_big", "pol_key", "pol_val")
 
     def __init__(self, files):
         parts = [_members(f) for f in files]
+        for p, f in zip(parts, files):
+            p["keys"] = _keys(p, Path(f))
         small = {k: np.concatenate([p[k] for p in parts]) for k in self.SMALL + ("nz_count", "nz_big_count", "pol_count")}
-        # la valeur de la recherche, ou le résultat de la partie pour un fichier qui ne l'a pas
-        small["value"] = np.concatenate([p.get("value", p["win"]) for p in parts]) if parts else small["win"]
         self.__dict__.update(small)
         for name in self.MAPPED:
             setattr(self, name, Parts([p[name] for p in parts]))
@@ -364,44 +289,32 @@ class Packed:
         return out
 
 
-def load_packed(paths):
-    """La fenêtre des fichiers (ou dossiers) donnés, sous forme compacte (`Packed`), et la clé de la
-    partie de chaque position (`map_keys`)."""
+def sources(paths):
+    """Les formes compactes (`COMPACT`) des fichiers ou dossiers donnés, repérées par leurs `.games`."""
     files = []
     for path in paths:
         p = Path(path)
-        files += sorted(p.rglob("*" + SUFFIX)) if p.is_dir() else [p]
-    recs = Packed([pack(f) for f in files])
+        games_files = sorted(p.rglob("*" + SUFFIX + GAMES)) if p.is_dir() else [p.with_name(p.name + GAMES)]
+        files += [g.with_name(g.name.removesuffix(GAMES) + COMPACT) for g in games_files]
+    return files
+
+
+def load_packed(paths):
+    """La fenêtre des fichiers (ou dossiers) donnés, sous forme compacte (`Packed`), et la clé de la
+    partie de chaque position (`map_keys`)."""
+    recs = Packed(sources(paths))
     return recs, recs.keys
 
 
 def load(paths, keep=None):
-    """Les enregistrements des fichiers (ou dossiers) donnés, en un seul tableau, et la clé de la
-    partie de chacun (`map_keys`, pour séparer la validation). `keep` : ne garder que certaines
-    parties (fonction des clés qui rend un masque, comme `in_validation`)."""
-    files = []
-    for path in paths:
-        p = Path(path)
-        files += sorted(p.rglob("*" + SUFFIX)) if p.is_dir() else [p]
-    plan = []
-    for f in files:
-        count = f.stat().st_size // RECORD.itemsize
-        counts = games(f, count)
-        m = np.memmap(f, dtype=RECORD, mode="r", shape=(count,)) if count else np.zeros(0, dtype=RECORD)
-        keys = np.repeat(map_keys(m[np.cumsum(counts) - counts]), counts)
-        del m
-        plan.append((f, count, keys, None if keep is None else keep(keys)))
-    total = sum(len(keys) if sel is None else int(sel.sum()) for _, _, keys, sel in plan)
-    recs = np.empty(total, dtype=RECORD)
-    out = np.empty(total, dtype=np.uint64)
-    at = 0
-    for f, count, keys, sel in plan:
-        if sel is not None:
-            keys = keys[sel]
-        if len(keys):
-            m = np.memmap(f, dtype=RECORD, mode="r", shape=(count,))
-            recs[at : at + len(keys)] = m if sel is None else m[sel]
-            out[at : at + len(keys)] = keys
-            at += len(keys)
-            del m
-    return recs, out
+    """Les enregistrements pleins (`RECORD`) des fichiers (ou dossiers) donnés, en un seul tableau, et
+    la clé de la partie de chacun (`map_keys`, pour séparer la validation). `keep` : ne garder que
+    certaines parties (fonction des clés qui rend un masque, comme `in_validation`)."""
+    packed = Packed(sources(paths))
+    sel = np.arange(len(packed)) if keep is None else np.flatnonzero(keep(packed.keys))
+    recs = np.empty(len(sel), dtype=RECORD)
+    for lo in range(0, len(sel), 65536):
+        t = packed.take(sel[lo : lo + 65536])
+        for name in RECORD.names:
+            recs[name][lo : lo + 65536] = t[name]
+    return recs, packed.keys[sel]

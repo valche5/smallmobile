@@ -614,6 +614,15 @@ v2) dépassait le cache : l'apprentissage attendait le disque.
 - L'entraînement reste à ~127 s : le calcul du GPU à 7 couches (~19 ms par lot). Lire les mesures
   à la fin plutôt qu'à chaque lot et copier les lots depuis la mémoire verrouillée : 126 s,
   rien ; retiré.
+- **Forme compacte écrite par le selfplay** (`lab3/src/compact.rs`, idée de l'utilisateur) : un
+  dossier `x.pos.compact` d'un `.npy` par tableau, à côté de `x.pos.games` et `x.pos.moves` ; la
+  valeur de la recherche y est (plus de `.pos.values`), la clé de chaque partie est calculée à la
+  lecture. Plus de `.pos` (6 210 octets par position, `lab3 selfplay --pos true` les écrit pour
+  `check-net` et les tests), plus de `pack` : un cycle tient en ~850 Mo au lieu de 6,6 Go.
+  `test_train.py` compare la forme écrite aux `.pos` des mêmes parties (champs et clés au bit
+  près). Les cycles c083–c116 de la fenêtre convertis une fois depuis leurs `.packed3.npz` (mêmes
+  champs au bit près) ; plus aucune lecture des anciennes formes (`pack`, `.npz`, `.pos`). En
+  service depuis c117.
 
 Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
 (`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En

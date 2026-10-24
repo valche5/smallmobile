@@ -6,7 +6,7 @@
 //!     [--device vulkan]   (les joueurs `az` sur GPU, un par réseau, plusieurs parties par fil)
 //! lab3 arena --table 'az:net=poids.bin|hard|normal' [--deals 100] [--out r.tsv]   (table fixe)
 //! lab3 speed --agent az:net=poids.bin,n=200 [--positions 12] [--seed 1]   (temps et empreinte des recherches)
-//! lab3 selfplay --agent az:net=poids.bin --games 1000 --out lab3/data/gen1 [--players 2,3,4,5]
+//! lab3 selfplay --agent az:net=poids.bin --games 1000 --out lab3/data/gen1 [--players 2,3,4,5] [--pos true]
 //!     [--device cpu|vulkan]   (CPU par défaut ; Vulkan inclus à la compilation, `gpu` est un alias de `vulkan`)
 //!     (auto-jeu, recette `selfplay::RECIPE`)
 //! lab3 check-net --net poids.bin --data parties.pos [--count 5]   (comparaison avec lab3/py/check.py)
@@ -49,7 +49,7 @@ fn usage() -> ! {
     eprintln!("        lab3 arena --table 'A|B|B' [--deals N] [--threads N] [--seed S] [--out F]");
     eprintln!("        lab3 speed --agent az:… [--players 2,3,4,5] [--positions 12] [--seed S]");
     eprintln!(
-        "        lab3 selfplay --agent az:… --games N --out DIR [--players 2,3,4,5] [--seed S] [--device cpu|vulkan]"
+        "        lab3 selfplay --agent az:… --games N --out DIR [--players 2,3,4,5] [--seed S] [--device cpu|vulkan] [--pos true]"
     );
     eprintln!("        lab3 check-net --net poids.bin --data parties.pos [--count N]");
     eprintln!("        lab3 bench-net --net poids.bin --data parties.pos [--count N]");
@@ -276,6 +276,7 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
         threads: get(opts, "threads", threads()),
         seed: get(opts, "seed", 1),
         opts: selfplay::RECIPE,
+        pos: get(opts, "pos", false),
     };
     let out = opts.get("out").unwrap_or_else(|| usage());
     // Le réseau sur GPU par Vulkan : les mêmes poids que la recherche.

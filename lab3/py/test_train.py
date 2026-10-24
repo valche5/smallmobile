@@ -1,8 +1,12 @@
-"""Régressions du chargement des lots, et de l'apprentissage en continu sur une petite fenêtre.
+"""Régressions de la forme compacte écrite par le selfplay, du chargement des lots et de
+l'apprentissage en continu. Les tests sur de vraies parties lancent `lab3 selfplay` (le programme
+construit, `LAB3`, par défaut `target/release/lab3`) ; sautés s'il manque.
 
     cd lab3/py && .venv/bin/python -m unittest test_train
 """
 
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -13,28 +17,19 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from data import GAMES, ILLEGAL, NODE, OFF_MAP, RECORD, REGIONS, VALUES, load, load_packed
+from data import COMPACT, ILLEGAL, RECORD, Packed, games, load, map_keys, sources
 from model import Net, export, load as load_net
-from train import batches, fields, main
+from train import batches, main
+
+ROOT = Path(os.environ.get("LAB3_ROOT", Path(__file__).resolve().parents[2]))
+LAB3 = Path(os.environ.get("LAB3", ROOT / "target/release/lab3"))
 
 
-def random_records(count, rng):
-    """`count` positions au hasard, de tailles et de champs variés."""
-    recs = np.zeros(count, dtype=RECORD)
-    for i, r in enumerate(recs):
-        n = int(rng.integers(5, REGIONS + 1))
-        r["players"], r["regions"] = 2 + i % 4, n
-        r["weight"] = rng.random()
-        r["win"], r["gain"] = rng.random(5), rng.normal(size=5)
-        r["owner"][:n], r["owner"][n:] = rng.integers(0, 6, n), OFF_MAP
-        r["adj"][:n] = rng.integers(0, 2**63, n, dtype=np.uint64)
-        node = rng.integers(0, 256, (n, NODE)) * (rng.random((n, NODE)) < 0.15)
-        r["node"][:n] = node
-        r["glob"] = rng.integers(0, 256, r["glob"].shape) * (rng.random(r["glob"].shape) < 0.15)
-        r["policy"] = ILLEGAL
-        keys = rng.choice(len(r["policy"]), int(rng.integers(1, 30)), replace=False)
-        r["policy"][keys] = rng.integers(0, 60000, len(keys))
-    return recs
+def selfplay(out, seed, pos=False):
+    """12 parties à 2, 3, 4 et 5 joueurs sur 2 fils (réseau de gen0, 16 simulations), dans `out`."""
+    args = [LAB3, "selfplay", "--agent", f"az:net={ROOT / 'lab3/nets/gen0.bin'},n=16", "--games", "12", "--out", out,
+            "--players", "2,3,4,5", "--seed", str(seed), "--threads", "2", "--device", "cpu", "--pos", str(pos).lower()]
+    subprocess.run(args, check=True, capture_output=True)
 
 
 class BatchesTest(unittest.TestCase):
@@ -62,41 +57,41 @@ class BatchesTest(unittest.TestCase):
         torch.testing.assert_close(bs[0]["win"], torch.from_numpy(self.recs["win"][[0, 2]].copy()))
         torch.testing.assert_close(bs[1]["win"], torch.from_numpy(self.recs["win"][[1]].copy()))
 
-    def test_packed_gives_back_the_records(self):
-        """La forme compacte redonne les mêmes champs, au bit près, sur plusieurs fichiers."""
-        recs = random_records(40, np.random.default_rng(3))
-        # des cartes qui reviennent d'une position à l'autre (un seul bloc d'adjacences gardé)
-        recs[5:9]["regions"] = recs[4]["regions"]
-        recs[5:9]["adj"] = recs[4]["adj"]
-        recs[20]["adj"], recs[20]["regions"] = recs[3]["adj"], recs[3]["regions"]
-        for r in recs:
-            r["node"][r["regions"] :] = 0
-        with tempfile.TemporaryDirectory() as tmp:
-            for name, part, counts in (("a.pos", recs[:15], [7, 8]), ("b.pos", recs[15:], [10, 0, 15])):
-                part.tofile(Path(tmp) / name)
-                np.array(counts, "<u4").tofile(Path(tmp) / (name + GAMES))
-            # la valeur de la recherche de b.pos ; a.pos n'en a pas (cycles d'avant) : son résultat
-            values = np.random.default_rng(4).random((25, 5)).astype("<f4")
-            values.tofile(Path(tmp) / ("b.pos" + VALUES))
-            packed, keys = load_packed([tmp])
-            self.assertEqual(len(packed), len(recs))
-            np.testing.assert_array_equal(packed.take(np.array([3, 14]))["value"], recs["win"][[3, 14]])
-            np.testing.assert_array_equal(packed.take(np.array([15, 39]))["value"], values[[0, 24]])
-            np.testing.assert_array_equal(keys, load([tmp])[1])
-            sel = np.array([0, 3, 14, 15, 16, 39])
-            got, want = fields(packed, sel), fields(recs, sel)
-            got.pop("value")
-            self.assertEqual(sorted(got), sorted(want))
-            for name in want:
-                np.testing.assert_array_equal(got[name], want[name], err_msg=name)
-            for a, b in zip(batches(packed, sel, 4, "cpu"), batches(recs, sel, 4, "cpu")):
-                for name in set(b) - {"value"}:
-                    torch.testing.assert_close(a[name], b[name], rtol=0, atol=0)
-
     def test_empty_selection(self):
         self.assertEqual(list(batches(self.recs, np.array([], dtype=np.int64), 512, "cpu")), [])
 
 
+@unittest.skipUnless(LAB3.exists(), f"{LAB3} absent")
+class CompactTest(unittest.TestCase):
+    def test_selfplay_writes_the_records(self):
+        """La forme compacte redonne, au bit près, les enregistrements pleins des mêmes parties
+        (`--pos true`), et la même clé de partie."""
+        with tempfile.TemporaryDirectory() as tmp:
+            selfplay(tmp, 7, pos=True)
+            files = sources([tmp])
+            self.assertEqual(len(files), 2)
+            want = []
+            for f in files:
+                pos = f.with_name(f.name.removesuffix(COMPACT))
+                records = np.fromfile(pos, dtype=RECORD)
+                counts = games(pos, len(records))
+                keys = np.repeat(map_keys(records[np.cumsum(counts) - counts]), counts)
+                packed = Packed([f])
+                self.assertGreater(len(packed), 20)
+                np.testing.assert_array_equal(packed.keys, keys)
+                got = packed.take(np.arange(len(packed)))
+                for name in RECORD.names:
+                    np.testing.assert_array_equal(got[name], records[name], err_msg=name)
+                # la valeur de la recherche : une part de victoire par joueur présent
+                present = np.arange(5)[None] < records["players"][:, None]
+                np.testing.assert_allclose((got["value"] * present).sum(1), 1, rtol=1e-5)
+                self.assertTrue((got["value"][~present] == 0).all())
+                want.append(records)
+            recs, _ = load([tmp])
+            np.testing.assert_array_equal(recs, np.concatenate(want))
+
+
+@unittest.skipUnless(LAB3.exists(), f"{LAB3} absent")
 class ContinuousTest(unittest.TestCase):
     def test_state_goes_on(self):
         """En continu, le deuxième pas reprend l'optimiseur du premier, et le réseau exporté est la
@@ -104,9 +99,7 @@ class ContinuousTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             for c, seed in (("c001", 1), ("c002", 2)):
-                (tmp / c).mkdir()
-                random_records(64, np.random.default_rng(seed)).tofile(tmp / c / "a.pos")
-                np.full(8, 8, "<u4").tofile(tmp / c / ("a.pos" + GAMES))
+                selfplay(tmp / c, seed)
             torch.manual_seed(0)
             export(Net(16, 1), tmp / "c000.bin")
 
@@ -134,6 +127,7 @@ class ContinuousTest(unittest.TestCase):
                 torch.testing.assert_close(p, e.cpu(), rtol=0, atol=0)
             raw = s1["net"]["node_in.weight"].cpu()
             self.assertFalse(torch.equal(played.node_in.weight, raw), "la moyenne n'est pas le réseau qui apprend")
+
 
 
 if __name__ == "__main__":

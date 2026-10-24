@@ -18,9 +18,11 @@
 //! u8 × GLOBAL  entrées de la partie
 //! ```
 //!
-//! Fichiers `*.pos` (`SUFFIX`). À côté de chacun : `games_file` (positions de chaque partie),
-//! `moves_file` (de quoi rejouer chaque partie, `GameLog`) et `values_file` (la valeur de la
-//! recherche de chaque position).
+//! Fichiers `*.pos` (`SUFFIX`), écrits seulement sur demande (`Config::pos` : les outils qui lisent
+//! les enregistrements, `lab3 check-net`). L'apprentissage lit la forme compacte des mêmes
+//! positions, toujours écrite, avec la valeur de la recherche de chacune (`compact`,
+//! `compact::compact_dir`). À côté : `games_file` (positions de chaque partie) et `moves_file` (de
+//! quoi rejouer chaque partie, `GameLog`).
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -38,6 +40,7 @@ use smallmobile_kernel::{Action, Game, Phase};
 
 use crate::az::{Az, Evals, Oracle, Searched};
 use crate::batch::Batch;
+use crate::compact::{Compact, Position, compact_dir};
 use crate::encode::{Encoded, GLOBAL, NODE, REGIONS, encode, relative};
 use crate::gpu::Gpu;
 use crate::know::Knowledge;
@@ -175,9 +178,8 @@ pub const RECIPE: Options = Options { full_share: 0.125, fast: 50 };
 pub struct Played {
     pub outcome: Outcome,
     pub positions: usize,
-    /// La part de victoire attendue de chaque joueur relatif selon la recherche, pour chaque
-    /// position écrite (f32 × 5 petit-boutistes, `values_file`).
-    pub values: Vec<u8>,
+    /// Les positions écrites, sous forme compacte.
+    pub compact: Compact,
     /// Les actions de toute la partie, à la suite ; la fin de celles de chaque coup.
     actions: Vec<Action>,
     ends: Vec<u32>,
@@ -240,7 +242,9 @@ pub async fn play(
     let o = Outcome::of(&g);
     let n = o.players;
     let weights = weights(&pending.iter().map(|p| p.surprise).collect::<Vec<_>>());
-    let mut values = Vec::with_capacity(pending.len() * MAX_PLAYERS * 4);
+    let mut compact = Compact::default();
+    // les voisines de chaque région de la carte, un bit par région (comme dans `Record`)
+    let adj: Vec<u64> = table.map.regions.iter().map(|r| r.adj.iter().fold(0u64, |bits, &a| bits | 1 << a)).collect();
     for (p, &weight) in pending.iter().zip(&weights) {
         let mut win = [0.0; MAX_PLAYERS];
         let mut gain = [0.0; MAX_PLAYERS];
@@ -253,13 +257,24 @@ pub async fn play(
         }
         // une recherche complète connaît toujours ses parts (NaN : coup forcé, jamais enregistré)
         assert!(value[..n].iter().all(|v| v.is_finite()), "valeur de la recherche inconnue");
-        value.iter().for_each(|v| values.extend_from_slice(&v.to_le_bytes()));
         let owners = p.owners.expect("propriétaires");
+        let position = Position {
+            players: p.players,
+            weight,
+            win,
+            gain,
+            value,
+            owners: &owners[..p.regions as usize],
+            node: &p.node,
+            global: &p.global,
+            policy: &p.policy,
+        };
+        compact.push(&position, &adj);
         let (enc, policy) = (p.encoded(), p.policy());
         let rec = Record { enc: &enc, map: &table.map, weight, win, gain, owners, policy: &policy };
         out.write_all(&rec.bytes())?;
     }
-    Ok(Played { outcome: o, positions: pending.len(), values, actions, ends })
+    Ok(Played { outcome: o, positions: pending.len(), compact, actions, ends })
 }
 
 /// La surprise d'une recherche : divergence de Kullback-Leibler de sa politique améliorée (la
@@ -413,6 +428,8 @@ pub struct Config {
     pub threads: usize,
     pub seed: u64,
     pub opts: Options,
+    /// Écrire aussi les enregistrements pleins (`.pos`).
+    pub pos: bool,
 }
 
 /// Le fichier qui accompagne un fichier de positions : le nombre de positions de chaque partie,
@@ -420,15 +437,6 @@ pub struct Config {
 pub fn games_file(path: &Path) -> std::path::PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(".games");
-    name.into()
-}
-
-/// Le fichier qui accompagne un fichier de positions : la part de victoire attendue de chaque joueur
-/// relatif selon la recherche, par position (f32 × 5 petit-boutistes ; `VALUES` dans
-/// `lab3/py/data.py`, une cible de la valeur avec le résultat de la partie).
-pub fn values_file(path: &Path) -> std::path::PathBuf {
-    let mut name = path.as_os_str().to_owned();
-    name.push(".values");
     name.into()
 }
 
@@ -456,7 +464,7 @@ pub struct Finished {
     pub players: usize,
     pub positions: usize,
     pub records: Vec<u8>,
-    pub values: Vec<u8>,
+    pub compact: Compact,
     pub line: String,
 }
 
@@ -470,7 +478,8 @@ pub async fn game(i: usize, cfg: &Config, az: &Az, oracle: &impl Oracle) -> std:
     let mut records = Vec::new();
     let played = play(&table, seed, az, cfg.opts, &mut rng, &mut records, oracle).await?;
     let line = GameLog::new(deal, map_seed, seed, &table, &played).line();
-    Ok(Finished { players, positions: played.positions, records, values: played.values, line })
+    let Played { positions, compact, .. } = played;
+    Ok(Finished { players, positions, records, compact, line })
 }
 
 /// Les positions retenues par toutes les parties, comptées dès leur recherche : une partie ne compte
@@ -600,13 +609,14 @@ pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Res
             let thread = std::thread::Builder::new().name(format!("jeu-{t:02}"));
             handles.push(thread.spawn_scoped(scope, move || -> std::io::Result<()> {
                 let path = dir.join(format!("s{:x}-{t:02}{SUFFIX}", cfg.seed));
-                let mut out = BufWriter::new(File::create(&path)?);
+                let mut out: Box<dyn Write> =
+                    if cfg.pos { Box::new(BufWriter::new(File::create(&path)?)) } else { Box::new(std::io::sink()) };
                 let mut games = BufWriter::new(File::create(games_file(&path))?);
                 let mut logs = BufWriter::new(File::create(moves_file(&path))?);
-                let mut values = BufWriter::new(File::create(values_file(&path))?);
+                let mut compact = Compact::default();
                 let mut record = |i: usize, finished: Finished| -> std::io::Result<()> {
                     out.write_all(&finished.records)?;
-                    values.write_all(&finished.values)?;
+                    compact.append(finished.compact);
                     games.write_all(&(finished.positions as u32).to_le_bytes())?;
                     writeln!(logs, "{}", finished.line)?;
                     let count = finished.positions;
@@ -672,7 +682,7 @@ pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Res
                 }
                 drop(record);
                 out.flush()?;
-                values.flush()?;
+                compact.write(&compact_dir(&path))?;
                 logs.flush()?;
                 games.flush()
             })?);
