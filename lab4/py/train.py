@@ -140,12 +140,12 @@ def losses(net, b, mix=0.0):
     return pol, val, gain, owners, acc, brier
 
 
-def learn(net, opt, sched, b, mix=0.0):
+def learn(net, opt, sched, b, mix=0.0, own_weight=OWN_WEIGHT):
     """Un lot d'entraînement (en bf16) ; renvoie ses mesures (`METRICS`)."""
     with torch.autocast(b["node"].device.type, dtype=torch.bfloat16):
         out = losses(net, b, mix)
         pol, val, gain, owners = out[:4]
-        loss = pol + val + GAIN_WEIGHT * gain + OWN_WEIGHT * owners
+        loss = pol + val + GAIN_WEIGHT * gain + own_weight * owners
     opt.zero_grad(set_to_none=True)
     loss.backward()
     torch.nn.utils.clip_grad_norm_(net.parameters(), 5.0)
@@ -179,6 +179,8 @@ def main():
     ap.add_argument("--threads", type=int, help="cœurs de PyTorch")
     ap.add_argument("--seed", type=int, default=0, help="ordre des lots")
     ap.add_argument("--lr", type=float, default=LR, help="taux maximal du cycle (le taux constant en continu)")
+    ap.add_argument("--own-weight", type=float, default=OWN_WEIGHT,
+                    help="poids de la perte des propriétaires (0 : sans cette tête)")
     ap.add_argument("--value-mix", type=float, default=0.0,
                     help="part de la valeur de la recherche dans la cible de la valeur (0 : le résultat seul)")
     ap.add_argument("--state-in", help="en continu : l'état du pas précédent, s'il existe")
@@ -229,7 +231,7 @@ def main():
     sums = np.zeros(len(METRICS))
     params = list(net.parameters())
     for i, b in enumerate(batches(recs, order, BATCH, device)):
-        sums += learn(net, opt, sched, b, args.value_mix)
+        sums += learn(net, opt, sched, b, args.value_mix, args.own_weight)
         if ema and i % EMA_EVERY == EMA_EVERY - 1:
             with torch.no_grad():
                 torch._foreach_lerp_(ema, params, 1 - EMA**EMA_EVERY)

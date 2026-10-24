@@ -204,6 +204,28 @@ des duels, joués contre `REF` avec le même objectif. Essai `w1` : fenêtre de 
 duels contre c130 à `win=1`, pas 131 à 150 (service `lab4-w1`, lancé à 23:02). Essai à blanc
 (64 parties, `runs/w1test`) avant le lancement : les trois étapes s'enchaînent.
 
+Essai `w1` arrêté après c131 (à la demande de l'utilisateur, pour l'essai suivant) ; les parties
+de c132 sont jouées et gardées. Duels de c131 (win = 1) : contre c130 à win = 1, −0,1 ± 2,1 ; contre
+c130 à win = 0,5, +1,2 ± 2,1 (368 et 460 donnes, intervalles à 95 %). Duels de la boucle désormais
+contre la référence à son objectif d'avant (`REF_WIN`, 0,5). Suivi de la valeur sur des positions
+fixes (`py/track.py`, parties de validation de c126–c130) : c130 et c131 identiques, valeur bien
+calibrée (perte et entropie des prédictions presque égales dans chaque groupe).
+
+## La tête des propriétaires (24 octobre)
+
+Question de l'utilisateur : la tête des propriétaires (à qui appartiendra chaque région au prochain
+tour du joueur, comme la propriété de KataGo ; apprise seulement, Rust ne la calcule pas) pèse
+près d'un quart de la perte (1,5 × 0,50 contre 1,42 pour la politique et 1,02 pour la valeur).
+`train.py --own-weight`, `lab4/own.sh` : depuis c130 et son optimiseur, 3 pas d'apprentissage sur
+la fenêtre de deep7 (c099…c130, mêmes graines), poids 1,5 (témoin), 0,5 et 0.
+
+- Valeur et politique sur les positions fixes de `track.py` : les trois identiques à c130 au
+  millième près ; seule la tête elle-même se dégrade sans entraînement (validation 0,512 → 0,526).
+- Duel, poids 0 contre 1,5, n = 400, 920 donnes (graine 42011) : **−0,3 ± 1,5**.
+- Sur un réseau mûr et en 3 pas, cette tête n'aide ni ne gêne : son effet, s'il y en a, se joue
+  pendant l'apprentissage depuis le début (le tronc l'apprend tôt). La retirer n'apporterait rien
+  ici ; le tester vraiment demanderait un apprentissage depuis zéro.
+
 ## Résultats de force
 
 **Aucun tournoi complet ni entraînement lancé. Aucun gain revendiqué.** Les mini-arènes du pilote

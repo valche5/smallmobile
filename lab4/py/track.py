@@ -30,8 +30,8 @@ win = recs["win"].astype(np.float64)
 players = recs["players"].astype(int)
 early = recs["glob"][:, G_LEFT].astype(int) >= 6
 groups = [(f"{n} j.", players == n) for n in (2, 3, 4, 5)] + [(f"{n} j. début", (players == n) & early) for n in (3, 4, 5)]
-print("réseau      " + "  ".join(f"{name:>22}" for name, _ in groups))
-print("            " + "  ".join(f"{'perte  entropie  brier':>22}" for _ in groups))
+print("réseau            " + "  ".join(f"{name:>22}" for name, _ in groups))
+print("                  " + "  ".join(f"{'perte  entropie  brier':>22}" for _ in groups))
 for path in args.nets:
     net = load_net(path).to(device).eval()
     preds = []
@@ -45,4 +45,5 @@ for path in args.nets:
     entropy = -(p * np.log(p)).sum(1)
     brier = ((p - win) ** 2).sum(1)
     cells = [f"{loss[m].mean():5.3f}  {entropy[m].mean():8.3f}  {brier[m].mean():5.3f}" for _, m in groups]
-    print(f"{Path(path).stem:10}  " + "  ".join(f"{c:>22}" for c in cells), flush=True)
+    label = f"{Path(path).parent.name}/{Path(path).stem}"
+    print(f"{label:16}  " + "  ".join(f"{c:>22}" for c in cells), flush=True)
