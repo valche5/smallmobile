@@ -179,6 +179,31 @@ positions, 6 289 parties), entropie croisée de la victoire :
   1,157 en tout) ; son avance n'apparaît qu'à la fin (0,588 contre 0,630). Apprendre sa valeur au
   réseau ne lui apprendrait presque rien de neuf.
 
+## Apprentissage avec la victoire seule (24 octobre)
+
+Demande de l'utilisateur : reprendre l'apprentissage depuis c130 avec un selfplay qui vise la
+victoire seule (`win=1`) ; les pièces guidaient un réseau jeune, plus forcément un réseau mûr.
+
+État des lieux d'un pas de la boucle de lab3 (moyennes de c121 à c130, deep7 : 128x7, n = 400,
+25 000 parties, en continu) : **~568 s par pas**.
+
+| Étape | Durée | Part | Détail |
+| --- | --- | --- | --- |
+| Parties (selfplay) | 387 s | 68 % | 863 690 positions enregistrées, 2 234 par s ; GPU à 100 %, ~300 W (au plafond), processeur ~80 % |
+| Apprentissage | 146 s | 26 % | chargement 8 s, 6 748 lots de 512 en 130 s (~19 ms chacun, calcul du GPU), validation 4 s |
+| Duel contre c000 | 35 s | 6 % | n = 200, arrêt séquentiel (184 à 460 donnes) |
+
+Dans un cycle, une décision sur 8 est cherchée à fond (400 simulations, enregistrée), les autres
+à 50 : ~6,9 millions de décisions non forcées, ~345 millions de simulations complètes et ~302
+millions rapides (environ moitié-moitié du calcul).
+
+Boucle `lab4/loop.sh` : reprise de celle de lab3, GPU et étapes successives seulement, depuis la
+fenêtre d'un autre essai ; `WIN` règle l'objectif du selfplay (recherches complètes et rapides) et
+des duels, joués contre `REF` avec le même objectif. Essai `w1` : fenêtre de deep7 liée dans
+`data/w1`, c130 et son état d'optimiseur dans `runs/w1`, `WIN=1`, n = 400, taux 1e-4, en continu,
+duels contre c130 à `win=1`, pas 131 à 150 (service `lab4-w1`, lancé à 23:02). Essai à blanc
+(64 parties, `runs/w1test`) avant le lancement : les trois étapes s'enchaînent.
+
 ## Résultats de force
 
 **Aucun tournoi complet ni entraînement lancé. Aucun gain revendiqué.** Les mini-arènes du pilote
