@@ -283,6 +283,32 @@ valeur de c130 à la position, et plafond = la répartition des vainqueurs des 3
   ces joueurs-là (c130 à n = 400) ; la valeur du réseau est lue au début d'une manche, pour tous
   les joueurs.
 
+## Cibles de valeur à court terme (25 octobre)
+
+`train.py --td λ` : la cible de la valeur devient (1 − λ) × résultat + λ × la part de victoire que
+la recherche donne au même joueur à sa prochaine position enregistrée d'une manche suivante
+(`data.short_term`, calculées une fois par fichier dans `data/td`). Le joueur qui agit n'est pas
+dans les données : il se lit au décalage du vainqueur vu de chaque position (parties à un seul
+vainqueur). Sur c130 (un fichier) : 83 % des positions ont une cible ; elle prédit le vainqueur bien
+mieux que la valeur de la recherche à la position même (entropie croisée 0,948 contre 1,09) :
+l'information nouvelle qui manquait au mélange de deep7q (`--value-mix`, retiré). c099 et c100
+n'ont pas de valeur de recherche (copie du résultat) : leurs positions gardent le résultat.
+
+Les positions du plafond sont aussi écrites en enregistrements (`lab4 ceiling` : `F.pos`), et
+`py/ceiling.py --nets` y lit la valeur de tout réseau (pour c130, les mêmes chiffres que Rust).
+Mesure refaite (graine 11) : mêmes chiffres à 0,006 près.
+
+Essai (`lab4/td.sh`) : depuis c130, 3 pas sur la fenêtre de deep7, taux 1,5e-4, mêmes graines,
+λ = 0 (témoin) et 0,5.
+
+- Plafond, part de l'écart comblée à 3 / 4 / 5 joueurs : c130 51 / 61 / 70 %, témoin
+  50 / 59 / 68 %, λ = 0,5 51 / 61 / 68 % ; par tranche, des écarts de ±0,01 à ±0,06 dans les
+  deux sens, au niveau du bruit.
+- Positions fixes (`track.py`) : les trois à 0,002 près.
+- Duel λ = 0,5 contre le témoin, n = 400, 920 donnes (graine 42012) : **+0,6 ± 1,5**.
+- Rien de mesurable en 3 pas depuis un réseau mûr, comme la tête des propriétaires. Un vrai
+  essai demanderait la boucle entière (selfplay, puis 10 à 20 pas) avec `--td`.
+
 ## Résultats de force
 
 **Aucun tournoi complet ni entraînement lancé. Aucun gain revendiqué.** Les mini-arènes du pilote
