@@ -626,6 +626,19 @@ v2) dépassait le cache : l'apprentissage attendait le disque.
   fenêtre, au-delà des 1 024 d'un service ; `data.py` relève sa limite. c118 : chargement 3 s,
   entraînement 129 s, l'étape 142 s (208 à c112).
 
+Pas 111 à 130, fini à 14:36 (~535 s par pas). Duels contre c000 tous gagnés (+5,3 à +12,7 ;
+moyenne +8,8 pour c111–c118, +10,4 pour c121–c130). Confirmations sur 920 donnes neuves :
+
+| Duel | Score | 2 joueurs | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- |
+| c120 contre c110 | +0,5 ± 1,5 | +2,2 | +0,1 | +1,1 | −1,2 |
+| c130 contre c120 | +0,6 ± 1,5 | +0,0 | +0,1 | +0,9 | +1,5 |
+| c130 contre c110 | **+0,7 ± 1,4** | −0,3 | +1,0 | +1,6 | +0,4 |
+| c130 contre c000 | +9,5 ± 1,6 | +8,7 | +9,9 | +10,1 | +9,5 |
+
+**Nouveau plateau** : +0,7 en 20 pas (c110 contre c000 : +10,3, c130 : +9,5, dans le bruit). La
+politique de validation progresse encore (1,271 → ~1,26), la valeur non.
+
 Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
 (`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En
 RAM, la fenêtre aurait pris ~31 Go vers c060 sur les 32 du PC ; mappée, le noyau peut rendre les
