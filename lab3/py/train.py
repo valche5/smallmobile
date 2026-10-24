@@ -57,8 +57,12 @@ OWN_WEIGHT = 1.5
 # pour une fenêtre de 6,8 millions ; la validation entière prenait jusqu'à 45 s)
 VAL_SHARE = 0.05
 VAL_MEASURE = 0.006
-# lots préparés d'avance (`batches`)
-AHEAD = 3
+# lots préparés d'avance (`batches`), par `WORKERS` fils : quand la fenêtre dépasse le cache du
+# système (24 millions de positions, ~27 Go, le 24 octobre), un lot attend ses pages du disque ;
+# plusieurs fils en demandent plusieurs à la fois. Lot de 512 sur la fenêtre de c110 : 22,8 ms avec
+# un fil, 8,7 avec 4, 9,2 avec 8, 23 avec 16 (le GPU en calcule un en ~12 ms)
+WORKERS = 4
+AHEAD = 8
 # en continu : moyenne des poids sur ~5 000 lots (les trois quarts d'un pas de 25 000 parties),
 # mise à jour tous les `EMA_EVERY` lots (à chaque lot, elle prenait 36 s des 120 d'un pas sur le
 # GPU), et montée du taux au premier pas
@@ -79,9 +83,9 @@ def fields(recs, sel):
 
 def batches(recs, idx, size, device):
     """Les lots des positions `idx`, de `size` positions, sur `device` ; chacun préparé d'avance
-    dans un autre fil (`AHEAD` lots), pendant que le GPU calcule les précédents."""
+    dans d'autres fils (`AHEAD` lots, `WORKERS` fils), pendant que le GPU calcule les précédents."""
     starts = range(0, len(idx), size)
-    with ThreadPoolExecutor(1) as pool:
+    with ThreadPoolExecutor(WORKERS) as pool:
         ahead = deque()
         for start in starts:
             ahead.append(pool.submit(fields, recs, np.sort(idx[start : start + size])))
