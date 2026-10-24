@@ -1,0 +1,13 @@
+[package]
+name = "smallmobile-brain4"
+version = "0.1.0"
+edition = "2024"
+description = "L'IA Expert du labo 4 : recherche approfondie et élargie depuis c130, pour le jeu et pour le labo."
+publish = false
+
+[[bin]]
+name = "lab4-expert"
+path = "src/bin/expert.rs"
+
+[dependencies]
+smallmobile-kernel = { path = "../../kernel" }

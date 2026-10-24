@@ -25,7 +25,8 @@ Labos :
 | --- | --- | --- |
 | `lab1` | Recherche AlphaZero sur mondes possibles (boucle ouverte), fins simulées de 3 tours, coups regroupés ; réseaux gen0 à gen11 | Figé le 21 octobre 2026 ; Expert `lab1/gen11` du jeu |
 | `lab2` | Gumbel AlphaZero, nœuds de hasard, coups jeton après jeton, départ de zéro (`lab2/journal.md`) | Figé le 22 octobre 2026 après sa troisième boucle ; Expert `lab2/c060` du jeu, témoin de l'arène de lab3 |
-| `lab3` | Un réseau par nombre de joueurs, sur la recherche de lab2 ; 4 joueurs d'abord (`lab3/journal.md`) | En cours depuis le 22 octobre 2026 |
+| `lab3` | Spécialisation puis reprise généraliste, c130 en 128×7 (`lab3/journal.md`) | Figé le 24 octobre 2026 ; Expert `lab3/c130` du jeu |
+| `lab4` | Budget, largeur et horizon de recherche depuis c130 ; plan `lab4/lab.md` | Ouvert le 24 octobre 2026 ; aucune campagne lancée |
 
 Outils communs (ce dossier) :
 
