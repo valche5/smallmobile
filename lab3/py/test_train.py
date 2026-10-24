@@ -69,6 +69,8 @@ class BatchesTest(unittest.TestCase):
         recs[5:9]["regions"] = recs[4]["regions"]
         recs[5:9]["adj"] = recs[4]["adj"]
         recs[20]["adj"], recs[20]["regions"] = recs[3]["adj"], recs[3]["regions"]
+        for r in recs:
+            r["node"][r["regions"] :] = 0
         with tempfile.TemporaryDirectory() as tmp:
             for name, part, counts in (("a.pos", recs[:15], [7, 8]), ("b.pos", recs[15:], [10, 0, 15])):
                 part.tofile(Path(tmp) / name)

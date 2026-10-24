@@ -598,6 +598,23 @@ mesurable chacun. Les duels directs de 10 pas restent petits (+1 à +3, ±1,5) :
 millions de positions (~27 Go compacts) dépasse encore le cache ; disque à 69 Go libres : les
 positions hors fenêtre (deep6 c038–c070, deep7 c071–c081, la branche deep7q) font ~340 Go.
 
+### Fenêtre et suite de deep7 (24 octobre)
+
+Ménage fait par l'utilisateur (388 Go libres). La fenêtre (24 millions de positions, ~29 Go en
+v2) dépassait le cache : l'apprentissage attendait le disque.
+
+- **Lots préparés par 4 fils** (`train.py`, `WORKERS`) : lot de 512 sur la fenêtre de c110,
+  22,8 ms avec un fil, 8,7 avec 4, 9,2 avec 8, 23 avec 16. c111 : entraînement 155 → 128 s.
+- **Forme compacte v3** (`.pos.packed3.npz`) : le masque des non nuls rangé par région présente
+  (10 octets par région, 103 pour la partie) au lieu des 48 régions ; un bit par non nul dit s'il
+  vaut 1 (62 % d'entre eux, 6,6 % valent 8 ou plus), un octet pour les autres seulement. 894
+  octets par position au lieu de 1 234 (−28 %), mêmes champs au bit près ; lot de 512 : 11,9 ms
+  sur un fil (8,7 en v2), 5,9 avec 4. La fenêtre (~21,5 Go) retient dans le cache : chargement
+  54 → 18 s (c112 → c114), pas de 208 → 152 s.
+- L'entraînement reste à ~127 s : le calcul du GPU à 7 couches (~19 ms par lot). Lire les mesures
+  à la fin plutôt qu'à chaque lot et copier les lots depuis la mémoire verrouillée : 126 s,
+  rien ; retiré.
+
 Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
 (`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En
 RAM, la fenêtre aurait pris ~31 Go vers c060 sur les 32 du PC ; mappée, le noyau peut rendre les

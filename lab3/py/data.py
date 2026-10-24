@@ -142,19 +142,21 @@ def in_validation(keys, share):
 # faisait attendre l'apprentissage 80 ms par lot de 512 (lab3/journal.md) ; sous forme compacte,
 # ses grands tableaux restent mappés dans ces fichiers (`_members`), et le cache du système en
 # garde ce qui tient en RAM : la fenêtre grandit (~24 Go à c040) sans déborder les 31 Go du PC.
-PACKED = ".packed2.npz"
+PACKED = ".packed3.npz"
 # les octets des régions puis ceux de la partie, en un seul vecteur creux : où sont les non nuls (un
-# bit chacun, `MASK` octets par position), puis leurs valeurs
+# bit chacun : 10 octets par région présente, `GLOBAL_MASK` pour la partie), puis leurs valeurs
 SPARSE = REGIONS * NODE + GLOBAL
-MASK = (SPARSE + 7) // 8
+GLOBAL_MASK = (GLOBAL + 7) // 8
 
 
 def pack(f):
     """La forme compacte du fichier de positions `f` (faite une fois, puis relue). Par position :
     ses régions présentes seulement, le masque de ses octets non nuls et leurs valeurs, ses coups
     possibles seulement ; les adjacences d'une même carte une seule fois (seuls 3 % des blocs
-    diffèrent : la carte change peu d'une position à la suite). ~1 220 octets par position au lieu
-    des 6 210 de `RECORD` (1 940 avec les index des non nuls et toutes les adjacences)."""
+    diffèrent : la carte change peu d'une position à la suite). Les valeurs non nulles : un bit dit
+    si elle vaut 1 (62 % d'entre elles), un octet seulement pour les autres. ~880 octets par position
+    au lieu des 6 210 de `RECORD` (1 940 avec les index des non nuls et toutes les adjacences, 1 212
+    avec le masque des 48 régions et un octet par valeur)."""
     out = f.with_name(f.name + PACKED)
     if out.exists() and out.stat().st_mtime >= f.stat().st_mtime:
         return out
@@ -166,6 +168,11 @@ def pack(f):
     present = np.arange(REGIONS)[None, :] < r["regions"][:, None].astype(np.int64)
     dense = np.concatenate([r["node"].reshape(n, -1), r["glob"]], 1)
     nonzero = dense != 0
+    node_nz = r["node"] != 0
+    assert not node_nz[~present].any(), f"{f} : une région absente a des entrées"
+    vals = dense[nonzero]
+    count = nonzero.sum(1)
+    big = vals != 1
     blocks, block_of, rows = {}, np.empty(n, np.uint32), []
     for i in range(n):
         row = r["adj"][i, : r["regions"][i]]
@@ -192,9 +199,12 @@ def pack(f):
             adj=np.concatenate(rows) if rows else np.empty(0, np.uint64),
             adj_count=np.array([len(row) for row in rows], np.uint8),
             adj_block=block_of,
-            nz_count=nonzero.sum(1).astype(np.uint16),
-            nz_mask=np.packbits(nonzero, axis=1),
-            nz_val=dense[nonzero],
+            nz_count=count.astype(np.uint16),
+            nz_rows=np.packbits(node_nz[present], axis=1),
+            nz_glob=np.packbits(r["glob"] != 0, axis=1),
+            nz_ones=np.packbits(~big),
+            nz_big_count=np.bincount(np.repeat(np.arange(n), count)[big], minlength=n).astype(np.uint16),
+            nz_big=vals[big],
             pol_count=np.bincount(lpos, minlength=n).astype(np.uint16),
             pol_key=key.astype(np.uint16),
             pol_val=r["policy"][lpos, key],
@@ -261,6 +271,26 @@ class Parts:
         return out
 
 
+class Bits:
+    """Les flots de bits de plusieurs fichiers (`np.packbits`), à la suite : `bits[ids]`, 0 ou 1."""
+
+    def __init__(self, arrays, counts):
+        self.arrays = arrays
+        self.starts = np.cumsum([0] + list(counts))
+
+    def __getitem__(self, ids):
+        out = np.empty(len(ids), np.uint8)
+        order = np.argsort(ids, kind="stable")
+        sorted_ids = ids[order]
+        cuts = np.searchsorted(sorted_ids, self.starts)
+        for f, a in enumerate(self.arrays):
+            lo, hi = cuts[f], cuts[f + 1]
+            if hi > lo:
+                local = sorted_ids[lo:hi] - self.starts[f]
+                out[order[lo:hi]] = (a[local >> 3] >> (7 - (local & 7))) & 1
+        return out
+
+
 def _segments(begin, count, sel):
     """Les éléments des positions `sel` dans un tableau à la suite (`begin`, `count` par position) :
     leur indice, la position de chacun dans `sel`, et son rang dans sa position."""
@@ -276,20 +306,22 @@ class Packed:
     de `RECORD` d'un lot, `packed["weight"]` les petits champs d'une position."""
 
     SMALL = ("players", "regions", "weight", "win", "gain", "keys")
-    MAPPED = ("owner", "adj", "nz_mask", "nz_val", "pol_key", "pol_val")
+    MAPPED = ("owner", "adj", "nz_rows", "nz_glob", "nz_big", "pol_key", "pol_val")
 
     def __init__(self, files):
         parts = [_members(f) for f in files]
-        small = {k: np.concatenate([p[k] for p in parts]) for k in self.SMALL + ("nz_count", "pol_count")}
+        small = {k: np.concatenate([p[k] for p in parts]) for k in self.SMALL + ("nz_count", "nz_big_count", "pol_count")}
         # la valeur de la recherche, ou le résultat de la partie pour un fichier qui ne l'a pas
         small["value"] = np.concatenate([p.get("value", p["win"]) for p in parts]) if parts else small["win"]
         self.__dict__.update(small)
         for name in self.MAPPED:
             setattr(self, name, Parts([p[name] for p in parts]))
+        self.nz_ones = Bits([p["nz_ones"] for p in parts], [int(p["nz_count"].sum(dtype=np.int64)) for p in parts])
         def begin(count):
             c = count.astype(np.int64)
             return np.cumsum(c) - c
         self.rows_at, self.nz_at, self.pol_at = begin(self.regions), begin(self.nz_count), begin(self.pol_count)
+        self.big_at = begin(self.nz_big_count)
         # le début du bloc d'adjacences de chaque position, dans les blocs de tous les fichiers
         ats, row0 = [], 0
         for p in parts:
@@ -310,13 +342,20 @@ class Packed:
         ids, b, rank = _segments(self.rows_at, self.regions, sel)
         out["owner"] = np.full((n, REGIONS), OFF_MAP, np.uint8)
         out["owner"][b, rank] = self.owner[ids]
+        # où sont les non nuls : les lignes des régions présentes, puis la partie
+        node_nz = np.zeros((n, REGIONS, NODE), bool)
+        node_nz[b, rank] = np.unpackbits(self.nz_rows[ids], axis=1, count=NODE).view(bool)
+        glob_nz = np.unpackbits(self.nz_glob[sel], axis=1, count=GLOBAL).view(bool)
         ids, b, rank = _segments(self.adj_at, self.regions, sel)
         out["adj"] = np.zeros((n, REGIONS), np.uint64)
         out["adj"][b, rank] = self.adj[ids]
-        # les valeurs dans l'ordre des non nuls du masque, ligne par ligne
+        # leurs valeurs, dans l'ordre des non nuls, ligne par ligne : 1, ou la suivante des autres
         ids, _, _ = _segments(self.nz_at, self.nz_count, sel)
+        vals = self.nz_ones[ids]
+        big, _, _ = _segments(self.big_at, self.nz_big_count, sel)
+        vals[vals == 0] = self.nz_big[big]
         dense = np.zeros((n, SPARSE), np.uint8)
-        dense[np.unpackbits(self.nz_mask[sel], axis=1, count=SPARSE).view(bool)] = self.nz_val[ids]
+        dense[np.concatenate([node_nz.reshape(n, -1), glob_nz], 1)] = vals
         out["node"] = np.ascontiguousarray(dense[:, : REGIONS * NODE]).reshape(n, REGIONS, NODE)
         out["glob"] = np.ascontiguousarray(dense[:, REGIONS * NODE :])
         ids, b, _ = _segments(self.pol_at, self.pol_count, sel)
