@@ -393,7 +393,7 @@ joue qu'à sa taille, et se compare à lab2 à cette taille seulement :
 Scores du protocole (`labtools/score.py`), à 4 joueurs seulement : l'écart à une victoire sur
 quatre, de −25 (jamais) à +75 (toujours) ; n = 200.
 
-### Sortir du plateau : réseau approfondi 128x6, puis n = 400 (23 octobre, en cours)
+### Sortir du plateau : 128x6, n = 400, taux plus bas, puis 128x7 (23 et 24 octobre)
 
 Le plateau ne date pas de la reprise : dans lab2, c060 ne battait déjà plus c050 (+0,2 ± 1,5),
 tout le gain de la troisième boucle venait de c041 à c050. La reprise de cette nuit repart de ce
@@ -578,6 +578,25 @@ doute un peu moins. L'effet est dilué (à c100, 10 cycles sur les 25 de la fen�
 témoin, lui, reprend : +1,9 en 10 pas.
 
 Suite : deep7 continué de c101 à c110 (lancé à 06:42).
+
+Pas 101 à 110, fini à 08:24. Duels contre c000 tous gagnés, de +4,9 à +11,0. Confirmations sur
+920 donnes neuves :
+
+| Duel | Score | 2 joueurs | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- |
+| c110 contre c100 | +1,0 ± 1,5 | +0,7 | +2,9 | −0,1 | +0,4 |
+| c110 contre c000 | **+10,3 ± 1,6** | +8,9 | +10,8 | +11,2 | +10,3 |
+
+Bilan de la nuit, face à c000 (le c060 de lab2) sur les mêmes 920 donnes : c030 +0,9, c040 +4,9
+(n = 400), c050 +5,8 (taux 1,5e-4), c060 +6,4 (continu), c070 +6,7 (n = 800), c090 +7,3 (7
+couches), c110 **+10,3**. Le plateau est passé : de meilleures cibles (n = 400) et un taux plus
+bas ; le continu, n = 800, la 7e couche et la valeur de la recherche n'ont rien apporté de
+mesurable chacun. Les duels directs de 10 pas restent petits (+1 à +3, ±1,5) : la mesure à
+920 donnes ne voit que les tranches de 10 à 20 pas.
+
+À reprendre : l'apprentissage ralentit de nouveau (c108–c110 : 204 à 217 s), la fenêtre de 22
+millions de positions (~27 Go compacts) dépasse encore le cache ; disque à 69 Go libres : les
+positions hors fenêtre (deep6 c038–c070, deep7 c071–c081, la branche deep7q) font ~340 Go.
 
 Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
 (`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En
