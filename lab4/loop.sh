@@ -4,7 +4,8 @@
 #   1. les parties du cycle k, jouées par le réseau k−1 (`lab4 selfplay`, recherches complètes à
 #      SIMS simulations, objectif `win=WIN`) ;
 #   2. l'apprentissage du réseau k depuis k−1 sur la fenêtre des derniers cycles (lab4/py/train.py,
-#      un AdamW neuf par pas, taux maximal LR en un cycle) ;
+#      un AdamW neuf par pas, taux maximal LR en un cycle ; cible de la valeur mêlée pour une part TD
+#      à la valeur de la recherche au tour suivant du joueur, `train.py --td`) ;
 #   3. le duel du réseau k (objectif `win=WIN`) contre REF (objectif `win=REF_WIN`, 0,5 par défaut :
 #      le réglage d'avant), n = 200, mêmes donnes à chaque pas (graine 1004), arrêté par le test
 #      séquentiel : le gain de l'ensemble, objectif et apprentissage.
@@ -30,6 +31,7 @@ SIMS=${SIMS:-400}
 WIN=${WIN:-0.5}
 # le taux de c041–c050 de lab3, le dernier réglage d'apprentissage qui a payé (lab3/journal.md)
 LR=${LR:-1.5e-4}
+TD=${TD:-0}
 DEALS=${DEALS:-460}
 REF=${REF:?la référence des duels}
 REF_WIN=${REF_WIN:-0.5}
@@ -68,7 +70,7 @@ train() { # réseau, réseau de départ
   [ -f "$OUT/$c.bin" ] && return 0
   start=$(date +%s)
   if ! (cd lab4/py && $PY train.py --cycles "../data/$RUN" --last "$c" --init "../runs/$RUN/$prev.bin" \
-    --out "../runs/$RUN/$c.tmp.bin" --lr "$LR") > "$OUT/$c-train.log" 2>&1; then
+    --out "../runs/$RUN/$c.tmp.bin" --lr "$LR" --td "$TD") > "$OUT/$c-train.log" 2>&1; then
     tail -20 "$OUT/$c-train.log"
     return 1
   fi
@@ -89,7 +91,7 @@ duel() { # réseau : contre REF et son objectif
   log "$c (win = $WIN) face à $REF (win = $REF_WIN) : $(($(date +%s) - start)) s, $(grep -E '^(arrêt|test séquentiel)' "$f.txt")"
 }
 
-log "essai $RUN, tailles $P, $GAMES parties, n = $SIMS, win = $WIN, taux $LR, $THREADS fils ; graines $SEED_BASE + cycle ; pas $START à $LAST ; duels contre $REF à win = $REF_WIN"
+log "essai $RUN, tailles $P, $GAMES parties, n = $SIMS, win = $WIN, taux $LR, td = $TD, $THREADS fils ; graines $SEED_BASE + cycle ; pas $START à $LAST ; duels contre $REF à win = $REF_WIN"
 for k in $(seq "$START" "$LAST"); do
   c=$(name "$k")
   prev=$(name $((k - 1)))
