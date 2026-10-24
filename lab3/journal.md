@@ -639,6 +639,12 @@ moyenne +8,8 pour c111–c118, +10,4 pour c121–c130). Confirmations sur 920 do
 **Nouveau plateau** : +0,7 en 20 pas (c110 contre c000 : +10,3, c130 : +9,5, dans le bruit). La
 politique de validation progresse encore (1,271 → ~1,26), la valeur non.
 
+**En production** (24 octobre, demande de l'utilisateur) : c130 devient l'Expert du jeu, « Labo 3 »,
+proposé par défaut (`lab3/nets/c130.bin`, `src/shared/experts.ts`, programme `lab3-expert`). Face au
+réglage de lab2 en production (c060, n = 800), 920 donnes neuves (graine 1007) : c130 à n = 400
+**+10,1 ± 1,6**, à n = 800 +9,6 ± 1,6 : n = 400 retenu. Temps sur un cœur du PC (`speed`, 24
+positions) : lab2 c060 n = 800 72 ms par recherche, c130 n = 400 63 ms, n = 800 107 ms.
+
 Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
 (`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En
 RAM, la fenêtre aurait pris ~31 Go vers c060 sur les 32 du PC ; mappée, le noyau peut rendre les

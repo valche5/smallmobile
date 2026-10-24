@@ -19,6 +19,9 @@ export const EXPERT_LABS: readonly ExpertLab[] = [
   // n=800 : 179 ms en moyenne par décision sur mini (c040, même taille), fins de tour comprises, p95 624 ms
   // (lab2/journal.md)
   { id: 'lab2', label: 'Labo 2', net: 'c060', iterations: 800 },
+  // c130, 128x7 : face au c060 de lab2 à n=800, +10,1 ± 1,6 à n=400 et +9,6 ± 1,6 à n=800 (920 donnes,
+  // lab3/journal.md) ; n=400 : 63 ms par recherche sur un cœur du PC, contre 72 pour lab2 à n=800
+  { id: 'lab3', label: 'Labo 3', net: 'c130', iterations: 400 },
 ];
 
 export const DEFAULT_EXPERT_LAB = EXPERT_LABS[EXPERT_LABS.length - 1]!.id;
