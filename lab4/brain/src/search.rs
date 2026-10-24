@@ -30,10 +30,10 @@ use smallmobile_kernel::{Game, Map, Phase};
 use crate::diagnostics::{Diagnostics, Horizon};
 use crate::encode::{Encoded, encode, encode_with};
 use crate::know::{Knowledge, determinize};
-use crate::moves::{self, Choice, Key, Move};
+use crate::moves::{self, Choice, Key, Kind, Move};
 use crate::net::{Eval, Net};
 use crate::outcome::Outcome;
-use crate::rand::Rng;
+use crate::rand::{Rng, mix};
 
 /// Largeur par défaut, seuil des diagnostics « hors top16 » et taille maximale des groupes
 /// évalués ensemble. La largeur configurée peut dépasser cette taille (`Az::run`).
@@ -87,17 +87,21 @@ pub struct Config {
     /// Les jetons redéployés dans l'ordre des régions (`tokens=ordered`, `moves`) : une seule suite
     /// de coups par répartition. Sans lui, la recherche de lab3.
     pub ordered_tokens: bool,
+    /// Les jetons posés librement, mais une seule position par répartition (`tokens=merged`) : les
+    /// suites de jetons qui posent les mêmes jetons depuis la même position mènent au même nœud
+    /// (`Tree::merged`).
+    pub merge_tokens: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { iterations: 400, candidates: Candidates::Top(CONSIDERED), ordered_tokens: false }
+        Config { iterations: 400, candidates: Candidates::Top(CONSIDERED), ordered_tokens: false, merge_tokens: false }
     }
 }
 
 impl Config {
-    /// `n=3200,candidates=all,tokens=ordered` ; les valeurs nulles et les options inconnues sont
-    /// refusées.
+    /// `n=3200,candidates=all,tokens=ordered|merged|free` ; les valeurs nulles et les options
+    /// inconnues sont refusées.
     pub fn parse(text: &str) -> Option<Config> {
         let mut cfg = Config::default();
         for part in text.split(',').filter(|p| !p.is_empty()) {
@@ -116,9 +120,10 @@ impl Config {
                     };
                 }
                 "tokens" => {
-                    cfg.ordered_tokens = match v {
-                        "ordered" => true,
-                        "free" => false,
+                    (cfg.ordered_tokens, cfg.merge_tokens) = match v {
+                        "ordered" => (true, false),
+                        "merged" => (false, true),
+                        "free" => (false, false),
                         _ => return None,
                     }
                 }
@@ -195,6 +200,9 @@ struct Tree {
     chances: Vec<Chance>,
     /// Le chemin d'une itération : (nœud, coup dans `edges`).
     path: Vec<(u32, u32)>,
+    /// Avec `Config::merge_tokens` : le nœud de chaque position atteinte par une suite de jetons,
+    /// par empreinte de la suite sans son ordre (`token_key`).
+    merged: HashMap<u64, u32>,
     scratch: Scratch,
 }
 
@@ -204,6 +212,7 @@ impl Tree {
         self.stats.clear();
         self.edges.clear();
         self.chances.clear();
+        self.merged.clear();
     }
 
     fn stats(&self, n: Node) -> &[Stat] {
@@ -357,7 +366,8 @@ struct Leaf {
 
 enum End {
     Over(Value),
-    New { seat: Seat, legal: Vec<Choice>, edge: usize, hash: u64, fp: u128 },
+    /// `merged` : l'empreinte de sa suite de jetons, s'il en finit une (`Tree::merged`).
+    New { seat: Seat, legal: Vec<Choice>, edge: usize, hash: u64, fp: u128, merged: Option<u64> },
 }
 
 /// Ce que lit `Az::judge` d'une position : le joueur qui agit, le nombre de joueurs, leurs pièces.
@@ -492,6 +502,11 @@ impl Evals {
     fn judged(&self, fp: u128) -> &Judged {
         &self.known[&fp].judged
     }
+
+    /// Les nœuds de l'arbre de la dernière recherche.
+    pub fn nodes(&self) -> usize {
+        self.tree.nodes.len()
+    }
 }
 
 /// L'empreinte de 128 bits de ce que lit le réseau et des coups possibles : deux hachages à la
@@ -573,6 +588,27 @@ fn fold(hash: u64, chance: u64) -> u64 {
     (hash ^ chance).wrapping_mul(0x0100_0000_01b3)
 }
 
+/// Une suite de jetons posés depuis une position (`Config::merge_tokens`) : `from`, le nœud où elle
+/// commence (à la racine, le coup qui la commence : les sous-arbres de ses coups restent à part,
+/// chacun ne reçoit qu'une simulation par tour), et `set`, la somme d'une constante par région de
+/// chaque jeton, la même dans tous les ordres.
+#[derive(Clone, Copy)]
+struct Tokens {
+    from: u64,
+    set: u64,
+}
+
+impl Tokens {
+    fn add(self, region: u8) -> Tokens {
+        Tokens { set: self.set.wrapping_add(mix(0x746f_6b65_6e73, u64::from(region))), ..self }
+    }
+
+    /// L'empreinte de la position atteinte, avec le hasard du dernier coup et des coups forcés.
+    fn key(self, hash: u64) -> u64 {
+        mix(mix(self.from, self.set), hash)
+    }
+}
+
 impl Az {
     pub fn new(cfg: Config, net: Arc<Net>, label: String) -> Self {
         assert!(cfg.iterations > 0, "au moins une simulation");
@@ -586,7 +622,11 @@ impl Az {
 
     /// Le nom affiché : le réseau et les réglages.
     pub fn describe(&self) -> String {
-        let tokens = if self.cfg.ordered_tokens { ", tokens=ordered" } else { "" };
+        let tokens = match (self.cfg.ordered_tokens, self.cfg.merge_tokens) {
+            (true, _) => ", tokens=ordered",
+            (_, true) => ", tokens=merged",
+            _ => "",
+        };
         format!("az({}, n={}, candidates={}{tokens})", self.label, self.cfg.iterations, self.cfg.candidates)
     }
 
@@ -767,6 +807,7 @@ impl Az {
                     let mut w = determinize(root, k, rng);
                     let mut kw = *k;
                     let mut horizon = Horizon::new(root);
+                    let mut tokens: Option<Tokens> = None;
                     let start = tree.path.len();
                     let mut node = 0u32;
                     let end = loop {
@@ -776,6 +817,13 @@ impl Az {
                         let e = n.first as usize + i;
                         let mv = tree.edges[e].mv;
                         tree.path.push((node, e as u32));
+                        tokens = match mv {
+                            Move::Region(Kind::Token, r) if self.cfg.merge_tokens => {
+                                let from = if node == 0 { u64::MAX - i as u64 } else { u64::from(node) };
+                                Some(tokens.unwrap_or(Tokens { from, set: 0 }).add(r))
+                            }
+                            _ => None,
+                        };
                         // le coup, puis les coups forcés qui suivent, et le résultat de leur hasard
                         kw.play(&mut w, &mv).expect("coup possible");
                         horizon.observe(&w);
@@ -800,6 +848,13 @@ impl Az {
                             node = child;
                             continue;
                         }
+                        // la même position, atteinte par les mêmes jetons dans un autre ordre
+                        let merged = tokens.map(|t| t.key(hash));
+                        if let Some(&same) = merged.and_then(|m| tree.merged.get(&m)) {
+                            tree.add_child(e, hash, same);
+                            node = same;
+                            continue;
+                        }
                         // une position nouvelle : les cibles des conquêtes une fois, pour ses coups et
                         // son encodage
                         let targets = (w.state.phase == Phase::Conquest).then(|| w.targets());
@@ -811,7 +866,7 @@ impl Az {
                             asked.push((fp, leaves.len()));
                             futures.push(Box::pin(oracle.eval(&self.net, &encoded, w.map)));
                         }
-                        break End::New { seat: Seat::of(&w), legal, edge: e, hash, fp };
+                        break End::New { seat: Seat::of(&w), legal, edge: e, hash, fp, merged };
                     };
                     diagnostics.leaf(&horizon, tree.path.len() - start, matches!(&end, End::Over(_)));
                     leaves.push(Leaf { path: (start, tree.path.len()), end });
@@ -823,10 +878,13 @@ impl Az {
                 for leaf in &leaves {
                     let value = match &leaf.end {
                         End::Over(value) => *value,
-                        End::New { seat, legal, edge, hash, fp } => {
+                        End::New { seat, legal, edge, hash, fp, merged } => {
                             let id = tree.nodes.len() as u32;
                             let value = self.expand(&mut tree, seat, legal, evals.judged(*fp));
                             tree.add_child(*edge, *hash, id);
+                            if let Some(m) = merged {
+                                tree.merged.insert(*m, id);
+                            }
                             value
                         }
                     };

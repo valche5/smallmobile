@@ -120,6 +120,29 @@ chacune dans l'ordre. L'équivalence de A à lab3 tient (option désactivée).
   vraiment demanderait des cibles apprises dans l'ordre, ou une fusion des positions identiques
   qui garde les poses libres.
 
+## Jetons fusionnés (24 octobre)
+
+Pour garder la pose libre que c130 a apprise : option `tokens=merged` (défaut désactivé). Les
+jetons sont posés librement, mais les suites qui posent les mêmes jetons depuis la même position
+mènent au même nœud (`Tree::merged`, empreinte de la suite sans son ordre : nœud de départ, somme
+d'une constante par région, hasard du dernier coup). À la racine, le coup qui commence la suite
+entre dans l'empreinte : les sous-arbres des coups de la racine restent à part (une simulation
+chacun par tour). Les statistiques restent sur les coups : un nœud partagé cumule les visites de
+ses parents. Tests : l'encodage d'une même position ne dépend pas de l'ordre de ses jetons
+(`ordered_tokens_reach_the_same_redeployments_once_each`) ; à une racine de redéploiement, autant
+de simulations vont plus loin (`merged_tokens_go_deeper`) ; A inchangé.
+
+- `speed`, 24 positions par taille : E (`n=400,tokens=merged`) 77 ms par recherche (A 60, D 81).
+  Tour courant terminé, A → E : 45 → 55 % (2 joueurs), 50 → 55 % (3), 41 → 53 % (4), 40 → 46 % (5) ;
+  prochain tour atteint 11 → 15 %, 1,7 → 3,7 %, 4,1 → 4,5 %, 0 → 0.
+- **E contre A, 920 donnes (graine 42005) : +0,4 ± 1,5** (2 joueurs +0,1, 3 −1,7, 4 +1,1, 5 +2,1),
+  227 s.
+
+Bilan des essais sur la recherche à poids fixes : 8 fois plus de simulations (B, +2,0 ± 2,3 sur
+400 donnes), toute la largeur (C, rien de plus que B), un arbre plus profond dans le tour par
+l'ordre imposé (D, −1,0 ± 1,4) ou la fusion des jetons (E, +0,4 ± 1,5) : rien de net. Finir plus
+souvent son tour ne paie pas ; le prochain tour reste hors de portée à 4 et 5 joueurs.
+
 ## Résultats de force
 
 **Aucun tournoi complet ni entraînement lancé. Aucun gain revendiqué.** Les mini-arènes du pilote

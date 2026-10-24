@@ -4,6 +4,7 @@ use std::sync::Arc;
 use smallmobile_kernel::Phase;
 use smallmobile_lab4::agent::{Agent, KernelAi};
 use smallmobile_lab4::az::{Az, Candidates, Config, Evals};
+use smallmobile_brain4::diagnostics::Diagnostics;
 use smallmobile_lab4::know::Knowledge;
 use smallmobile_lab4::moves;
 use smallmobile_lab4::net::Net;
@@ -50,6 +51,7 @@ fn configurations_are_explicit_and_invalid_budgets_are_rejected() {
     assert_eq!(Config::default().candidates, Candidates::Top(16));
     assert_eq!(Config::parse("candidates=32").unwrap().candidates, Candidates::Top(32));
     assert!(Config::parse("tokens=ordered").unwrap().ordered_tokens);
+    assert!(Config::parse("tokens=merged").unwrap().merge_tokens);
     assert!(!Config::default().ordered_tokens);
     for bad in ["n=0", "n=-1", "n=no", "candidates=0", "candidates=-1", "candidates=no", "width=16", "tokens=any"] {
         assert!(Config::parse(bad).is_none(), "{bad}");
@@ -108,9 +110,9 @@ fn reference_matches_frozen_lab3_with_c130_and_the_same_random_stream() {
 #[test]
 fn widening_visits_every_legal_move_and_reports_actual_budget_and_rank() {
     let net = Arc::new(Net::load(&weights("gen0.bin")).unwrap());
-    let narrow = Az::new(Config { iterations: 128, candidates: Candidates::Top(16), ordered_tokens: false }, net.clone(), "zero".into());
-    let wide = Az::new(Config { iterations: 128, candidates: Candidates::All, ordered_tokens: false }, net.clone(), "zero".into());
-    let tiny = Az::new(Config { iterations: 7, candidates: Candidates::All, ordered_tokens: false }, net, "zero".into());
+    let narrow = Az::new(Config { iterations: 128, candidates: Candidates::Top(16), ordered_tokens: false, merge_tokens: false }, net.clone(), "zero".into());
+    let wide = Az::new(Config { iterations: 128, candidates: Candidates::All, ordered_tokens: false, merge_tokens: false }, net.clone(), "zero".into());
+    let tiny = Az::new(Config { iterations: 7, candidates: Candidates::All, ordered_tokens: false, merge_tokens: false }, net, "zero".into());
     let normal = KernelAi::new(smallmobile_kernel::Level::Normal);
     // Trouver une position réelle avec plus de 16 choix, sans jouer d'arène.
     for seed in 1..=8 {
@@ -182,12 +184,15 @@ fn widening_visits_every_legal_move_and_reports_actual_budget_and_rank() {
 }
 
 /// Toutes les positions de fin de pose des jetons depuis `g` (en redéploiement), une par suite de
-/// coups : jetons libres ou dans l'ordre des régions.
-fn token_ends<'m>(g: &smallmobile_kernel::Game<'m>, k: &Knowledge, ordered: bool, out: &mut Vec<smallmobile_kernel::state::State>) {
+/// coups : jetons libres ou dans l'ordre des régions. Avec chacune, ce qu'en lit le réseau.
+type TokenEnd = (smallmobile_kernel::state::State, Vec<u8>);
+
+fn token_ends<'m>(g: &smallmobile_kernel::Game<'m>, k: &Knowledge, ordered: bool, out: &mut Vec<TokenEnd>) {
     let k = Knowledge { ordered_tokens: ordered, ..*k };
     let legal = moves::legal(g, &k);
     if !legal.iter().any(|c| matches!(c.mv, moves::Move::Region(moves::Kind::Token, _))) {
-        out.push(g.state);
+        let e = smallmobile_lab4::encode::encode(g, &k);
+        out.push((g.state, e.node.iter().flatten().chain(&e.global).copied().collect()));
         return;
     }
     for c in &legal {
@@ -214,15 +219,18 @@ fn ordered_tokens_reach_the_same_redeployments_once_each() {
                 let (mut free, mut ordered) = (Vec::new(), Vec::new());
                 token_ends(&g, &k, false, &mut free);
                 token_ends(&g, &k, true, &mut ordered);
-                let mut distinct: Vec<_> = Vec::new();
-                for s in &free {
-                    if !distinct.contains(s) {
-                        distinct.push(*s);
+                let mut distinct: Vec<&TokenEnd> = Vec::new();
+                for end in &free {
+                    match distinct.iter().find(|d| d.0 == end.0) {
+                        // la même position dans un autre ordre : le réseau en lit la même chose
+                        // (`tokens=merged` leur donne un seul nœud)
+                        Some(d) => assert_eq!(d.1, end.1, "encodage qui dépend de l'ordre des jetons"),
+                        None => distinct.push(end),
                     }
                 }
                 assert!(free.len() > ordered.len() || hand == 1, "moins de suites dans l'ordre");
                 assert_eq!(ordered.len(), distinct.len(), "une suite par position, dans l'ordre");
-                assert!(distinct.iter().all(|s| ordered.contains(s)), "les mêmes positions atteintes");
+                assert!(distinct.iter().all(|d| ordered.iter().any(|o| o.0 == d.0)), "les mêmes positions atteintes");
                 checked += 1;
             }
             let mv = legal[rng.below(legal.len())].mv;
@@ -230,4 +238,38 @@ fn ordered_tokens_reach_the_same_redeployments_once_each() {
         }
     }
     assert!(checked >= 20, "trop peu de poses vérifiées : {checked}");
+}
+
+/// `tokens=merged` : à une racine de redéploiement, les mêmes jetons posés dans un autre ordre
+/// mènent au même nœud. Chaque simulation ajoute toujours un nœud ; elle va seulement plus loin :
+/// plus de choix traversés et plus de tours finis, pour autant de simulations.
+#[test]
+fn merged_tokens_go_deeper() {
+    let net = Arc::new(Net::load(&weights("gen0.bin")).unwrap());
+    let mut rng = Rng::new(3);
+    let (mut checked, mut free, mut merged) = (0, Diagnostics::default(), Diagnostics::default());
+    for deal in 0..30u64 {
+        let table = Table::new(3, 500 + deal);
+        let (mut g, mut k) = (table.game(deal as u32), Knowledge::default());
+        while g.state.phase != Phase::GameOver && checked < 8 {
+            let legal = moves::legal(&g, &k);
+            let tokens = legal.len() >= 3 && legal.iter().all(|c| matches!(c.mv, moves::Move::Region(moves::Kind::Token, _)));
+            let hand = g.state.turn.army.and_then(|a| g.state.races[a.index()]).map_or(0, |rs| rs.hand);
+            if g.state.phase == Phase::Redeploy && tokens && hand >= 3 {
+                for (merge_tokens, total) in [(false, &mut free), (true, &mut merged)] {
+                    let cfg = Config { iterations: 300, merge_tokens, ..Config::default() };
+                    let az = Az::new(cfg, net.clone(), "gen0".into());
+                    let s = az.search(&g, &k, &mut Rng::new(9), false, &mut Evals::default());
+                    total.add(s.diagnostics);
+                }
+                checked += 1;
+            }
+            let mv = legal[rng.below(legal.len())].mv;
+            k.play(&mut g, &mv).unwrap();
+        }
+    }
+    assert!(checked >= 5, "trop peu de redéploiements : {checked}");
+    assert_eq!(free.simulations, merged.simulations);
+    assert!(merged.depth_sum > free.depth_sum, "{} choix contre {}", merged.depth_sum, free.depth_sum);
+    assert!(merged.turn_finished > free.turn_finished, "{} tours finis contre {}", merged.turn_finished, free.turn_finished);
 }
