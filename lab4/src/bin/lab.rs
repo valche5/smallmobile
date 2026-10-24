@@ -15,6 +15,9 @@
 //!     GPU selon sa taille, ou de `rounds` lots de N positions : une capture RGP, `MESA_VK_TRACE=rgp` ; en flux :
 //!     LOTS lots soumis à la suite ; Vulkan inclus à la compilation par défaut)
 //! lab4 analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par labtools/export-room.ts)
+//! lab4 ceiling --agent az:net=poids.bin,n=400 --out plafond.tsv [--players 3,4,5] [--positions 300]
+//!     [--playouts 32] [--seed S] [--threads N]   (part de chance de positions de parties neuves :
+//!     `ceiling`, sur GPU ; analyse : lab4/py/ceiling.py)
 //! Réglages de recherche : `n=400,candidates=16` (témoin), `n=3200,candidates=16`,
 //! `n=3200,candidates=all`. L'arène écrit aussi `--out F` + `.search.tsv` (diagnostics).
 //! ```
@@ -39,6 +42,7 @@ fn main() {
         "bench-net" => bench_net_cmd(&opts),
         "bench-vulkan" => bench_vulkan_cmd(&opts),
         "analyze" => analyze_cmd(&opts),
+        "ceiling" => ceiling_cmd(&opts),
         _ => usage(),
     }
 }
@@ -57,6 +61,7 @@ fn usage() -> ! {
     eprintln!("        lab4 bench-net --net poids.bin --data parties.pos [--count N]");
     eprintln!("        lab4 bench-vulkan --net poids.bin [--regions R] [--count N] [--rounds R]");
     eprintln!("        lab4 analyze --game partie.smk --agent az:net=poids.bin,n=20000");
+    eprintln!("        lab4 ceiling --agent az:… --out F [--players 3,4,5] [--positions N] [--playouts K] [--seed S]");
     eprintln!("        az:net=lab4/nets/c130.bin,n=3200,candidates=all (défaut : n=400,candidates=16)");
     std::process::exit(2)
 }
@@ -499,4 +504,46 @@ fn analyze_cmd(opts: &HashMap<String, String>) {
         println!("{n:>8}  {:>7.1} %  {:>7.1} %  {:>7.1} %  {mv}", 100.0 * q, 100.0 * prior, 100.0 * p);
     }
     smallmobile_lab4::diagnostics::print(&az);
+}
+
+/// Le plafond de la valeur (`ceiling`) : par position, la victoire prédite par le réseau, puis les
+/// parts de victoire de chaque suite. Lignes `position` (numéro, joueurs, manche, dernière manche,
+/// joueur qui agit, victoire prédite de chaque joueur réel) et `suite` (numéro de la position, part
+/// de victoire de chaque joueur réel).
+fn ceiling_cmd(opts: &HashMap<String, String>) {
+    use smallmobile_lab4::ceiling;
+    let name = opts.get("agent").unwrap_or_else(|| usage());
+    let az = agent::az_named(name).unwrap_or_else(|| usage());
+    let net = name.split(',').find_map(|p| p.strip_prefix("az:").unwrap_or(p).strip_prefix("net=")).unwrap_or_else(|| usage());
+    let (gpu, device) = smallmobile_lab4::gpu::Gpu::start(std::path::Path::new(net)).unwrap_or_else(|e| {
+        eprintln!("GPU : {e}");
+        std::process::exit(2)
+    });
+    eprintln!("réseau évalué par {device}");
+    let cfg = ceiling::Config {
+        players: players(opts, "3,4,5"),
+        positions: get(opts, "positions", 300),
+        playouts: get(opts, "playouts", 32),
+        seed: get(opts, "seed", 1),
+        threads: get(opts, "threads", threads()),
+        concurrent: std::env::var("LAB4_CONCURRENT").ok().and_then(|v| v.parse().ok()).unwrap_or(16),
+    };
+    let tables: Vec<_> = (0..cfg.positions).map(|i| ceiling::deal(&cfg, i).0).collect();
+    let start = Instant::now();
+    let (positions, outcomes) = ceiling::run(&az, &gpu, &cfg, &tables);
+    let path = opts.get("out").unwrap_or_else(|| usage());
+    let mut out = std::io::BufWriter::new(std::fs::File::create(path).expect("fichier de sortie"));
+    use std::io::Write;
+    writeln!(out, "# {} ; graine {} ; {} suites par position", az.describe(), cfg.seed, cfg.playouts).unwrap();
+    for (i, (p, os)) in positions.iter().zip(&outcomes).enumerate() {
+        let s = &p.game.state;
+        let n = s.player_count();
+        let net: Vec<String> = p.net[..n].iter().map(|v| format!("{v:.5}")).collect();
+        writeln!(out, "position\t{i}\t{n}\t{}\t{}\t{}\t{}", s.round, s.max_rounds, s.actor().unwrap_or(0), net.join("\t")).unwrap();
+        for o in os {
+            let win: Vec<String> = o.win[..n].iter().map(|v| format!("{v}")).collect();
+            writeln!(out, "suite\t{i}\t{}", win.join("\t")).unwrap();
+        }
+    }
+    eprintln!("{} positions, {} suites en {:.0} s", positions.len(), cfg.playouts * positions.len(), start.elapsed().as_secs_f64());
 }

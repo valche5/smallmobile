@@ -19,6 +19,7 @@ pub mod agent;
 pub mod arena;
 pub mod az;
 pub mod batch;
+pub mod ceiling;
 pub mod compact;
 pub mod diagnostics;
 pub mod gpu;
