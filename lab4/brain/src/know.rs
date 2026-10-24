@@ -31,6 +31,9 @@ pub struct Knowledge {
     /// Où en est la fin de tour en cours, découpée en coups (`moves::Redeploy`) : rien d'un
     /// redéploiement joué en actions du noyau.
     pub redeploy: Redeploy,
+    /// Les jetons redéployés dans l'ordre des régions (`moves`, `search::Config::ordered_tokens`) :
+    /// un réglage de la recherche, pas un savoir sur la partie.
+    pub ordered_tokens: bool,
 }
 
 /// Les habitudes d'un joueur (`History::habits`) : des comptes depuis le début de la partie.
@@ -196,7 +199,10 @@ impl Knowledge {
         if g.state.phase == Phase::Redeploy {
             match mv {
                 Move::Lift => self.redeploy.lifted = true,
-                Move::Region(Kind::Token, _) => self.redeploy.powers_done = true,
+                Move::Region(Kind::Token, r) => {
+                    self.redeploy.powers_done = true;
+                    self.redeploy.last_token = *r;
+                }
                 _ => {}
             }
         }

@@ -98,6 +98,28 @@ qui tournait sur mini. Commit `294ab4b`, poids c130 SHA-256 `e534cc84…` (véri
   pose des jetons redéployés séparément (4 jetons sur 5 régions : 625 suites pour 70
   répartitions) : piste suivante, un ordre imposé des jetons (une seule suite par répartition).
 
+## Jetons redéployés dans l'ordre (24 octobre)
+
+Idée de l'utilisateur : l'ordre de pose des jetons ne compte pas, l'arbre ne devrait pas le
+déplier. Option `tokens=ordered` (défaut `free`, la recherche de lab3) : au redéploiement, un
+jeton ne va que sur une région de numéro au moins celui du précédent (`Redeploy::last_token`,
+`Knowledge::ordered_tokens` posé par la recherche sur sa copie). Une seule suite de coups par
+répartition ; un jeton qui n'a plus qu'une région possible devient un coup forcé. Test
+`ordered_tokens_reach_the_same_redeployments_once_each` : sur 60 parties au hasard, à chaque pose
+assez petite pour être énumérée, les mêmes positions de fin de pose sont atteintes, une fois
+chacune dans l'ordre. L'équivalence de A à lab3 tient (option désactivée).
+
+- `speed`, 24 positions par taille, un cœur : D (`n=400,tokens=ordered`) 81 ms par recherche
+  contre 60 pour A (+35 % : les simulations vont plus loin, plus d'actions jouées chacune).
+- Diagnostics, A → D : tour courant terminé 45 → 68 % (2 joueurs), 50 → 66 % (3), 41 → 58 % (4),
+  40 → 53 % (5) ; prochain tour atteint 11 → 20 % (2), 1,7 → 3,8 % (3), 4,1 → 4,1 % (4), 0 → 0 (5).
+- **D contre A, 920 donnes (graine 42004) : −1,0 ± 1,4** (2 joueurs −0,1, 3 −0,2, 4 −2,2, 5 −1,6),
+  226 s. Aucun gain malgré l'arbre plus profond. Hypothèse : l'ordre imposé change le sens des
+  priors de c130, appris sur des poses libres (il met d'abord le jeton là où il compte le plus ;
+  dans l'ordre, ce premier choix interdit ensuite les régions de numéro plus petit). Le tester
+  vraiment demanderait des cibles apprises dans l'ordre, ou une fusion des positions identiques
+  qui garde les poses libres.
+
 ## Résultats de force
 
 **Aucun tournoi complet ni entraînement lancé. Aucun gain revendiqué.** Les mini-arènes du pilote

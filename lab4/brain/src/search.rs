@@ -84,16 +84,20 @@ const SCALE: f32 = 8.0;
 pub struct Config {
     pub iterations: usize,
     pub candidates: Candidates,
+    /// Les jetons redéployés dans l'ordre des régions (`tokens=ordered`, `moves`) : une seule suite
+    /// de coups par répartition. Sans lui, la recherche de lab3.
+    pub ordered_tokens: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { iterations: 400, candidates: Candidates::Top(CONSIDERED) }
+        Config { iterations: 400, candidates: Candidates::Top(CONSIDERED), ordered_tokens: false }
     }
 }
 
 impl Config {
-    /// `n=3200,candidates=all` ; les valeurs nulles et les options inconnues sont refusées.
+    /// `n=3200,candidates=all,tokens=ordered` ; les valeurs nulles et les options inconnues sont
+    /// refusées.
     pub fn parse(text: &str) -> Option<Config> {
         let mut cfg = Config::default();
         for part in text.split(',').filter(|p| !p.is_empty()) {
@@ -110,6 +114,13 @@ impl Config {
                         }
                         Candidates::Top(count)
                     };
+                }
+                "tokens" => {
+                    cfg.ordered_tokens = match v {
+                        "ordered" => true,
+                        "free" => false,
+                        _ => return None,
+                    }
                 }
                 _ => return None,
             }
@@ -575,7 +586,8 @@ impl Az {
 
     /// Le nom affiché : le réseau et les réglages.
     pub fn describe(&self) -> String {
-        format!("az({}, n={}, candidates={})", self.label, self.cfg.iterations, self.cfg.candidates)
+        let tokens = if self.cfg.ordered_tokens { ", tokens=ordered" } else { "" };
+        format!("az({}, n={}, candidates={}{tokens})", self.label, self.cfg.iterations, self.cfg.candidates)
     }
 
     /// Une position nouvelle, évaluée (`judged`) : ses coups et leurs logits, et la valeur que lui
@@ -668,6 +680,7 @@ impl Az {
         evals: &mut Evals,
         oracle: &impl Oracle,
     ) -> Searched {
+        let k = &Knowledge { ordered_tokens: self.cfg.ordered_tokens, ..*k };
         let legal = moves::legal(root, k);
         if legal.len() == 1 {
             return Searched {

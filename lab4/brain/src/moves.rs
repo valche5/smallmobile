@@ -7,7 +7,10 @@
 //!      campements sont relevés ;
 //!   2. les pouvoirs, un à la fois et facultatifs : un héros, la forteresse, un campement sur une
 //!      région ; jouer le coup suivant (un jeton, ou la fin du tour) met fin à leur pose ;
-//!   3. les jetons, un à la fois, chacun sur une région ;
+//!   3. les jetons, un à la fois, chacun sur une région ; avec `Knowledge::ordered_tokens`, sur une
+//!      région de numéro au moins celui du jeton précédent : une seule suite de coups par
+//!      répartition des jetons, au lieu d'une par ordre de pose (4 jetons sur 5 régions : 70 suites
+//!      au lieu de 625, pour les mêmes positions à la fin du tour) ;
 //!   4. la fin du tour : la paix des Diplomates (aucune, ou un adversaire) ou le déclin des
 //!      Robustes, sinon forcée ;
 //! - défense : les jetons rendus, un à la fois, puis la fin de la défense (forcée).
@@ -81,6 +84,9 @@ pub struct Redeploy {
     pub lifted: bool,
     /// La pose des pouvoirs est finie (un jeton a été posé).
     pub powers_done: bool,
+    /// La région du dernier jeton posé (0 avant le premier) : avec `Knowledge::ordered_tokens`, le
+    /// jeton suivant va sur elle ou sur une région de numéro plus grand.
+    pub last_token: u8,
 }
 
 /// Désigne un coup d'un monde possible à l'autre ; moins de `KEYS`.
@@ -136,7 +142,7 @@ pub fn legal_with(g: &Game, k: &Knowledge, targets: Option<&[Target]>) -> Moves 
             }
         }
         Phase::Conquest => conquest(g, targets, &mut out),
-        Phase::Redeploy => redeploy(g, k.redeploy, &mut out),
+        Phase::Redeploy => redeploy(g, k.redeploy, k.ordered_tokens, &mut out),
         Phase::Defend => {
             let race = s.defense[0].race;
             let own = g.owned(race);
@@ -238,7 +244,7 @@ fn power_kind(rs: &smallmobile_kernel::state::RaceState) -> Option<Kind> {
         .map(|(_, kind)| kind)
 }
 
-fn redeploy(g: &Game, progress: Redeploy, out: &mut Moves) {
+fn redeploy(g: &Game, progress: Redeploy, ordered: bool, out: &mut Moves) {
     let s = &g.state;
     let army = s.turn.army.expect("peuple en action");
     let rs = *s.race(army);
@@ -263,7 +269,9 @@ fn redeploy(g: &Game, progress: Redeploy, out: &mut Moves) {
         }
     }
     if rs.hand > 0 {
-        out.extend(own.iter().map(|r| region(Kind::Token, r)));
+        // la région du jeton précédent est toujours au peuple : au moins un coup
+        let from = if ordered { progress.last_token as usize } else { 0 };
+        out.extend(own.iter().filter(|&r| r >= from).map(|r| region(Kind::Token, r)));
     } else {
         finish(g, out);
     }

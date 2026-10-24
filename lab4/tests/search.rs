@@ -49,7 +49,9 @@ fn configurations_are_explicit_and_invalid_budgets_are_rejected() {
     assert_eq!(Config::default().iterations, 400);
     assert_eq!(Config::default().candidates, Candidates::Top(16));
     assert_eq!(Config::parse("candidates=32").unwrap().candidates, Candidates::Top(32));
-    for bad in ["n=0", "n=-1", "n=no", "candidates=0", "candidates=-1", "candidates=no", "width=16"] {
+    assert!(Config::parse("tokens=ordered").unwrap().ordered_tokens);
+    assert!(!Config::default().ordered_tokens);
+    for bad in ["n=0", "n=-1", "n=no", "candidates=0", "candidates=-1", "candidates=no", "width=16", "tokens=any"] {
         assert!(Config::parse(bad).is_none(), "{bad}");
     }
 }
@@ -106,9 +108,9 @@ fn reference_matches_frozen_lab3_with_c130_and_the_same_random_stream() {
 #[test]
 fn widening_visits_every_legal_move_and_reports_actual_budget_and_rank() {
     let net = Arc::new(Net::load(&weights("gen0.bin")).unwrap());
-    let narrow = Az::new(Config { iterations: 128, candidates: Candidates::Top(16) }, net.clone(), "zero".into());
-    let wide = Az::new(Config { iterations: 128, candidates: Candidates::All }, net.clone(), "zero".into());
-    let tiny = Az::new(Config { iterations: 7, candidates: Candidates::All }, net, "zero".into());
+    let narrow = Az::new(Config { iterations: 128, candidates: Candidates::Top(16), ordered_tokens: false }, net.clone(), "zero".into());
+    let wide = Az::new(Config { iterations: 128, candidates: Candidates::All, ordered_tokens: false }, net.clone(), "zero".into());
+    let tiny = Az::new(Config { iterations: 7, candidates: Candidates::All, ordered_tokens: false }, net, "zero".into());
     let normal = KernelAi::new(smallmobile_kernel::Level::Normal);
     // Trouver une position réelle avec plus de 16 choix, sans jouer d'arène.
     for seed in 1..=8 {
@@ -177,4 +179,55 @@ fn widening_visits_every_legal_move_and_reports_actual_budget_and_rank() {
         }
     }
     panic!("aucune position à plus de 16 coups dans les fixtures");
+}
+
+/// Toutes les positions de fin de pose des jetons depuis `g` (en redéploiement), une par suite de
+/// coups : jetons libres ou dans l'ordre des régions.
+fn token_ends<'m>(g: &smallmobile_kernel::Game<'m>, k: &Knowledge, ordered: bool, out: &mut Vec<smallmobile_kernel::state::State>) {
+    let k = Knowledge { ordered_tokens: ordered, ..*k };
+    let legal = moves::legal(g, &k);
+    if !legal.iter().any(|c| matches!(c.mv, moves::Move::Region(moves::Kind::Token, _))) {
+        out.push(g.state);
+        return;
+    }
+    for c in &legal {
+        let (mut g, mut k) = (*g, k);
+        k.play(&mut g, &c.mv).unwrap();
+        token_ends(&g, &k, ordered, out);
+    }
+}
+
+#[test]
+fn ordered_tokens_reach_the_same_redeployments_once_each() {
+    let mut rng = Rng::new(5);
+    let mut checked = 0;
+    for deal in 0..60u64 {
+        let table = Table::new(2 + (deal % 4) as usize, 1000 + deal);
+        let (mut g, mut k) = (table.game(deal as u32), Knowledge::default());
+        while g.state.phase != Phase::GameOver {
+            let legal = moves::legal(&g, &k);
+            // au premier jeton d'une pose (pouvoirs finis), assez petite pour tout énumérer
+            let tokens = legal.iter().all(|c| matches!(c.mv, moves::Move::Region(moves::Kind::Token, _)));
+            let army = g.state.turn.army;
+            let hand = army.and_then(|a| g.state.races[a.index()]).map_or(0, |rs| rs.hand);
+            if g.state.phase == Phase::Redeploy && tokens && !k.redeploy.powers_done && legal.len() > 1 && hand <= 4 && legal.len() <= 6 {
+                let (mut free, mut ordered) = (Vec::new(), Vec::new());
+                token_ends(&g, &k, false, &mut free);
+                token_ends(&g, &k, true, &mut ordered);
+                let mut distinct: Vec<_> = Vec::new();
+                for s in &free {
+                    if !distinct.contains(s) {
+                        distinct.push(*s);
+                    }
+                }
+                assert!(free.len() > ordered.len() || hand == 1, "moins de suites dans l'ordre");
+                assert_eq!(ordered.len(), distinct.len(), "une suite par position, dans l'ordre");
+                assert!(distinct.iter().all(|s| ordered.contains(s)), "les mêmes positions atteintes");
+                checked += 1;
+            }
+            let mv = legal[rng.below(legal.len())].mv;
+            k.play(&mut g, &mv).unwrap();
+        }
+    }
+    assert!(checked >= 20, "trop peu de poses vérifiées : {checked}");
 }
