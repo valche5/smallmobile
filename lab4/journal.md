@@ -69,6 +69,35 @@ production). Commit `835ad79`.
   s'use dans les décisions jeton par jeton du tour en cours, ce qui appuie l'étape 3 du plan
   (prolonger les feuilles) plus que l'élargissement.
 
+## Présélection sur le PC (24 octobre)
+
+Reprise sur GrosseBoite (i7-12700KF, RX 9070 XT), à la demande de l'utilisateur, de la session
+qui tournait sur mini. Commit `294ab4b`, poids c130 SHA-256 `e534cc84…` (vérifié), binaire
+`cargo build --release -p smallmobile-lab4` (Vulkan).
+
+- `speed`, 4 positions par taille, un cœur : A 61 ms par recherche, B 394 ms (×6,4), C 399 ms.
+- Pilote GPU, B contre A, 40 donnes, graine 40002 (hors des graines réservées) : 37 s ; temps
+  par décision entière du candidat 413 ms, p95 1,4 s (20 fils sur le GPU).
+- Présélection, 400 donnes (100 par taille), graine 41001, `--device vulkan`, 20 fils :
+
+| Duel | Durée | Score (95 %) | 2 joueurs | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- | --- |
+| B contre A | 300 s | +2,0 ± 2,3 | +3,0 | −1,5 | +5,0 | +1,4 |
+| C contre A | 292 s | +2,8 ± 2,3 | +3,0 | +1,7 | +3,4 | +3,0 |
+| C contre B | 897 s | +0,6 ± 2,1 | +1,5 | +1,5 | −1,0 | +0,4 |
+
+  Différence appariée C − B face à A, mêmes donnes : +0,8 ± 2,3 (indécis). C choisit hors du
+  top 16 dans 13 recherches sur ~110 000 (4 565 à 35 471 coups visités hors du top 16 selon la
+  taille) : C et B jouent presque pareil, l'écart de leurs scores face à A est du bruit.
+- Budget seul (B) : indécis, au-dessous du seuil pratique de +3. Largeur (C) : pas d'apport
+  mesurable face à B. Diagnostics de B sur ces parties : prochain tour du joueur racine atteint
+  par 29 % des simulations à 2 joueurs, 9,6 % à 3, 3,4 % à 4.
+- Ce qui use la profondeur (parties de selfplay de c130) : ~11,7 décisions par tour, dont 4,6
+  redéploiements d'un jeton et 2,5 conquêtes ; 7,9 coups légaux par décision en moyenne
+  (médiane 6). À 4 joueurs, le prochain tour est à ~40 décisions. L'arbre déplie chaque ordre de
+  pose des jetons redéployés séparément (4 jetons sur 5 régions : 625 suites pour 70
+  répartitions) : piste suivante, un ordre imposé des jetons (une seule suite par répartition).
+
 ## Résultats de force
 
 **Aucun tournoi complet ni entraînement lancé. Aucun gain revendiqué.** Les mini-arènes du pilote

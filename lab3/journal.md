@@ -639,6 +639,13 @@ moyenne +8,8 pour c111–c118, +10,4 pour c121–c130). Confirmations sur 920 do
 **Nouveau plateau** : +0,7 en 20 pas (c110 contre c000 : +10,3, c130 : +9,5, dans le bruit). La
 politique de validation progresse encore (1,271 → ~1,26), la valeur non.
 
+**Correction de lecture** (24 octobre) : le « ± » de `labtools/score.py` est un intervalle à 95 %
+(1,96 écart type), pas un écart type. Relus ainsi : c044 contre c040 (+1,9 ± 1,5), c060 contre
+c050 (+1,7 ± 1,5) et c070 contre c060 (+2,0 ± 1,5) sont des gains significatifs ; c050 contre c040
+(+2,9 ± 1,5) l'est nettement. Restent indécis : deep7q contre deep7 (−0,6 ± 1,5), c090 contre c070
+(+0,9 ± 1,5), c110 contre c100 (+1,0 ± 1,5) et c130 contre c110 (+0,7 ± 1,4). Le continu et n = 800
+ont donc gardé le rythme de ~+2 par 10 pas ; le ralentissement vient avec la 7e couche et après c110.
+
 **En production** (24 octobre, demande de l'utilisateur) : c130 devient l'Expert du jeu, « Labo 3 »,
 proposé par défaut (`lab3/nets/c130.bin`, `src/shared/experts.ts`, programme `lab3-expert`). Face au
 réglage de lab2 en production (c060, n = 800), 920 donnes neuves (graine 1007) : c130 à n = 400
