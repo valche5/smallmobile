@@ -7,7 +7,7 @@
 //! par position     players, regions (u8), weight (f32), win, gain, value (f32 × 5),
 //!                  adj_block (u32 : son bloc d'adjacences), nz_count, nz_big_count, pol_count (u16),
 //!                  nz_glob (u8 × 103 : le masque des octets non nuls de la partie)
-//! par région       owner (u8), nz_rows (u8 × 10 : le masque des octets non nuls de la région)
+//! par région       nz_rows (u8 × 10 : le masque des octets non nuls de la région)
 //! par bloc         adj_count (u8 : ses régions) ; adj (u64 par région : ses voisines)
 //! par non nul      nz_ones (un bit, à la suite : vaut-il 1 ?) ; nz_big (u8 : les autres valeurs)
 //! par coup         pol_key, pol_val (u16 : la politique des seuls coups possibles)
@@ -37,8 +37,6 @@ pub struct Position<'a> {
     pub win: [f32; MAX_PLAYERS],
     pub gain: [f32; MAX_PLAYERS],
     pub value: [f32; MAX_PLAYERS],
-    /// À qui appartient chaque région présente (`selfplay::owners`).
-    pub owners: &'a [u8],
     /// Les entrées des régions présentes, puis de la partie (`encode`).
     pub node: &'a [[u8; NODE]],
     pub global: &'a [u8; GLOBAL],
@@ -59,7 +57,6 @@ pub struct Compact {
     nz_big_count: Vec<u16>,
     pol_count: Vec<u16>,
     nz_glob: Vec<u8>,
-    owner: Vec<u8>,
     nz_rows: Vec<u8>,
     adj_count: Vec<u8>,
     adj: Vec<u64>,
@@ -82,7 +79,7 @@ impl Compact {
     /// Ajoute une position ; `adj` : les voisines de chaque région de sa carte (un bit par région).
     pub fn push(&mut self, p: &Position, adj: &[u64]) {
         let regions = p.node.len();
-        assert!(p.owners.len() == regions && adj.len() >= regions, "régions de la position");
+        assert!(adj.len() >= regions, "régions de la position");
         // la carte d'une partie ne change pas : un seul bloc tant qu'elle est la même
         let last = self.adj_count.len().checked_sub(1);
         let same = last.is_some_and(|b| {
@@ -100,7 +97,6 @@ impl Compact {
         self.win.push(p.win);
         self.gain.push(p.gain);
         self.value.push(p.value);
-        self.owner.extend_from_slice(p.owners);
         let (mut count, mut big) = (0u16, 0u16);
         let mut values = |bytes: &[u8], mask: &mut Vec<u8>| {
             let at = mask.len();
@@ -144,7 +140,6 @@ impl Compact {
         self.nz_big_count.extend(other.nz_big_count);
         self.pol_count.extend(other.pol_count);
         self.nz_glob.extend(other.nz_glob);
-        self.owner.extend(other.owner);
         self.nz_rows.extend(other.nz_rows);
         self.adj_count.extend(other.adj_count);
         self.adj.extend(other.adj);
@@ -166,8 +161,8 @@ impl Compact {
         for (i, _) in self.nz_ones.iter().enumerate().filter(|(_, o)| **o == 1) {
             ones[i / 8] |= 0x80 >> (i % 8);
         }
-        let rows = self.owner.len();
-        let arrays: [(&str, &str, Vec<usize>, Vec<u8>); 19] = [
+        let rows = self.nz_rows.len() / ROW_MASK;
+        let arrays: [(&str, &str, Vec<usize>, Vec<u8>); 18] = [
             ("players", "|u1", vec![n], bytes(&self.players)),
             ("regions", "|u1", vec![n], bytes(&self.regions)),
             ("weight", "<f4", vec![n], le(&mut self.weight.iter().map(|x| x.to_le_bytes()))),
@@ -179,7 +174,6 @@ impl Compact {
             ("nz_big_count", "<u2", vec![n], u16s(&self.nz_big_count)),
             ("pol_count", "<u2", vec![n], u16s(&self.pol_count)),
             ("nz_glob", "|u1", vec![n, GLOBAL_MASK], bytes(&self.nz_glob)),
-            ("owner", "|u1", vec![rows], bytes(&self.owner)),
             ("nz_rows", "|u1", vec![rows, ROW_MASK], bytes(&self.nz_rows)),
             ("adj_count", "|u1", vec![self.adj_count.len()], bytes(&self.adj_count)),
             ("adj", "<u8", vec![self.adj.len()], self.adj.iter().flat_map(|x| x.to_le_bytes()).collect()),

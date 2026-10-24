@@ -92,42 +92,32 @@ class CompactTest(unittest.TestCase):
 
 
 @unittest.skipUnless(LAB4.exists(), f"{LAB4} absent")
-class ContinuousTest(unittest.TestCase):
-    def test_state_goes_on(self):
-        """En continu, le deuxième pas reprend l'optimiseur du premier, et le réseau exporté est la
-        moyenne des poids."""
+class TrainingTest(unittest.TestCase):
+    def test_a_step_learns_and_exports(self):
+        """Un pas d'apprentissage sur deux cycles joués : le réseau écrit se relit, et a appris."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             for c, seed in (("c001", 1), ("c002", 2)):
                 selfplay(tmp / c, seed)
             torch.manual_seed(0)
             export(Net(16, 1), tmp / "c000.bin")
+            argv = ["train.py", "--cycles", str(tmp), "--last", "c002", "--init", str(tmp / "c000.bin"),
+                    "--out", str(tmp / "c002.bin"), "--value-mix", "0.5"]
+            old, sys.argv = sys.argv, argv
+            try:
+                with redirect_stdout(StringIO()) as out:
+                    main()
+            finally:
+                sys.argv = old
+            self.assertIn("20 lots", out.getvalue())
+            before, after = load_net(tmp / "c000.bin"), load_net(tmp / "c002.bin")
+            self.assertFalse(torch.equal(before.node_in.weight, after.node_in.weight), "rien appris")
 
-            def step(c, prev):
-                argv = ["train.py", "--cycles", str(tmp), "--last", c, "--init", str(tmp / f"{prev}.bin"),
-                        "--out", str(tmp / f"{c}.bin"), "--state-in", str(tmp / f"{prev}.state.pt"),
-                        "--state-out", str(tmp / f"{c}.state.pt"), "--value-mix", "0.5"]
-                old, sys.argv = sys.argv, argv
-                try:
-                    with redirect_stdout(StringIO()) as out:
-                        main()
-                finally:
-                    sys.argv = old
-                return out.getvalue(), torch.load(tmp / f"{c}.state.pt", map_location="cpu")
-
-            log1, s1 = step("c001", "c000")
-            log2, s2 = step("c002", "c001")
-            self.assertIn("premier pas", log1)
-            self.assertIn("état repris", log2)
-            # 20 lots par pas (le minimum de train.py)
-            self.assertEqual(s1["opt"]["state"][0]["step"].item(), 20)
-            self.assertEqual(s2["opt"]["state"][0]["step"].item(), 40)
-            played = load_net(tmp / "c001.bin")
-            for p, e in zip(played.parameters(), s1["ema"]):
-                torch.testing.assert_close(p, e.cpu(), rtol=0, atol=0)
-            raw = s1["net"]["node_in.weight"].cpu()
-            self.assertFalse(torch.equal(played.node_in.weight, raw), "la moyenne n'est pas le réseau qui apprend")
-
+    def test_old_nets_load_without_the_owner_head(self):
+        """c130, appris dans lab3 avec la tête des propriétaires, se lit sans elle."""
+        net = load_net(ROOT / "lab4/nets/c130.bin")
+        self.assertEqual((net.hidden, len(net.layers)), (128, 7))
+        self.assertFalse(any(name.startswith("own.") for name in net.state_dict()))
 
 
 if __name__ == "__main__":

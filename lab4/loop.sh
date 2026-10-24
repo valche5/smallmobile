@@ -4,7 +4,7 @@
 #   1. les parties du cycle k, jouées par le réseau k−1 (`lab4 selfplay`, recherches complètes à
 #      SIMS simulations, objectif `win=WIN`) ;
 #   2. l'apprentissage du réseau k depuis k−1 sur la fenêtre des derniers cycles (lab4/py/train.py,
-#      en continu : optimiseur et moyenne des poids gardés d'un pas à l'autre, taux LR) ;
+#      un AdamW neuf par pas, taux maximal LR en un cycle) ;
 #   3. le duel du réseau k (objectif `win=WIN`) contre REF (objectif `win=REF_WIN`, 0,5 par défaut :
 #      le réglage d'avant), n = 200, mêmes donnes à chaque pas (graine 1004), arrêté par le test
 #      séquentiel : le gain de l'ensemble, objectif et apprentissage.
@@ -12,8 +12,8 @@
 #   lab4/loop.sh N        les pas START à N de l'essai RUN
 #
 # Avant le premier pas : les cycles de la fenêtre liés dans lab4/data/RUN (au moins jusqu'au cycle
-# START−1, et tous ceux d'avant pour la taille de la fenêtre), le réseau de départ et son état en
-# lab4/runs/RUN/c(START−1).bin et .state.pt, la référence en lab4/runs/RUN/REF.bin.
+# START−1, et tous ceux d'avant pour la taille de la fenêtre), le réseau de départ en
+# lab4/runs/RUN/c(START−1).bin, la référence en lab4/runs/RUN/REF.bin.
 #
 # Parties : lab4/data/RUN/cNNN ; réseaux : lab4/runs/RUN/cNNN.bin ; journal lab4/runs/RUN/log.txt
 # (durée de chaque étape). Python : celui de lab3 (lab3/py/.venv, mêmes dépendances).
@@ -28,7 +28,8 @@ SIMS=${SIMS:-400}
 # poids de la victoire dans la valeur que maximise la recherche (lab4/brain/src/search.rs,
 # `Config::win_weight`) : selfplay et duels
 WIN=${WIN:-0.5}
-LR=${LR:-1e-4}
+# le taux de c041–c050 de lab3, le dernier réglage d'apprentissage qui a payé (lab3/journal.md)
+LR=${LR:-1.5e-4}
 DEALS=${DEALS:-460}
 REF=${REF:?la référence des duels}
 REF_WIN=${REF_WIN:-0.5}
@@ -67,8 +68,7 @@ train() { # réseau, réseau de départ
   [ -f "$OUT/$c.bin" ] && return 0
   start=$(date +%s)
   if ! (cd lab4/py && $PY train.py --cycles "../data/$RUN" --last "$c" --init "../runs/$RUN/$prev.bin" \
-    --out "../runs/$RUN/$c.tmp.bin" --lr "$LR" --state-in "../runs/$RUN/$prev.state.pt" \
-    --state-out "../runs/$RUN/$c.state.pt") > "$OUT/$c-train.log" 2>&1; then
+    --out "../runs/$RUN/$c.tmp.bin" --lr "$LR") > "$OUT/$c-train.log" 2>&1; then
     tail -20 "$OUT/$c-train.log"
     return 1
   fi

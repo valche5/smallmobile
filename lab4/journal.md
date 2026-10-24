@@ -226,6 +226,27 @@ la fenêtre de deep7 (c099…c130, mêmes graines), poids 1,5 (témoin), 0,5 et 
   pendant l'apprentissage depuis le début (le tronc l'apprend tôt). La retirer n'apporterait rien
   ici ; le tester vraiment demanderait un apprentissage depuis zéro.
 
+## Retirés de lab4 : la tête des propriétaires et l'apprentissage en continu (25 octobre)
+
+À la demande de l'utilisateur, après l'essai ci-dessus et ceux de lab3 :
+
+- **Tête des propriétaires** retirée partout dans lab4 : le selfplay ne calcule plus à qui
+  appartient chaque région au tour suivant (`selfplay::owners`), les `.pos` perdent ce champ
+  (6 162 octets par position), la forme compacte n'écrit plus `owner.npy`, le réseau n'a plus que
+  la politique et la valeur (victoire et pièces), la perte n'a plus ce terme. Les réseaux de lab3
+  (c130) se lisent sans elle (`model.load` écarte `own.*`) ; les anciens cycles gardent leur
+  `owner.npy`, que plus rien ne lit.
+- **Apprentissage en continu** retiré (état d'AdamW et moyenne des poids gardés d'un pas à
+  l'autre, taux constant) : dans lab3, pas mieux qu'un cycle par pas. Chaque pas repart d'un AdamW
+  neuf, taux maximal 1,5e-4 en un cycle (`loop.sh`, `LR`), le réglage de c041–c050 de lab3.
+- Un pas d'apprentissage réel depuis c130 (fenêtre de deep7) : **103 s** au lieu de ~130 (la tête
+  par région et la moyenne des poids tous les 8 lots coûtaient ~20 % du pas) ; validation politique
+  1,261, valeur 1,029 (1,258 et 1,027 en continu : l'optimiseur neuf remonte au taux maximal).
+  Le réseau écrit se lit dans Rust (`lab4 speed`).
+- Tests : `test_train.py` (la forme compacte de Rust redonne les `.pos` sans le champ, un pas
+  d'apprentissage écrit un réseau qui a appris, c130 se lit sans la tête), tests Rust et clippy de
+  lab4 passent.
+
 ## Résultats de force
 
 **Aucun tournoi complet ni entraînement lancé. Aucun gain revendiqué.** Les mini-arènes du pilote

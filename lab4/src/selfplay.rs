@@ -10,8 +10,6 @@
 //! f32      poids de la position (`weights` : surprise de la recherche)
 //! f32 × 5  victoire de chaque joueur relatif (part, 0 à 1)
 //! f32 × 5  pièces gagnées d'ici la fin par chaque joueur relatif
-//! u8 × REGIONS  à qui appartient chaque région au début du prochain tour du joueur qui agit (à la
-//!          fin de la partie si elle finit avant) : `NOBODY`, 1 + joueur relatif, `OFF_MAP`
 //! u16 × KEYS  politique améliorée de chaque coup, × `PROBABILITY` (65535 : coup impossible)
 //! u8 × REGIONS × 8  voisines (un bit par région, 64 bits par région)
 //! u8 × REGIONS × NODE  entrées par région
@@ -34,14 +32,13 @@ use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 use smallmobile_kernel::ids::MAX_PLAYERS;
-use smallmobile_kernel::state::Occupant;
 use smallmobile_kernel::wire::{self, Writer};
 use smallmobile_kernel::{Action, Game, Phase};
 
 use crate::az::{Az, Evals, Oracle, Searched};
 use crate::batch::Batch;
 use crate::compact::{Compact, Position, compact_dir};
-use crate::encode::{Encoded, GLOBAL, NODE, REGIONS, encode, relative};
+use crate::encode::{Encoded, GLOBAL, NODE, REGIONS, encode};
 use crate::gpu::Gpu;
 use crate::know::Knowledge;
 use crate::moves::{self, KEYS, Key};
@@ -49,16 +46,12 @@ use crate::net::Eval;
 use crate::rand::{Rng, mix};
 use crate::table::{Outcome, Table};
 
-pub const RECORD: usize = 2 + 4 + 20 + 20 + REGIONS + KEYS * 2 + REGIONS * 8 + REGIONS * NODE + GLOBAL;
+pub const RECORD: usize = 2 + 4 + 20 + 20 + KEYS * 2 + REGIONS * 8 + REGIONS * NODE + GLOBAL;
 /// Le suffixe des fichiers de positions.
 pub const SUFFIX: &str = ".pos";
 pub const ILLEGAL: u16 = u16::MAX;
 /// Une probabilité de la politique améliorée est enregistrée multipliée par ce nombre.
 pub const PROBABILITY: f32 = 60_000.0;
-/// Propriétaire d'une région : personne (vide ou peuple oublié) ; sinon 1 + joueur relatif.
-pub const NOBODY: u8 = 0;
-/// Propriétaire d'une région hors de la carte.
-pub const OFF_MAP: u8 = u8::MAX;
 
 /// Un exemple pour le réseau, cibles en joueurs relatifs (0 : celui qui agit).
 pub struct Record<'a> {
@@ -67,8 +60,6 @@ pub struct Record<'a> {
     pub weight: f32,
     pub win: [f32; MAX_PLAYERS],
     pub gain: [f32; MAX_PLAYERS],
-    /// `owners`, au début du prochain tour du joueur qui agit.
-    pub owners: [u8; REGIONS],
     pub policy: &'a [u16; KEYS],
 }
 
@@ -80,7 +71,6 @@ impl Record<'_> {
         for x in self.win.iter().chain(&self.gain) {
             buf.extend_from_slice(&x.to_le_bytes());
         }
-        buf.extend_from_slice(&self.owners);
         for v in self.policy {
             buf.extend_from_slice(&v.to_le_bytes());
         }
@@ -113,7 +103,6 @@ struct Pending {
     actor: usize,
     coins: [i32; MAX_PLAYERS],
     policy: Box<[(Key, u16)]>,
-    owners: Option<[u8; REGIONS]>,
     /// Écart de la politique améliorée à l'a priori du réseau (`surprise`).
     surprise: f32,
     /// Part de victoire attendue de chaque joueur (réel) selon la recherche (`Searched::wins`).
@@ -130,7 +119,6 @@ impl Pending {
             actor,
             coins,
             policy,
-            owners: None,
             surprise: surprise(s),
             wins: s.wins,
         }
@@ -226,18 +214,7 @@ pub async fn play(
         };
         moves::actions_into(&g, &mv, &mut actions);
         ends.push(actions.len() as u32);
-        let current = g.state.current;
         k.play(&mut g, &mv).expect("coup possible");
-        // le tour passe : les positions de ce joueur qui attendaient son prochain tour l'ont
-        if g.state.current != current {
-            let c = g.state.current;
-            for p in pending.iter_mut().filter(|p| p.actor == c && p.owners.is_none()) {
-                p.owners = Some(owners(&g, c));
-            }
-        }
-    }
-    for p in pending.iter_mut().filter(|p| p.owners.is_none()) {
-        p.owners = Some(owners(&g, p.actor));
     }
     let o = Outcome::of(&g);
     let n = o.players;
@@ -257,21 +234,19 @@ pub async fn play(
         }
         // une recherche complète connaît toujours ses parts (NaN : coup forcé, jamais enregistré)
         assert!(value[..n].iter().all(|v| v.is_finite()), "valeur de la recherche inconnue");
-        let owners = p.owners.expect("propriétaires");
         let position = Position {
             players: p.players,
             weight,
             win,
             gain,
             value,
-            owners: &owners[..p.regions as usize],
             node: &p.node,
             global: &p.global,
             policy: &p.policy,
         };
         compact.push(&position, &adj);
         let (enc, policy) = (p.encoded(), p.policy());
-        let rec = Record { enc: &enc, map: &table.map, weight, win, gain, owners, policy: &policy };
+        let rec = Record { enc: &enc, map: &table.map, weight, win, gain, policy: &policy };
         out.write_all(&rec.bytes())?;
     }
     Ok(Played { outcome: o, positions: pending.len(), compact, actions, ends })
@@ -298,20 +273,6 @@ fn surprise(s: &Searched) -> f32 {
 pub fn weights(surprises: &[f32]) -> Vec<f32> {
     let mean = surprises.iter().sum::<f32>() / surprises.len().max(1) as f32;
     surprises.iter().map(|&x| if mean > 1e-6 { 0.5 + 0.5 * x / mean } else { 1.0 }).collect()
-}
-
-/// À qui appartient chaque région, vu du joueur `me` (`NOBODY`, 1 + joueur relatif, `OFF_MAP`).
-pub fn owners(g: &Game, me: usize) -> [u8; REGIONS] {
-    let s = &g.state;
-    let n = s.player_count();
-    let mut out = [OFF_MAP; REGIONS];
-    for (o, r) in out.iter_mut().zip(&s.regions[..g.map.len()]) {
-        *o = match r.occupant {
-            Occupant::Race(race) => 1 + relative(s.race(race).owner, me, n) as u8,
-            Occupant::Empty | Occupant::Lost => NOBODY,
-        };
-    }
-    out
 }
 
 /// Les pièces de chaque joueur.
@@ -704,7 +665,7 @@ pub fn read_record(rec: &[u8]) -> (Encoded, Vec<Vec<u8>>) {
     assert_eq!(rec.len(), RECORD);
     let players = rec[0] as usize;
     let regions = rec[1] as usize;
-    let mut at = 2 + 4 + 20 + 20 + REGIONS + KEYS * 2;
+    let mut at = 2 + 4 + 20 + 20 + KEYS * 2;
     let mut adj = Vec::with_capacity(regions);
     for i in 0..REGIONS {
         let bits = u64::from_le_bytes(rec[at..at + 8].try_into().expect("8 octets"));

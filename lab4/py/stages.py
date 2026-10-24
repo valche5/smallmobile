@@ -30,7 +30,7 @@ ce = lambda p: -(win * np.log(np.clip(p, 1e-9, 1))).sum(1)
 pn = []
 with torch.no_grad():
     for b in batches(recs, np.arange(len(recs)), 4096, device):
-        _, value, _ = net(b['node'], b['glob'], b['adj'], b['regions'])
+        _, value = net(b['node'], b['glob'], b['adj'], b['regions'])
         pres = torch.arange(5, device=device)[None] < b['players'][:, None]
         pn.append(torch.softmax(value[:, :5].masked_fill(~pres, -1e9), 1).cpu().numpy())
 pn = np.concatenate(pn).astype(np.float64)

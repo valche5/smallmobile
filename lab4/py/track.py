@@ -37,7 +37,7 @@ for path in args.nets:
     preds = []
     with torch.no_grad():
         for b in batches(recs, np.arange(len(recs)), 4096, device):
-            _, value, _ = net(b["node"], b["glob"], b["adj"], b["regions"])
+            _, value = net(b["node"], b["glob"], b["adj"], b["regions"])
             present = torch.arange(5, device=device)[None] < b["players"][:, None]
             preds.append(torch.softmax(value[:, :5].masked_fill(~present, -1e9), 1).cpu().numpy())
     p = np.clip(np.concatenate(preds).astype(np.float64), 1e-12, 1)

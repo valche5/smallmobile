@@ -18,9 +18,6 @@ NODE = 77
 # l'histoire des joueurs
 GLOBAL = 820
 ILLEGAL = 65535
-OFF_MAP = 255
-# propriétaires possibles d'une région : personne, puis chaque joueur relatif
-OWNERS = 6
 
 # les champs pleins d'une position (`Packed.take`) ; aussi les fichiers `.pos` que le selfplay écrit
 # sur demande (`lab4 selfplay --pos true`, pour `lab4 check-net`)
@@ -32,9 +29,6 @@ RECORD = np.dtype(
         ("weight", "<f4"),
         ("win", "<f4", 5),
         ("gain", "<f4", 5),
-        # à qui appartient chaque région au début du prochain tour du joueur qui agit : 0 personne,
-        # 1 + joueur relatif, OFF_MAP hors de la carte
-        ("owner", "u1", REGIONS),
         # politique améliorée de la recherche, à une constante près (ILLEGAL : coup impossible)
         ("policy", "<u2", KEYS),
         ("adj", "<u8", REGIONS),
@@ -236,7 +230,7 @@ class Packed:
     d'une position."""
 
     SMALL = ("players", "regions", "weight", "win", "gain", "value", "keys")
-    MAPPED = ("owner", "adj", "nz_rows", "nz_glob", "nz_big", "pol_key", "pol_val")
+    MAPPED = ("adj", "nz_rows", "nz_glob", "nz_big", "pol_key", "pol_val")
 
     def __init__(self, files):
         parts = [_members(f) for f in files]
@@ -270,8 +264,6 @@ class Packed:
         n = len(sel)
         out = {k: getattr(self, k)[sel] for k in ("players", "regions", "weight", "win", "gain", "value")}
         ids, b, rank = _segments(self.rows_at, self.regions, sel)
-        out["owner"] = np.full((n, REGIONS), OFF_MAP, np.uint8)
-        out["owner"][b, rank] = self.owner[ids]
         # où sont les non nuls : les lignes des régions présentes, puis la partie
         node_nz = np.zeros((n, REGIONS, NODE), bool)
         node_nz[b, rank] = np.unpackbits(self.nz_rows[ids], axis=1, count=NODE).view(bool)
