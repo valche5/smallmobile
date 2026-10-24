@@ -247,6 +247,42 @@ la fenêtre de deep7 (c099…c130, mêmes graines), poids 1,5 (témoin), 0,5 et 
   d'apprentissage écrit un réseau qui a appris, c130 se lit sans la tête), tests Rust et clippy de
   lab4 passent.
 
+## Plafond de la valeur (25 octobre)
+
+`lab4 ceiling` (`src/ceiling.rs`) : 300 positions de parties neuves (100 à 3, 4 et 5 joueurs,
+graine 11), jouées par c130 (n = 400) jusqu'au début d'une manche tirée au hasard ; depuis chacune,
+32 suites jusqu'au bout par c130, chacune dans un monde tiré à nouveau (pioches cachées, dés à
+venir). 338 s sur le GPU. Analyse `py/ceiling.py` : entropie croisée de la victoire, uniforme,
+valeur de c130 à la position, et plafond = la répartition des vainqueurs des 31 autres suites
+(a priori de Dirichlet 0,5 ; un peu pessimiste, le vrai plafond est un peu plus bas).
+
+| Joueurs | Manches restantes | Suites | Uniforme | Réseau | Plafond | Écart comblé |
+| --- | --- | --- | --- | --- | --- | --- |
+| 3 | 6+ | 1 568 | 1,099 | 1,072 | 1,063 | 74 % |
+| 3 | 4–5 | 640 | 1,099 | 1,050 | 0,976 | 40 % |
+| 3 | 2–3 | 736 | 1,099 | 1,004 | 0,848 | 38 % |
+| 3 | 1 | 256 | 1,099 | 0,808 | 0,683 | 70 % |
+| 4 | 6+ | 1 056 | 1,386 | 1,360 | 1,341 | 57 % |
+| 4 | 4–5 | 896 | 1,386 | 1,326 | 1,218 | 36 % |
+| 4 | 2–3 | 864 | 1,386 | 1,119 | 0,923 | 58 % |
+| 4 | 1 | 384 | 1,386 | 0,811 | 0,673 | 81 % |
+| 5 | 6+ | 864 | 1,609 | 1,561 | 1,577 | (≥ 100 %) |
+| 5 | 4–5 | 864 | 1,609 | 1,476 | 1,370 | 56 % |
+| 5 | 2–3 | 768 | 1,609 | 1,383 | 1,254 | 64 % |
+| 5 | 1 | 704 | 1,609 | 0,900 | 0,639 | 73 % |
+| 3 / 4 / 5 | tout | 3 200 chacun | | 1,031 / 1,220 / 1,350 | 0,966 / 1,114 / 1,237 | 51 / 61 / 70 % |
+
+- **Le début de partie est surtout de la chance** : à 6 manches ou plus, même une valeur parfaite
+  pour ces joueurs ferait à peine mieux que l'uniforme (4 joueurs : 1,341 contre 1,386), et c130 y
+  est déjà presque. Rien à gagner là.
+- **La marge est au milieu et à la fin** : 0,07 à 0,20 d'entropie croisée de 4 à 2 manches de la
+  fin, jusqu'à 0,26 à 5 joueurs dans la dernière manche (0,900 contre 0,639), là où l'issue dépend
+  du jeu concret plus que du hasard. C'est là qu'une meilleure valeur, ou une recherche plus
+  profonde, peut payer.
+- Limites : 100 positions par taille, moins dans chaque tranche (bruit) ; le plafond vaut pour
+  ces joueurs-là (c130 à n = 400) ; la valeur du réseau est lue au début d'une manche, pour tous
+  les joueurs.
+
 ## Résultats de force
 
 **Aucun tournoi complet ni entraînement lancé. Aucun gain revendiqué.** Les mini-arènes du pilote
