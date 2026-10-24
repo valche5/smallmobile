@@ -5,8 +5,9 @@
 #      SIMS simulations, objectif `win=WIN`) ;
 #   2. l'apprentissage du réseau k depuis k−1 sur la fenêtre des derniers cycles (lab4/py/train.py,
 #      en continu : optimiseur et moyenne des poids gardés d'un pas à l'autre, taux LR) ;
-#   3. le duel du réseau k contre REF, les deux avec le même objectif `win=WIN` à n = 200, mêmes
-#      donnes à chaque pas (graine 1004), arrêté par le test séquentiel.
+#   3. le duel du réseau k (objectif `win=WIN`) contre REF (objectif `win=REF_WIN`, 0,5 par défaut :
+#      le réglage d'avant), n = 200, mêmes donnes à chaque pas (graine 1004), arrêté par le test
+#      séquentiel : le gain de l'ensemble, objectif et apprentissage.
 #
 #   lab4/loop.sh N        les pas START à N de l'essai RUN
 #
@@ -30,6 +31,7 @@ WIN=${WIN:-0.5}
 LR=${LR:-1e-4}
 DEALS=${DEALS:-460}
 REF=${REF:?la référence des duels}
+REF_WIN=${REF_WIN:-0.5}
 STOP=${STOP:-3}
 THREADS=${THREADS:-$(nproc)}
 SEED_BASE=${SEED_BASE:-30000060}
@@ -75,19 +77,19 @@ train() { # réseau, réseau de départ
   sed 's/^/    /' "$OUT/$c-train.log" | grep -v "écrit" | tee -a "$OUT/log.txt"
 }
 
-duel() { # réseau : contre REF, même objectif
-  local c=$1 start
-  [ -f "$OUT/duel-$c-$REF.tsv" ] && return 0
+duel() { # réseau : contre REF et son objectif
+  local c=$1 start f
+  f=$OUT/duel-$c-$REF-w$REF_WIN
+  [ -f "$f.tsv" ] && return 0
   start=$(date +%s)
-  $LAB arena --hero "az:net=$OUT/$c.bin,n=200,win=$WIN" --field "az:net=$OUT/$REF.bin,n=200,win=$WIN" --players "$P" \
-    --deals "$DEALS" --seed 1004 --stop "$STOP" --threads "$THREADS" --device vulkan --out "$OUT/duel-$c-$REF.tmp" \
-    > "$OUT/duel-$c-$REF.txt"
-  mv "$OUT/duel-$c-$REF.tmp" "$OUT/duel-$c-$REF.tsv"
-  mv "$OUT/duel-$c-$REF.tmp.search.tsv" "$OUT/duel-$c-$REF.tsv.search.tsv"
-  log "$c face à $REF : $(($(date +%s) - start)) s, $(grep -E '^(arrêt|test séquentiel)' "$OUT/duel-$c-$REF.txt")"
+  $LAB arena --hero "az:net=$OUT/$c.bin,n=200,win=$WIN" --field "az:net=$OUT/$REF.bin,n=200,win=$REF_WIN" --players "$P" \
+    --deals "$DEALS" --seed 1004 --stop "$STOP" --threads "$THREADS" --device vulkan --out "$f.tmp" > "$f.txt"
+  mv "$f.tmp" "$f.tsv"
+  mv "$f.tmp.search.tsv" "$f.tsv.search.tsv"
+  log "$c (win = $WIN) face à $REF (win = $REF_WIN) : $(($(date +%s) - start)) s, $(grep -E '^(arrêt|test séquentiel)' "$f.txt")"
 }
 
-log "essai $RUN, tailles $P, $GAMES parties, n = $SIMS, win = $WIN, taux $LR, $THREADS fils ; graines $SEED_BASE + cycle ; pas $START à $LAST"
+log "essai $RUN, tailles $P, $GAMES parties, n = $SIMS, win = $WIN, taux $LR, $THREADS fils ; graines $SEED_BASE + cycle ; pas $START à $LAST ; duels contre $REF à win = $REF_WIN"
 for k in $(seq "$START" "$LAST"); do
   c=$(name "$k")
   prev=$(name $((k - 1)))
