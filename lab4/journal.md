@@ -41,8 +41,35 @@ avant de reprendre l'apprentissage. Plan des prochaines expériences : **[lab.md
   non vérifiées ici. L'évaluateur à capacité limitée teste le découpage des recherches larges
   sans matériel GPU ; ce n'est pas un test des shaders ni du pilote.
 
+## Pilote sur mini (24 octobre)
+
+Lancé sur mini à la demande de l'utilisateur, pour un premier regard : CPU seul, `nice 19`,
+4 fils sur 6, binaire à part (`CARGO_TARGET_DIR=target/lab4`, sans toucher aux programmes de la
+production). Commit `835ad79`.
+
+- `speed`, 2 positions par taille, un cœur : A 102 ms par recherche, B 730 ms (×7,2), C 740 ms.
+  Aucune de ces 8 positions n'a plus de 16 coups : B et C y jouent au bit près pareil.
+- Mini-arènes, graine 41001, 8 donnes (28 parties), 4 fils : 559 s (B contre A) et 551 s
+  (C contre A). Scores **+8,8 ± 24,3** et **+7,7 ± 16,7** : bruit pur à cette taille, aucune
+  conclusion de force. Temps par décision entière du candidat ~950 ms, p95 ~2,6 s (4 fils
+  partagés). À ce débit, 400 donnes prendraient ~8 h sur mini.
+- Diagnostics du candidat (B ; C quasi identique) :
+
+| Joueurs | Racines > 16 coups | Profondeur moy. (A → B) | Tour fini (A → B) | Prochain tour atteint (A → B) |
+| --- | --- | --- | --- | --- |
+| 2 | 9 % | 6,2 → 9,8 | 57 → 77 % | 21 → 35 % |
+| 3 | 11 % | 6,2 → 11,0 | 51 → 74 % | 2,5 → 11 % |
+| 4 | 12 % | 6,6 → 10,7 | 49 → 66 % | 0,5 → 1,6 % |
+| 5 | 10 % | 6,8 → 11,5 | 54 → 68 % | 0,6 → 2,1 % |
+
+- Largeur : C explore 1 828 coups hors du top 16 sur ses racines larges, et n'en choisit
+  **aucun** (0 sur 2 369 recherches). B laisse 6 à 12 % des coups légaux sans visite.
+- Horizon : même à 3 200 simulations, à 4 et 5 joueurs, moins de 2 % des simulations atteignent
+  le prochain tour du joueur racine ; un tiers ne finissent même pas le tour courant. Le budget
+  s'use dans les décisions jeton par jeton du tour en cours, ce qui appuie l'étape 3 du plan
+  (prolonger les feuilles) plus que l'élargissement.
+
 ## Résultats de force
 
-**Aucun tournoi ni entraînement lancé. Aucun gain revendiqué.** Création, tests, commit et push
-uniquement, conformément à la demande. Les futures campagnes se feront sur une machine de calcul
-autorisée, jamais sur mini.
+**Aucun tournoi complet ni entraînement lancé. Aucun gain revendiqué.** Les mini-arènes du pilote
+ne mesurent pas la force.
