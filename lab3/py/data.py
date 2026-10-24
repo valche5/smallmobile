@@ -41,6 +41,10 @@ SUFFIX = ".pos"
 # fichier `x.pos.games` à côté de `x.pos` : le nombre de positions de chaque partie, dans l'ordre
 # (u32 petit-boutiste)
 GAMES = ".games"
+# fichier `x.pos.values` : la part de victoire attendue de chaque joueur relatif selon la recherche,
+# par position (f32 × 5 ; lab3/src/selfplay.rs, `values_file`). Absent des cycles d'avant le
+# 24 octobre : la valeur y est le résultat de la partie (`win`).
+VALUES = ".values"
 
 
 # fenêtre (en positions) quand `total` positions ont été jouées : tout jusqu'à WINDOW_MIN, puis
@@ -168,6 +172,10 @@ def pack(f):
         block_of[i] = blocks.setdefault(row.tobytes(), len(blocks))
         if block_of[i] == len(rows):
             rows.append(row)
+    values = f.with_name(f.name + VALUES)
+    extra = {}
+    if values.exists():
+        extra["value"] = np.fromfile(values, dtype="<f4").reshape(r["win"].shape)
     legal = r["policy"] != ILLEGAL
     lpos, key = np.nonzero(legal)
     tmp = out.with_name(out.name + ".tmp")
@@ -190,6 +198,7 @@ def pack(f):
             pol_count=np.bincount(lpos, minlength=n).astype(np.uint16),
             pol_key=key.astype(np.uint16),
             pol_val=r["policy"][lpos, key],
+            **extra,
         )
     tmp.rename(out)
     _forget(out)
@@ -272,6 +281,8 @@ class Packed:
     def __init__(self, files):
         parts = [_members(f) for f in files]
         small = {k: np.concatenate([p[k] for p in parts]) for k in self.SMALL + ("nz_count", "pol_count")}
+        # la valeur de la recherche, ou le résultat de la partie pour un fichier qui ne l'a pas
+        small["value"] = np.concatenate([p.get("value", p["win"]) for p in parts]) if parts else small["win"]
         self.__dict__.update(small)
         for name in self.MAPPED:
             setattr(self, name, Parts([p[name] for p in parts]))
@@ -295,7 +306,7 @@ class Packed:
     def take(self, sel):
         """Les champs pleins (`RECORD`) des positions `sel`."""
         n = len(sel)
-        out = {k: getattr(self, k)[sel] for k in ("players", "regions", "weight", "win", "gain")}
+        out = {k: getattr(self, k)[sel] for k in ("players", "regions", "weight", "win", "gain", "value")}
         ids, b, rank = _segments(self.rows_at, self.regions, sel)
         out["owner"] = np.full((n, REGIONS), OFF_MAP, np.uint8)
         out["owner"][b, rank] = self.owner[ids]

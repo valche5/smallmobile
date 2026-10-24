@@ -18,8 +18,9 @@
 //! u8 × GLOBAL  entrées de la partie
 //! ```
 //!
-//! Fichiers `*.pos` (`SUFFIX`). À côté de chacun : `games_file` (positions de chaque partie) et
-//! `moves_file` (de quoi rejouer chaque partie, `GameLog`).
+//! Fichiers `*.pos` (`SUFFIX`). À côté de chacun : `games_file` (positions de chaque partie),
+//! `moves_file` (de quoi rejouer chaque partie, `GameLog`) et `values_file` (la valeur de la
+//! recherche de chaque position).
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -112,10 +113,12 @@ struct Pending {
     owners: Option<[u8; REGIONS]>,
     /// Écart de la politique améliorée à l'a priori du réseau (`surprise`).
     surprise: f32,
+    /// Part de victoire attendue de chaque joueur (réel) selon la recherche (`Searched::wins`).
+    wins: [f32; MAX_PLAYERS],
 }
 
 impl Pending {
-    fn new(e: &Encoded, actor: usize, coins: [i32; MAX_PLAYERS], policy: Box<[(Key, u16)]>, surprise: f32) -> Pending {
+    fn new(e: &Encoded, actor: usize, coins: [i32; MAX_PLAYERS], policy: Box<[(Key, u16)]>, s: &Searched) -> Pending {
         Pending {
             regions: e.regions as u8,
             players: e.players as u8,
@@ -125,7 +128,8 @@ impl Pending {
             coins,
             policy,
             owners: None,
-            surprise,
+            surprise: surprise(s),
+            wins: s.wins,
         }
     }
 
@@ -171,6 +175,9 @@ pub const RECIPE: Options = Options { full_share: 0.125, fast: 50 };
 pub struct Played {
     pub outcome: Outcome,
     pub positions: usize,
+    /// La part de victoire attendue de chaque joueur relatif selon la recherche, pour chaque
+    /// position écrite (f32 × 5 petit-boutistes, `values_file`).
+    pub values: Vec<u8>,
     /// Les actions de toute la partie, à la suite ; la fin de celles de chaque coup.
     actions: Vec<Action>,
     ends: Vec<u32>,
@@ -211,7 +218,7 @@ pub async fn play(
         } else {
             let s = az.run(&g, &k, rng, az.cfg.iterations, true, &mut evals, oracle).await;
             let policy = s.policy.iter().map(|&(key, p)| (key, (p * PROBABILITY).round() as u16)).collect();
-            pending.push(Pending::new(&encode(&g, &k), actor, coins(&g), policy, surprise(&s)));
+            pending.push(Pending::new(&encode(&g, &k), actor, coins(&g), policy, &s));
             SEARCHED.fetch_add(1, Ordering::Relaxed);
             s.mv
         };
@@ -233,20 +240,26 @@ pub async fn play(
     let o = Outcome::of(&g);
     let n = o.players;
     let weights = weights(&pending.iter().map(|p| p.surprise).collect::<Vec<_>>());
+    let mut values = Vec::with_capacity(pending.len() * MAX_PLAYERS * 4);
     for (p, &weight) in pending.iter().zip(&weights) {
         let mut win = [0.0; MAX_PLAYERS];
         let mut gain = [0.0; MAX_PLAYERS];
+        let mut value = [0.0; MAX_PLAYERS];
         for r in 0..n {
             let q = (p.actor + r) % n;
             win[r] = o.win[q] as f32;
             gain[r] = (o.coins[q] - p.coins[q]) as f32;
+            value[r] = p.wins[q];
         }
+        // une recherche complète connaît toujours ses parts (NaN : coup forcé, jamais enregistré)
+        assert!(value[..n].iter().all(|v| v.is_finite()), "valeur de la recherche inconnue");
+        value.iter().for_each(|v| values.extend_from_slice(&v.to_le_bytes()));
         let owners = p.owners.expect("propriétaires");
         let (enc, policy) = (p.encoded(), p.policy());
         let rec = Record { enc: &enc, map: &table.map, weight, win, gain, owners, policy: &policy };
         out.write_all(&rec.bytes())?;
     }
-    Ok(Played { outcome: o, positions: pending.len(), actions, ends })
+    Ok(Played { outcome: o, positions: pending.len(), values, actions, ends })
 }
 
 /// La surprise d'une recherche : divergence de Kullback-Leibler de sa politique améliorée (la
@@ -410,6 +423,15 @@ pub fn games_file(path: &Path) -> std::path::PathBuf {
     name.into()
 }
 
+/// Le fichier qui accompagne un fichier de positions : la part de victoire attendue de chaque joueur
+/// relatif selon la recherche, par position (f32 × 5 petit-boutistes ; `VALUES` dans
+/// `lab3/py/data.py`, une cible de la valeur avec le résultat de la partie).
+pub fn values_file(path: &Path) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".values");
+    name.into()
+}
+
 /// Le fichier qui accompagne un fichier de positions : une ligne `GameLog` par partie.
 pub fn moves_file(path: &Path) -> std::path::PathBuf {
     let mut name = path.as_os_str().to_owned();
@@ -434,6 +456,7 @@ pub struct Finished {
     pub players: usize,
     pub positions: usize,
     pub records: Vec<u8>,
+    pub values: Vec<u8>,
     pub line: String,
 }
 
@@ -447,7 +470,7 @@ pub async fn game(i: usize, cfg: &Config, az: &Az, oracle: &impl Oracle) -> std:
     let mut records = Vec::new();
     let played = play(&table, seed, az, cfg.opts, &mut rng, &mut records, oracle).await?;
     let line = GameLog::new(deal, map_seed, seed, &table, &played).line();
-    Ok(Finished { players, positions: played.positions, records, line })
+    Ok(Finished { players, positions: played.positions, records, values: played.values, line })
 }
 
 /// Les positions retenues par toutes les parties, comptées dès leur recherche : une partie ne compte
@@ -580,8 +603,10 @@ pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Res
                 let mut out = BufWriter::new(File::create(&path)?);
                 let mut games = BufWriter::new(File::create(games_file(&path))?);
                 let mut logs = BufWriter::new(File::create(moves_file(&path))?);
+                let mut values = BufWriter::new(File::create(values_file(&path))?);
                 let mut record = |i: usize, finished: Finished| -> std::io::Result<()> {
                     out.write_all(&finished.records)?;
+                    values.write_all(&finished.values)?;
                     games.write_all(&(finished.positions as u32).to_le_bytes())?;
                     writeln!(logs, "{}", finished.line)?;
                     let count = finished.positions;
@@ -647,6 +672,7 @@ pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Res
                 }
                 drop(record);
                 out.flush()?;
+                values.flush()?;
                 logs.flush()?;
                 games.flush()
             })?);

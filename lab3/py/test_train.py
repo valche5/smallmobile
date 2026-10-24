@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from data import GAMES, ILLEGAL, NODE, OFF_MAP, RECORD, REGIONS, load, load_packed
+from data import GAMES, ILLEGAL, NODE, OFF_MAP, RECORD, REGIONS, VALUES, load, load_packed
 from model import Net, export, load as load_net
 from train import batches, fields, main
 
@@ -73,16 +73,22 @@ class BatchesTest(unittest.TestCase):
             for name, part, counts in (("a.pos", recs[:15], [7, 8]), ("b.pos", recs[15:], [10, 0, 15])):
                 part.tofile(Path(tmp) / name)
                 np.array(counts, "<u4").tofile(Path(tmp) / (name + GAMES))
+            # la valeur de la recherche de b.pos ; a.pos n'en a pas (cycles d'avant) : son résultat
+            values = np.random.default_rng(4).random((25, 5)).astype("<f4")
+            values.tofile(Path(tmp) / ("b.pos" + VALUES))
             packed, keys = load_packed([tmp])
             self.assertEqual(len(packed), len(recs))
+            np.testing.assert_array_equal(packed.take(np.array([3, 14]))["value"], recs["win"][[3, 14]])
+            np.testing.assert_array_equal(packed.take(np.array([15, 39]))["value"], values[[0, 24]])
             np.testing.assert_array_equal(keys, load([tmp])[1])
             sel = np.array([0, 3, 14, 15, 16, 39])
             got, want = fields(packed, sel), fields(recs, sel)
+            got.pop("value")
             self.assertEqual(sorted(got), sorted(want))
             for name in want:
                 np.testing.assert_array_equal(got[name], want[name], err_msg=name)
             for a, b in zip(batches(packed, sel, 4, "cpu"), batches(recs, sel, 4, "cpu")):
-                for name in b:
+                for name in set(b) - {"value"}:
                     torch.testing.assert_close(a[name], b[name], rtol=0, atol=0)
 
     def test_empty_selection(self):
@@ -105,7 +111,7 @@ class ContinuousTest(unittest.TestCase):
             def step(c, prev):
                 argv = ["train.py", "--cycles", str(tmp), "--last", c, "--init", str(tmp / f"{prev}.bin"),
                         "--out", str(tmp / f"{c}.bin"), "--state-in", str(tmp / f"{prev}.state.pt"),
-                        "--state-out", str(tmp / f"{c}.state.pt")]
+                        "--state-out", str(tmp / f"{c}.state.pt"), "--value-mix", "0.5"]
                 old, sys.argv = sys.argv, argv
                 try:
                     with redirect_stdout(StringIO()) as out:

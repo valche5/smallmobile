@@ -106,6 +106,8 @@ def tensors(r, device):
         legal=legal,
         policy=policy / policy.sum(1, keepdim=True).clamp(min=1),
         win=torch.from_numpy(r["win"]).to(device),
+        # la valeur de la recherche (`data.VALUES`) ; le résultat sans elle (enregistrements bruts)
+        value=torch.from_numpy(r["value"] if "value" in r else r["win"]).to(device),
         gain=torch.from_numpy(r["gain"]).to(device) / GAIN_SCALE,
         owner=torch.from_numpy(r["owner"].astype(np.int64)).to(device),
     )
@@ -114,15 +116,17 @@ def tensors(r, device):
 METRICS = ("politique", "valeur", "pièces", "propriétaires", "précision", "brier")
 
 
-def losses(net, b):
+def losses(net, b, mix=0.0):
     """Pertes et mesures (`METRICS`) : politique, valeur, pièces, propriétaires, précision de la
-    politique, brier."""
+    politique, brier. La cible de la valeur : le résultat de la partie, mêlé pour une part `mix` à la
+    valeur de la recherche (`--value-mix`) ; le brier compare toujours au résultat."""
     logits, value, own = net(b["node"], b["glob"], b["adj"], b["regions"])
     logits = logits.masked_fill(~b["legal"], -1e9)
     pol = -(b["policy"] * F.log_softmax(logits, 1)).sum(1).mean()
     present = torch.arange(5, device=value.device)[None] < b["players"][:, None]
     vlog = value[:, :5].masked_fill(~present, -1e9)
-    val = -(b["win"] * F.log_softmax(vlog, 1)).sum(1).mean()
+    target = b["win"] if mix == 0 else (1 - mix) * b["win"] + mix * b["value"]
+    val = -(target * F.log_softmax(vlog, 1)).sum(1).mean()
     gain = (((value[:, 5:] - b["gain"]) ** 2) * present).sum(1).mean()
     owners = F.cross_entropy(own.reshape(-1, OWNERS), b["owner"].reshape(-1), ignore_index=OFF_MAP)
     # précision : le coup préféré de la recherche est-il le préféré du réseau ?
@@ -132,10 +136,10 @@ def losses(net, b):
     return pol, val, gain, owners, acc, brier
 
 
-def learn(net, opt, sched, b):
+def learn(net, opt, sched, b, mix=0.0):
     """Un lot d'entraînement (en bf16) ; renvoie ses mesures (`METRICS`)."""
     with torch.autocast(b["node"].device.type, dtype=torch.bfloat16):
-        out = losses(net, b)
+        out = losses(net, b, mix)
         pol, val, gain, owners = out[:4]
         loss = pol + val + GAIN_WEIGHT * gain + OWN_WEIGHT * owners
     opt.zero_grad(set_to_none=True)
@@ -171,6 +175,8 @@ def main():
     ap.add_argument("--threads", type=int, help="cœurs de PyTorch")
     ap.add_argument("--seed", type=int, default=0, help="ordre des lots")
     ap.add_argument("--lr", type=float, default=LR, help="taux maximal du cycle (le taux constant en continu)")
+    ap.add_argument("--value-mix", type=float, default=0.0,
+                    help="part de la valeur de la recherche dans la cible de la valeur (0 : le résultat seul)")
     ap.add_argument("--state-in", help="en continu : l'état du pas précédent, s'il existe")
     ap.add_argument("--state-out", help="en continu : l'état écrit pour le pas suivant")
     args = ap.parse_args()
@@ -219,7 +225,7 @@ def main():
     sums = np.zeros(len(METRICS))
     params = list(net.parameters())
     for i, b in enumerate(batches(recs, order, BATCH, device)):
-        sums += learn(net, opt, sched, b)
+        sums += learn(net, opt, sched, b, args.value_mix)
         if ema and i % EMA_EVERY == EMA_EVERY - 1:
             with torch.no_grad():
                 torch._foreach_lerp_(ema, params, 1 - EMA**EMA_EVERY)

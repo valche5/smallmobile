@@ -538,6 +538,30 @@ maximum du shader en largeur 128 ; `runs/deep7/c070.bin`, mêmes sorties), cycle
 dans `data/deep7`, n = 400, en continu (optimiseur neuf au premier pas : les poids changent de
 forme), c071 à c090 ; mesures : c080 et c090 contre c070 de deep6.
 
+Pas 71 à 90, fini à 03:16 (~540 s par pas). Duels contre c000 tous gagnés, de +4,4 à +12,1.
+Confirmations sur 920 donnes neuves :
+
+| Duel | Score | 2 joueurs | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- |
+| c080 contre c070 (deep6) | +0,7 ± 1,5 | −1,1 | +1,7 | +2,2 | −0,1 |
+| c090 contre c070 (deep6) | **+0,9 ± 1,5** | +2,2 | +0,6 | +1,5 | −0,7 |
+| c090 contre c000 | +7,3 ± 1,6 | +8,0 | +5,4 | +6,8 | +8,8 |
+
+**La 7e couche n'apporte rien de net** : +0,9 en 20 pas, moins que les ~+2 par 10 pas d'avant ; la
+progression ralentit de nouveau. La validation s'améliore pourtant (politique 1,305 → 1,292,
+valeur 1,026 → 1,013) : comme à 6 couches, la capacité aide à apprendre, pas à jouer mieux.
+
+Essai 5, **la valeur de la recherche comme cible** : la valeur n'apprend que le résultat de chaque
+partie, très bruité à 4 ou 5 joueurs ; le saut de n = 400 venait de meilleures cibles. Le selfplay
+écrit à côté de chaque `.pos` un `.pos.values` : la part de victoire attendue de chaque joueur
+selon la recherche (`Searched::wins`, moyenne des valeurs remontées à la racine), sans changer
+les parties (mêmes fichiers au bit près sur un fil) ni le format des `.pos`. La cible devient
+(1 − m) × résultat + m × valeur de la recherche (`VALUE_MIX`, `train.py --value-mix` ; la
+moyenne « z + q » à m = 0,5) ; une position sans `.values` (cycles d'avant) garde le résultat.
+Comparaison appariée depuis c090 de deep7 (mêmes graines) : le témoin deep7 continue sans
+changement de c091 à c100 (lancé à 03:22), puis la branche `deep7q` avec m = 0,5 ; mesures :
+chaque c100 contre c090, et les deux c100 l'un contre l'autre.
+
 Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
 (`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En
 RAM, la fenêtre aurait pris ~31 Go vers c060 sur les 32 du PC ; mappée, le noyau peut rendre les

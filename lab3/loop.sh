@@ -57,6 +57,9 @@ LR=${LR:-5e-4}
 # CONTINUOUS=1 : l'optimiseur et la moyenne des poids passent d'un pas à l'autre (cNNN.state.pt),
 # taux LR constant, le réseau qui joue est la moyenne (train.py, « En continu »)
 CONTINUOUS=${CONTINUOUS:-0}
+# VALUE_MIX : part de la valeur de la recherche dans la cible de la valeur (train.py, `--value-mix` ;
+# fichiers `.pos.values` du selfplay)
+VALUE_MIX=${VALUE_MIX:-0}
 DEVICE=${DEVICE:-cpu}
 case "$DEVICE" in
   cpu) PARALLEL=${PARALLEL:-1} ;;
@@ -121,7 +124,7 @@ train() { # réseau, réseau de départ
   start=$(date +%s)
   [ "$CONTINUOUS" = 1 ] && state=(--state-in "../runs/$RUN/$prev.state.pt" --state-out "../runs/$RUN/$c.state.pt")
   if ! (cd lab3/py && .venv/bin/python train.py --cycles "../data/$RUN" --last "$c" --init "../runs/$RUN/$prev.bin" \
-    --out "../runs/$RUN/$c.tmp.bin" --threads "$TRAIN" --lr "$LR" "${state[@]}") > "$OUT/$c-train.log" 2>&1; then
+    --out "../runs/$RUN/$c.tmp.bin" --threads "$TRAIN" --lr "$LR" --value-mix "$VALUE_MIX" "${state[@]}") > "$OUT/$c-train.log" 2>&1; then
     tail -20 "$OUT/$c-train.log"
     return 1
   fi
