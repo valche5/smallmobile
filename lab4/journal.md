@@ -143,6 +143,42 @@ Bilan des essais sur la recherche à poids fixes : 8 fois plus de simulations (B
 l'ordre imposé (D, −1,0 ± 1,4) ou la fusion des jetons (E, +0,4 ± 1,5) : rien de net. Finir plus
 souvent son tour ne paie pas ; le prochain tour reste hors de portée à 4 et 5 joueurs.
 
+## Critère de la valeur et diagnostic de la valeur (24 octobre)
+
+Remarque de l'utilisateur : le mélange 50 % victoire, 50 % avance en pièces n'est peut-être pas le
+bon, on veut la victoire. Option `win=` (poids de la victoire dans la valeur que la recherche
+maximise, défaut 0,5 = lab3). Duels contre A (`win=0.5`), n = 400, 920 donnes chacun :
+
+| Poids de la victoire | Graine | Score (95 %) | 2 joueurs | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0,75 | 42006 | +1,3 ± 1,4 | −0,2 | +2,3 | +1,8 | +1,3 |
+| 0,75 | 42008 | +1,3 ± 1,5 | +2,6 | +0,6 | +0,9 | +1,2 |
+| 1 | 42007 | +1,2 ± 1,5 | +0,2 | +2,1 | +3,1 | −0,4 |
+
+Les deux duels à 0,75 réunis (1 840 donnes, moyenne pondérée par taille) : **+1,3 ± 1,0**,
+positif à toutes les tailles (+1,2 à +1,5). Petit gain, mais le premier significatif de lab4. À 1,
+l'avance en pièces s'effondre (−3,6 pièces à 2 joueurs) sans perte de victoires.
+
+Diagnostic de la valeur (`py/stages.py`), parties de validation de lab3 c126–c130 (217 578
+positions, 6 289 parties), entropie croisée de la victoire :
+
+| Joueurs | Manches restantes | Uniforme | Pièces actuelles | Réseau c130 | Recherche (n = 400) |
+| --- | --- | --- | --- | --- | --- |
+| 2 | tout | 0,693 | 0,631 | 0,268 | 0,262 |
+| 3 | tout | 1,099 | 1,107 | 0,950 | 0,940 |
+| 4 | 6 et + | 1,386 | 1,413 | 1,354 | 1,351 |
+| 4 | 4–5 | 1,386 | 1,436 | 1,291 | 1,285 |
+| 4 | 2–3 | 1,386 | 1,410 | 1,128 | 1,112 |
+| 4 | 0–1 | 1,386 | 1,351 | 0,630 | 0,588 |
+| 5 | 6 et + | 1,609 | 1,628 | 1,585 | 1,582 |
+| 5 | tout | 1,609 | 1,615 | 1,333 | 1,317 |
+
+- À 3 à 5 joueurs, avec 4 manches ou plus à jouer, la valeur ne sait presque rien (à 4 joueurs :
+  1,354 contre 1,386 sans rien savoir). Les pièces actuelles ne disent rien avant la fin.
+- La recherche à 400 simulations ne fait guère mieux que le réseau (à 4 joueurs, 1,144 contre
+  1,157 en tout) ; son avance n'apparaît qu'à la fin (0,588 contre 0,630). Apprendre sa valeur au
+  réseau ne lui apprendrait presque rien de neuf.
+
 ## Résultats de force
 
 **Aucun tournoi complet ni entraînement lancé. Aucun gain revendiqué.** Les mini-arènes du pilote

@@ -52,8 +52,10 @@ fn configurations_are_explicit_and_invalid_budgets_are_rejected() {
     assert_eq!(Config::parse("candidates=32").unwrap().candidates, Candidates::Top(32));
     assert!(Config::parse("tokens=ordered").unwrap().ordered_tokens);
     assert!(Config::parse("tokens=merged").unwrap().merge_tokens);
+    assert_eq!(Config::parse("win=1").unwrap().win_weight, 1.0);
+    assert_eq!(Config::default().win_weight, 0.5);
     assert!(!Config::default().ordered_tokens);
-    for bad in ["n=0", "n=-1", "n=no", "candidates=0", "candidates=-1", "candidates=no", "width=16", "tokens=any"] {
+    for bad in ["n=0", "n=-1", "n=no", "candidates=0", "candidates=-1", "candidates=no", "width=16", "tokens=any", "win=1.5", "win=-0.1", "win=x"] {
         assert!(Config::parse(bad).is_none(), "{bad}");
     }
 }
@@ -110,9 +112,9 @@ fn reference_matches_frozen_lab3_with_c130_and_the_same_random_stream() {
 #[test]
 fn widening_visits_every_legal_move_and_reports_actual_budget_and_rank() {
     let net = Arc::new(Net::load(&weights("gen0.bin")).unwrap());
-    let narrow = Az::new(Config { iterations: 128, candidates: Candidates::Top(16), ordered_tokens: false, merge_tokens: false }, net.clone(), "zero".into());
-    let wide = Az::new(Config { iterations: 128, candidates: Candidates::All, ordered_tokens: false, merge_tokens: false }, net.clone(), "zero".into());
-    let tiny = Az::new(Config { iterations: 7, candidates: Candidates::All, ordered_tokens: false, merge_tokens: false }, net, "zero".into());
+    let narrow = Az::new(Config { iterations: 128, candidates: Candidates::Top(16), ordered_tokens: false, merge_tokens: false, win_weight: 0.5 }, net.clone(), "zero".into());
+    let wide = Az::new(Config { iterations: 128, candidates: Candidates::All, ordered_tokens: false, merge_tokens: false, win_weight: 0.5 }, net.clone(), "zero".into());
+    let tiny = Az::new(Config { iterations: 7, candidates: Candidates::All, ordered_tokens: false, merge_tokens: false, win_weight: 0.5 }, net, "zero".into());
     let normal = KernelAi::new(smallmobile_kernel::Level::Normal);
     // Trouver une position réelle avec plus de 16 choix, sans jouer d'arène.
     for seed in 1..=8 {

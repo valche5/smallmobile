@@ -73,9 +73,9 @@ impl std::fmt::Display for Candidates {
 /// DeepMind) : plus la recherche avance, plus elles l'emportent sur les logits du réseau.
 const VISIT_INIT: f32 = 50.0;
 const VALUE_SCALE: f32 = 0.1;
-/// Poids de la probabilité de victoire dans la valeur ; le reste vient de l'avance en pièces prévue
-/// sur le meilleur rival (pièces actuelles + pièces que le réseau prévoit d'ici la fin), sigmoïde
-/// d'échelle `SCALE`.
+/// Poids par défaut de la probabilité de victoire dans la valeur (`Config::win_weight`) ; le reste
+/// vient de l'avance en pièces prévue sur le meilleur rival (pièces actuelles + pièces que le réseau
+/// prévoit d'ici la fin), sigmoïde d'échelle `SCALE`.
 const WIN_WEIGHT: f32 = 0.5;
 const SCALE: f32 = 8.0;
 
@@ -91,17 +91,26 @@ pub struct Config {
     /// suites de jetons qui posent les mêmes jetons depuis la même position mènent au même nœud
     /// (`Tree::merged`).
     pub merge_tokens: bool,
+    /// Le poids de la probabilité de victoire dans la valeur que la recherche maximise (`win=0.75`),
+    /// de 0 à 1 ; le reste, l'avance en pièces (`Az::blend`).
+    pub win_weight: f32,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { iterations: 400, candidates: Candidates::Top(CONSIDERED), ordered_tokens: false, merge_tokens: false }
+        Config {
+            iterations: 400,
+            candidates: Candidates::Top(CONSIDERED),
+            ordered_tokens: false,
+            merge_tokens: false,
+            win_weight: WIN_WEIGHT,
+        }
     }
 }
 
 impl Config {
-    /// `n=3200,candidates=all,tokens=ordered|merged|free` ; les valeurs nulles et les options
-    /// inconnues sont refusées.
+    /// `n=3200,candidates=all,tokens=ordered|merged|free,win=0.75` ; les valeurs nulles, les poids
+    /// hors de 0 à 1 et les options inconnues sont refusés.
     pub fn parse(text: &str) -> Option<Config> {
         let mut cfg = Config::default();
         for part in text.split(',').filter(|p| !p.is_empty()) {
@@ -118,6 +127,9 @@ impl Config {
                         }
                         Candidates::Top(count)
                     };
+                }
+                "win" => {
+                    cfg.win_weight = v.parse().ok().filter(|w: &f32| (0.0..=1.0).contains(w))?;
                 }
                 "tokens" => {
                     (cfg.ordered_tokens, cfg.merge_tokens) = match v {
@@ -627,7 +639,8 @@ impl Az {
             (_, true) => ", tokens=merged",
             _ => "",
         };
-        format!("az({}, n={}, candidates={}{tokens})", self.label, self.cfg.iterations, self.cfg.candidates)
+        let win = if self.cfg.win_weight == WIN_WEIGHT { String::new() } else { format!(", win={}", self.cfg.win_weight) };
+        format!("az({}, n={}, candidates={}{tokens}{win})", self.label, self.cfg.iterations, self.cfg.candidates)
     }
 
     /// Une position nouvelle, évaluée (`judged`) : ses coups et leurs logits, et la valeur que lui
@@ -683,7 +696,7 @@ impl Az {
             v[WINS + q] = win[q];
             let rival = (0..n).filter(|&o| o != q).map(|o| finals[o]).fold(f32::NEG_INFINITY, f32::max);
             let lead = 1.0 / (1.0 + (-(finals[q] - rival) / SCALE).exp());
-            v[q] = WIN_WEIGHT * win[q] + (1.0 - WIN_WEIGHT) * lead;
+            v[q] = self.cfg.win_weight * win[q] + (1.0 - self.cfg.win_weight) * lead;
         }
         v
     }
