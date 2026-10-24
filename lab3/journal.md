@@ -562,6 +562,23 @@ Comparaison appariée depuis c090 de deep7 (mêmes graines) : le témoin deep7 c
 changement de c091 à c100 (lancé à 03:22), puis la branche `deep7q` avec m = 0,5 ; mesures :
 chaque c100 contre c090, et les deux c100 l'un contre l'autre.
 
+Témoin c091–c100 fini à 05:00, `deep7q` c091–c100 de 05:00 à 06:36 (~570 s par pas, la fenêtre
+passe à 21 millions de positions). Confirmations sur 920 donnes neuves :
+
+| Duel | Score | 2 joueurs | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- |
+| deep7 c100 (témoin) contre c090 | **+1,9 ± 1,5** | +2,6 | +2,2 | +2,0 | +0,6 |
+| deep7q c100 (m = 0,5) contre c090 | +0,3 ± 1,5 | +0,3 | +0,1 | +0,4 | +0,3 |
+| deep7q c100 contre deep7 c100 | **−0,6 ± 1,5** | −2,9 | −0,8 | +0,5 | +0,7 |
+
+**La valeur de la recherche n'aide pas**, du moins en 10 pas : rien de mieux que le témoin, sans
+doute un peu moins. L'effet est dilué (à c100, 10 cycles sur les 25 de la fenêtre ont des
+`.values`), et la valeur de validation (mesurée contre le résultat) ne bouge pas : 1,018 contre
+1,016. `VALUE_MIX` reste à 0 ; les `.pos.values` restent écrits (20 octets par position). Le
+témoin, lui, reprend : +1,9 en 10 pas.
+
+Suite : deep7 continué de c101 à c110 (lancé à 06:42).
+
 Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
 (`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En
 RAM, la fenêtre aurait pris ~31 Go vers c060 sur les 32 du PC ; mappée, le noyau peut rendre les
