@@ -309,6 +309,16 @@ Essai (`lab4/td.sh`) : depuis c130, 3 pas sur la fenêtre de deep7, taux 1,5e-4,
 - Rien de mesurable en 3 pas depuis un réseau mûr, comme la tête des propriétaires. Un vrai
   essai demanderait la boucle entière (selfplay, puis 10 à 20 pas) avec `--td`.
 
+## Essai w2 : victoire seule et cibles à court terme (25 octobre)
+
+Décision de l'utilisateur : les deux ensemble. Depuis c130, `RUN=w2`, `WIN=1`, `TD=0.5`, taux
+1,5e-4 en un cycle par pas (AdamW neuf), n = 400, 25 000 parties, pas 131 à 150 (service
+`lab4-w2`, lancé à 01:23). Fenêtre de deep7 liée dans `data/w2`, et les parties de c131 de w1
+(jouées par c130 à win = 1) réutilisées. Duels de la boucle : réseau à win = 1 contre c130 à
+win = 0,5. Suivi : valeur sur les positions fixes à chaque réseau (`runs/w2/track.txt`) ; après
+c150, confirmations sur 920 donnes (contre c130 à win = 0,5 puis à 1, graines 42013 et 42014) et
+valeur sur les positions du plafond (`runs/w2/final.txt`).
+
 ## Résultats de force
 
 **Aucun tournoi complet ni entraînement lancé. Aucun gain revendiqué.** Les mini-arènes du pilote
