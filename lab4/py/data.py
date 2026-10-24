@@ -232,12 +232,17 @@ class Packed:
     SMALL = ("players", "regions", "weight", "win", "gain", "value", "keys")
     MAPPED = ("adj", "nz_rows", "nz_glob", "nz_big", "pol_key", "pol_val")
 
-    def __init__(self, files):
+    def __init__(self, files, td=False):
         parts = [_members(f) for f in files]
         for p, f in zip(parts, files):
             p["keys"] = _keys(p, Path(f))
         small = {k: np.concatenate([p[k] for p in parts]) for k in self.SMALL + ("nz_count", "nz_big_count", "pol_count")}
         self.__dict__.update(small)
+        # les cibles à court terme (`short_term`) : la valeur de la recherche au tour suivant
+        if td:
+            terms = [short_term(Path(f)) for f in files]
+            self.short = np.concatenate([t for t, _ in terms]) if terms else self.win
+            self.short_ok = np.concatenate([ok for _, ok in terms]) if terms else np.zeros(0, bool)
         for name in self.MAPPED:
             setattr(self, name, Parts([p[name] for p in parts]))
         self.nz_ones = Bits([p["nz_ones"] for p in parts], [int(p["nz_count"].sum(dtype=np.int64)) for p in parts])
@@ -263,6 +268,8 @@ class Packed:
         """Les champs pleins (`RECORD`) des positions `sel`."""
         n = len(sel)
         out = {k: getattr(self, k)[sel] for k in ("players", "regions", "weight", "win", "gain", "value")}
+        if hasattr(self, "short"):
+            out["short"], out["short_ok"] = self.short[sel], self.short_ok[sel]
         ids, b, rank = _segments(self.rows_at, self.regions, sel)
         # où sont les non nuls : les lignes des régions présentes, puis la partie
         node_nz = np.zeros((n, REGIONS, NODE), bool)
@@ -296,11 +303,71 @@ def sources(paths):
     return files
 
 
-def load_packed(paths):
+def load_packed(paths, td=False):
     """La fenêtre des fichiers (ou dossiers) donnés, sous forme compacte (`Packed`), et la clé de la
-    partie de chaque position (`map_keys`)."""
-    recs = Packed(sources(paths))
+    partie de chaque position (`map_keys`). `td` : avec les cibles à court terme (`short_term`),
+    calculées d'abord par plusieurs processus pour les fichiers qui ne les ont pas."""
+    files = sources(paths)
+    if td:
+        from concurrent.futures import ProcessPoolExecutor
+        missing = [f for f in files if not _td_cache(f).exists()]
+        if missing:
+            with ProcessPoolExecutor(8) as pool:
+                list(pool.map(short_term, missing))
+    recs = Packed(files, td=td)
     return recs, recs.keys
+
+
+# Les cibles à court terme (train.py, `--td`) : pour chaque position, la part de victoire que la
+# recherche donne au même joueur à sa prochaine position enregistrée d'une manche suivante (son tour
+# suivant, ou plus tard : une décision sur huit est enregistrée), vue de lui comme la position.
+# Une position sans suite de ce joueur, d'un fichier sans valeur de recherche (cycles d'avant le
+# 24 octobre : `value` y est le résultat) ou d'une partie à égalité (le joueur qui agit se lit au
+# vainqueur, vu de chacun) n'en a pas (`ok` faux). Calculées une fois par fichier, gardées dans
+# TD_CACHE.
+TD_CACHE = Path(__file__).resolve().parents[1] / "data" / "td"
+# entrée de la partie : la manche en cours (lab4/brain/src/encode.rs)
+G_ROUND = 4
+
+
+def _td_cache(f):
+    parts = Path(f).resolve().parts
+    return TD_CACHE / ("-".join(parts[-3:]) + ".npz")
+
+
+def short_term(f):
+    """Les cibles à court terme du fichier compact `f` (`COMPACT`) : (n, 5) parts de victoire, et
+    lesquelles existent."""
+    cache = _td_cache(f)
+    if cache.exists():
+        with np.load(cache) as z:
+            return z["target"], z["ok"]
+    p = Packed([f])
+    n = len(p)
+    target, ok = p.win.copy(), np.zeros(n, bool)
+    if n and not np.array_equal(p.value, p.win):
+        counts = games(Path(f).with_name(Path(f).name.removesuffix(COMPACT)), n)
+        rounds = np.concatenate([p.take(np.arange(lo, min(n, lo + 65536)))["glob"][:, G_ROUND] for lo in range(0, n, 65536)])
+        # le joueur qui agit, au décalage près du vainqueur (le même pour toute la partie)
+        single = p.win.max(1) == 1
+        players = p.players.astype(np.int64)
+        actor = (players - p.win.argmax(1)) % players
+        group = np.repeat(np.arange(len(counts)), counts) * 8 + actor
+        idx = np.flatnonzero(single)
+        key = group[idx] * 1000 + rounds[idx]
+        order = np.argsort(key, kind="stable")
+        at = idx[order]
+        # la première position du même joueur, d'une manche plus grande
+        nxt = np.searchsorted(key[order], key[order], side="right")
+        has = nxt < len(at)
+        has[has] = group[at[nxt[has]]] == group[at[has]]
+        target[at[has]] = p.value[at[nxt[has]]]
+        ok[at[has]] = True
+    TD_CACHE.mkdir(parents=True, exist_ok=True)
+    tmp = cache.with_name(cache.name + ".tmp.npz")
+    np.savez(tmp, target=target, ok=ok)
+    tmp.rename(cache)
+    return target, ok
 
 
 def load(paths, keep=None):

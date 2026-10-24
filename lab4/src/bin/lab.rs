@@ -509,7 +509,8 @@ fn analyze_cmd(opts: &HashMap<String, String>) {
 /// Le plafond de la valeur (`ceiling`) : par position, la victoire prédite par le réseau, puis les
 /// parts de victoire de chaque suite. Lignes `position` (numéro, joueurs, manche, dernière manche,
 /// joueur qui agit, victoire prédite de chaque joueur réel) et `suite` (numéro de la position, part
-/// de victoire de chaque joueur réel).
+/// de victoire de chaque joueur réel). Les positions aussi en enregistrements (`F.pos`, sans
+/// cibles : `selfplay::RECORD`), pour y lire la valeur d'autres réseaux (lab4/py/ceiling.py).
 fn ceiling_cmd(opts: &HashMap<String, String>) {
     use smallmobile_lab4::ceiling;
     let name = opts.get("agent").unwrap_or_else(|| usage());
@@ -544,6 +545,13 @@ fn ceiling_cmd(opts: &HashMap<String, String>) {
             let win: Vec<String> = o.win[..n].iter().map(|v| format!("{v}")).collect();
             writeln!(out, "suite\t{i}\t{}", win.join("\t")).unwrap();
         }
+    }
+    let mut pos = std::io::BufWriter::new(std::fs::File::create(format!("{path}.pos")).expect("fichier des positions"));
+    let no_policy = [selfplay::ILLEGAL; smallmobile_lab4::moves::KEYS];
+    for p in &positions {
+        let enc = smallmobile_lab4::encode::encode(&p.game, &p.knowledge);
+        let rec = selfplay::Record { enc: &enc, map: p.game.map, weight: 1.0, win: [0.0; 5], gain: [0.0; 5], policy: &no_policy };
+        pos.write_all(&rec.bytes()).unwrap();
     }
     eprintln!("{} positions, {} suites en {:.0} s", positions.len(), cfg.playouts * positions.len(), start.elapsed().as_secs_f64());
 }

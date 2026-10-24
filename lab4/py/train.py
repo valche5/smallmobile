@@ -96,8 +96,12 @@ def tensors(r, device):
         legal=legal,
         policy=policy / policy.sum(1, keepdim=True).clamp(min=1),
         win=torch.from_numpy(r["win"]).to(device),
-        # la valeur de la recherche (`data.VALUES`) ; le résultat sans elle (enregistrements bruts)
-        value=torch.from_numpy(r["value"] if "value" in r else r["win"]).to(device),
+        **(
+            # les cibles à court terme (`data.short_term`, `--td`)
+            {"short": torch.from_numpy(r["short"]).to(device), "short_ok": torch.from_numpy(r["short_ok"]).to(device)}
+            if "short" in r
+            else {}
+        ),
         gain=torch.from_numpy(r["gain"]).to(device) / GAIN_SCALE,
     )
 
@@ -105,16 +109,19 @@ def tensors(r, device):
 METRICS = ("politique", "valeur", "pièces", "précision", "brier")
 
 
-def losses(net, b, mix=0.0):
+def losses(net, b, td=0.0):
     """Pertes et mesures (`METRICS`) : politique, valeur, pièces, précision de la politique,
-    brier. La cible de la valeur : le résultat de la partie, mêlé pour une part `mix` à la
-    valeur de la recherche (`--value-mix`) ; le brier compare toujours au résultat."""
+    brier. La cible de la valeur : le résultat de la partie, mêlé pour une part `td` à la valeur de
+    la recherche au tour suivant du joueur, là où elle existe (`--td`, `data.short_term`) ; le brier
+    compare toujours au résultat."""
     logits, value = net(b["node"], b["glob"], b["adj"], b["regions"])
     logits = logits.masked_fill(~b["legal"], -1e9)
     pol = -(b["policy"] * F.log_softmax(logits, 1)).sum(1).mean()
     present = torch.arange(5, device=value.device)[None] < b["players"][:, None]
     vlog = value[:, :5].masked_fill(~present, -1e9)
-    target = b["win"] if mix == 0 else (1 - mix) * b["win"] + mix * b["value"]
+    target = b["win"]
+    if td:
+        target = torch.where(b["short_ok"][:, None], (1 - td) * target + td * b["short"], target)
     val = -(target * F.log_softmax(vlog, 1)).sum(1).mean()
     gain = (((value[:, 5:] - b["gain"]) ** 2) * present).sum(1).mean()
     # précision : le coup préféré de la recherche est-il le préféré du réseau ?
@@ -124,10 +131,10 @@ def losses(net, b, mix=0.0):
     return pol, val, gain, acc, brier
 
 
-def learn(net, opt, sched, b, mix=0.0):
+def learn(net, opt, sched, b, td=0.0):
     """Un lot d'entraînement (en bf16) ; renvoie ses mesures (`METRICS`)."""
     with torch.autocast(b["node"].device.type, dtype=torch.bfloat16):
-        out = losses(net, b, mix)
+        out = losses(net, b, td)
         pol, val, gain = out[:3]
         loss = pol + val + GAIN_WEIGHT * gain
     opt.zero_grad(set_to_none=True)
@@ -163,8 +170,8 @@ def main():
     ap.add_argument("--threads", type=int, help="cœurs de PyTorch")
     ap.add_argument("--seed", type=int, default=0, help="ordre des lots")
     ap.add_argument("--lr", type=float, default=LR, help="taux maximal du cycle")
-    ap.add_argument("--value-mix", type=float, default=0.0,
-                    help="part de la valeur de la recherche dans la cible de la valeur (0 : le résultat seul)")
+    ap.add_argument("--td", type=float, default=0.0,
+                    help="part de la valeur de la recherche au tour suivant dans la cible de la valeur (0 : le résultat seul)")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -172,7 +179,7 @@ def main():
         torch.set_num_threads(args.threads)
     start = time.time()
     dirs, new = chosen(args.cycles, args.last)
-    recs, keys = load_packed(dirs)
+    recs, keys = load_packed(dirs, td=args.td > 0)
     rng = np.random.default_rng(args.seed)
     # validation sur des parties entières, choisies par une règle fixe (`in_validation`) : aucune
     # position d'une partie vue à l'entraînement, ni par ce réseau ni par les suivants
@@ -197,7 +204,7 @@ def main():
     net.train()
     sums = np.zeros(len(METRICS))
     for b in batches(recs, order, BATCH, device):
-        sums += learn(net, opt, sched, b, args.value_mix)
+        sums += learn(net, opt, sched, b, args.td)
     train_secs = time.time() - start
 
     start = time.time()

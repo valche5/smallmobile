@@ -102,7 +102,7 @@ class TrainingTest(unittest.TestCase):
             torch.manual_seed(0)
             export(Net(16, 1), tmp / "c000.bin")
             argv = ["train.py", "--cycles", str(tmp), "--last", "c002", "--init", str(tmp / "c000.bin"),
-                    "--out", str(tmp / "c002.bin"), "--value-mix", "0.5"]
+                    "--out", str(tmp / "c002.bin"), "--td", "0.5"]
             old, sys.argv = sys.argv, argv
             try:
                 with redirect_stdout(StringIO()) as out:
