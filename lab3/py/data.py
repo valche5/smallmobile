@@ -2,9 +2,14 @@
 et les enregistrements pleins qu'elle redonne (`RECORD`, lab3/src/selfplay.rs)."""
 
 import mmap
+import resource
 from pathlib import Path
 
 import numpy as np
+
+# un descripteur ouvert par tableau mappé (`_members`) : ~11 000 pour une fenêtre de 30 cycles,
+# au-delà des 1 024 permis d'office
+resource.setrlimit(resource.RLIMIT_NOFILE, (resource.getrlimit(resource.RLIMIT_NOFILE)[1],) * 2)
 
 KEYS = 608
 REGIONS = 48

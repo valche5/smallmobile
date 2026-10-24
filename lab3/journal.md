@@ -622,7 +622,9 @@ v2) dépassait le cache : l'apprentissage attendait le disque.
   `test_train.py` compare la forme écrite aux `.pos` des mêmes parties (champs et clés au bit
   près). Les cycles c083–c116 de la fenêtre convertis une fois depuis leurs `.packed3.npz` (mêmes
   champs au bit près) ; plus aucune lecture des anciennes formes (`pack`, `.npz`, `.pos`). En
-  service depuis c117.
+  service depuis c117. Arrêt à c118 : un descripteur ouvert par tableau mappé, ~11 000 pour la
+  fenêtre, au-delà des 1 024 d'un service ; `data.py` relève sa limite. c118 : chargement 3 s,
+  entraînement 129 s, l'étape 142 s (208 à c112).
 
 Pendant c032 : la fenêtre compacte passe de la RAM à un mappage des fichiers `.pos.packed.npz`
 (`MAP_POPULATE`, lus d'un trait au chargement ; seuls les petits champs sont copiés en RAM). En
