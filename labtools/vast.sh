@@ -4,7 +4,9 @@
 # compile rien. Une machine à la fois.
 #
 #   labtools/vast.sh find                        offres conformes, les moins chères d'abord
-#   LAB=labN labtools/vast.sh up OFFRE           loue, attend SSH, vérifie GPU et Vulkan, envoie le labo
+#   LAB=labN labtools/vast.sh up OFFRE           loue, attend SSH, vérifie le GPU au repos, envoie le labo,
+#                                                installe cuBLAS et NVRTC, compare le GPU au processeur
+#                                                (Vulkan et CUDA, `labN check-gpu`)
 #   LAB=labN labtools/vast.sh push               recompile sur mini, renvoie binaire, scripts et poids
 #   labtools/vast.sh run NOM LIMITE 'commande'   calcul détaché depuis la racine du dépôt, LIMITE en s ;
 #                                                rend la main aussitôt
@@ -197,21 +199,33 @@ print(d["dph_total"])' > "$ST/conn"
     --format=csv,noheader,nounits; sleep 3; done' | tee -a "$LOG" |
     awk -F', ' '$1 >= 90 { n++ } END { print n + 0 }')
   [ "$busy" -lt 3 ] || die "GPU occupé au repos : hôte défectueux"
-  # 4. le labo, puis Vulkan par le labo lui-même, détaché (40 s) : un pilote bloqué ne bloque pas mini
+  # 4. le labo ; cuBLAS et NVRTC pour `--device cuda` (paquets pip, sans PyTorch), chargés par les
+  # calculs de `run` (cuda.env)
   push_cmd
-  rsh 20 "cd $REMOTE || exit 1; setsid nohup timeout -s KILL 40 target/release/$LAB bench-vulkan --net ${NET:-$LAB/nets/c130.bin} \
-    --count 1024 > vast-jobs/vulkan.txt 2>&1 < /dev/null & echo \$! > vast-jobs/vulkan.pid"
-  for i in $(seq 9); do
-    sleep 5
-    rsh 20 "kill -0 \$(cat $REMOTE/vast-jobs/vulkan.pid) 2> /dev/null" || break
+  rsh 300 'py=/venv/main/bin/python; [ -x $py ] || py=python3
+    $py -m pip install -q --break-system-packages nvidia-cublas nvidia-cuda-nvrtc > /dev/null 2>&1 || true
+    lib=$(dirname "$(find / -xdev -name "libcublas.so.1[0-9]" 2>/dev/null | head -1)")
+    [ "$lib" != . ] && echo "export LD_LIBRARY_PATH=$lib:\${LD_LIBRARY_PATH:-}" > /root/sm/cuda.env; cat /root/sm/cuda.env' | note || true
+  # 5. le GPU comparé au processeur, par moteur, détaché (60 s) : un pilote bloqué ne bloque pas mini
+  local dev
+  for dev in vulkan cuda; do
+    rsh 20 "cd $REMOTE || exit 1; [ -f cuda.env ] && . ./cuda.env; setsid nohup timeout -s KILL 60 target/release/$LAB check-gpu \
+      --net ${NET:-$LAB/nets/c130.bin} --device $dev > vast-jobs/check-$dev.txt 2>&1 < /dev/null & echo \$! > vast-jobs/check.pid"
+    for i in $(seq 13); do
+      sleep 5
+      rsh 20 "kill -0 \$(cat $REMOTE/vast-jobs/check.pid) 2> /dev/null" || break
+    done
+    rsh 20 "cat $REMOTE/vast-jobs/check-$dev.txt" | tee "$ST/check-$dev" | note
+    say "$dev : $(paste -sd ';' "$ST/check-$dev")"
   done
-  rsh 20 "cat $REMOTE/vast-jobs/vulkan.txt" | tee "$ST/vulkan" | note
-  grep -q 'GPU NVIDIA' "$ST/vulkan" || die "Vulkan inutilisable (journal : $LOG)"
-  if grep -q 'bf16' "$ST/vulkan"; then
-    say "Vulkan prêt : $(tail -1 "$ST/vulkan" | tr -s ' ')"
-  else
-    say "attention : pas de bf16 coopératif, le shader f32 de secours sera utilisé (plus lent)"
-  fi
+  # juste : victoire à moins de 0,01 du processeur
+  local good=""
+  for dev in cuda vulkan; do
+    awk '/écart maximal/ { for (i = 1; i < NF; i++) if ($i == "victoire") ok = $(i + 1) < 0.01 } END { exit !ok }' \
+      "$ST/check-$dev" && good="$good $dev"
+  done
+  [ -n "$good" ] || die "aucun moteur GPU juste (journal : $LOG)"
+  say "moteurs justes :$good"
   trap - EXIT
   say "machine $id prête"
 }
@@ -231,6 +245,7 @@ up_failed() {
 
 # le lanceur, sur la machine : NOM LIMITE, commande dans vast-jobs/NOM.cmd
 JOB='cd /root/sm
+[ -f cuda.env ] && . ./cuda.env
 J=vast-jobs/$1
 rm -f "$J.done"
 echo "== début $(date "+%F %T"), limite $2 s : $(cat "$J.cmd")" >> "$J.log"
@@ -256,7 +271,7 @@ run_cmd() {
   rsh 20 "cat > $REMOTE/vast-jobs/job.sh" <<< "$JOB"
   # sans ps ni pgrep : ils peuvent rester bloqués sur un processus qui tient le GPU
   rsh 20 "cd $REMOTE || exit 1; setsid nohup bash vast-jobs/job.sh $name $limit > /dev/null 2>&1 < /dev/null &
-    echo \$! > vast-jobs/$name.pid; sleep 1; kill -0 \$(cat vast-jobs/$name.pid)"
+    echo \$! > vast-jobs/$name.pid; sleep 1; kill -0 \$(cat vast-jobs/$name.pid) 2> /dev/null || [ -f vast-jobs/$name.done ]"
   say "calcul $name lancé (au plus $limit s) : $cmd"
 }
 
@@ -327,7 +342,7 @@ down_cmd() {
   else
     say "machine $id détruite"
   fi
-  rm -f "$ST"/{id,start,conn,host,port,dph,machine,vulkan,pushed}
+  rm -f "$ST"/{id,start,conn,host,port,dph,machine,vulkan,check-vulkan,check-cuda,pushed}
   status_cmd
 }
 

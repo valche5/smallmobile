@@ -11,10 +11,13 @@ path = "src/bin/lab.rs"
 
 [features]
 # Vulkan inclus dans les compilations ordinaires ; --no-default-features pour un programme CPU seul.
-default = ["vulkan"]
+default = ["vulkan", "cuda"]
 # Le réseau sur GPU pour la génération des parties (`lab6 selfplay --device vulkan`) ;
 # shaders compilés par glslc (build.rs).
 vulkan = ["dep:ash"]
+# Le réseau sur GPU NVIDIA par CUDA (`--device cuda`) : pilote, cuBLAS et NVRTC chargés à
+# l'exécution, rien à installer pour compiler.
+cuda = ["vulkan", "dep:cudarc"]
 
 [dependencies]
 smallmobile-kernel = { path = "../kernel" }
@@ -22,6 +25,7 @@ smallmobile-brain6 = { path = "brain" }
 # l'Expert de lab2, adversaire témoin de l'arène (`lab2:net=…`)
 smallmobile-brain2 = { path = "../lab2/brain" }
 ash = { version = "0.38", optional = true }
+cudarc = { version = "0.19.10", optional = true, default-features = false, features = ["std", "driver", "cublas", "nvrtc", "dynamic-loading", "cuda-13000"] }
 
 [dev-dependencies]
 smallmobile-brain3 = { path = "../lab3/brain" }

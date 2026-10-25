@@ -40,9 +40,107 @@ pub struct Lane {
 #[cfg(feature = "vulkan")]
 const IN_FLIGHT: usize = 2;
 
+/// Le moteur qui calcule le réseau : Vulkan (tout GPU), ou CUDA (NVIDIA, `--device cuda`). Même
+/// anneau, même file d'ordre ; CUDA n'a pas de commandes soumises d'avance (tours et recyclage vides).
+#[cfg(feature = "vulkan")]
+enum Engine {
+    Vulkan(Box<crate::vulkan::Engine>),
+    #[cfg(feature = "cuda")]
+    Cuda(Box<crate::cuda::Engine>),
+}
+
+#[cfg(feature = "vulkan")]
+macro_rules! each {
+    ($e:expr, $x:ident => $body:expr) => {
+        match $e {
+            Engine::Vulkan($x) => $body,
+            #[cfg(feature = "cuda")]
+            Engine::Cuda($x) => $body,
+        }
+    };
+}
+
+#[cfg(feature = "vulkan")]
+impl Engine {
+    fn describe(&self) -> String {
+        each!(self, e => e.describe())
+    }
+
+    fn write<P: Position + ?Sized>(&self, cell: usize, p: &P, net: u8) {
+        each!(self, e => e.write(cell, p, net))
+    }
+
+    fn order(&self, at: usize, cell: usize) {
+        each!(self, e => e.order(at, cell))
+    }
+
+    fn output(&self, cell: usize) -> &[f32] {
+        each!(self, e => e.output(cell))
+    }
+
+    fn launch(&self, slot: usize, first: usize, count: usize) -> Result<(), String> {
+        each!(self, e => e.launch(slot, first, count))
+    }
+
+    fn finished(&self, slot: usize) -> Result<bool, String> {
+        each!(self, e => e.finished(slot))
+    }
+
+    fn submit_round(&self, round: usize) -> Result<u64, String> {
+        match self {
+            Engine::Vulkan(e) => e.submit_round(round),
+            #[cfg(feature = "cuda")]
+            Engine::Cuda(_) => Ok(0),
+        }
+    }
+
+    fn wait(&self, value: u64) -> Result<(), String> {
+        match self {
+            Engine::Vulkan(e) => e.wait(value),
+            #[cfg(feature = "cuda")]
+            Engine::Cuda(_) => Ok(()),
+        }
+    }
+
+    fn recycle(&self, slot: usize) -> Result<(), String> {
+        match self {
+            Engine::Vulkan(e) => e.recycle(slot),
+            #[cfg(feature = "cuda")]
+            Engine::Cuda(_) => Ok(()),
+        }
+    }
+
+    fn profile_step(&self, slot: usize, count: usize) -> Option<(u64, u64)> {
+        match self {
+            Engine::Vulkan(e) => e.profile_step(slot, count),
+            #[cfg(feature = "cuda")]
+            Engine::Cuda(_) => None,
+        }
+    }
+}
+
+/// Le moteur demandé (`--device`) : `vulkan` (ou `gpu`), `cuda`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Device {
+    Vulkan,
+    Cuda,
+}
+
+impl Device {
+    /// `cpu` → `None` ; un nom inconnu → `Err`.
+    pub fn parse(name: &str) -> Result<Option<Device>, String> {
+        match name {
+            "cpu" => Ok(None),
+            "gpu" | "vulkan" => Ok(Some(Device::Vulkan)),
+            "cuda" => Ok(Some(Device::Cuda)),
+            _ => Err(format!("appareil inconnu : {name} (cpu, vulkan, cuda)")),
+        }
+    }
+}
+
 #[cfg(feature = "vulkan")]
 struct Ring {
-    engine: crate::vulkan::Engine,
+    engine: Engine,
     /// Le prochain numéro à prendre dans la file d'ordre.
     head: std::sync::atomic::AtomicU64,
     /// Chaque numéro `t` de la file : `t + 1` quand sa place y est écrite.
@@ -154,6 +252,10 @@ impl Gpu {
         Err("programme lab6 compilé sans Vulkan (cargo build --features vulkan)".into())
     }
 
+    pub fn start_on(_: Device, nets: &[&Path]) -> Result<(Gpu, String), String> {
+        Gpu::start_nets(nets)
+    }
+
     pub fn lanes(&self, _: usize) -> Vec<Lane> {
         match self.never {}
     }
@@ -192,9 +294,20 @@ impl Gpu {
     /// `start` avec plusieurs réseaux de même forme (l'arène : un par joueur `az`) ; une position
     /// dit le sien à l'envoi (`Lane::send`), par son rang dans `nets`.
     pub fn start_nets(nets: &[&Path]) -> Result<(Gpu, String), String> {
-        use crate::vulkan::{Engine, MAX_BATCH, ORDER, STEPS};
+        Gpu::start_on(Device::Vulkan, nets)
+    }
+
+    /// `start_nets` sur le moteur `device`.
+    pub fn start_on(device: Device, nets: &[&Path]) -> Result<(Gpu, String), String> {
+        use crate::vulkan::{MAX_BATCH, ORDER, STEPS};
         use std::sync::atomic::{AtomicBool, AtomicU64};
-        let engine = Engine::new_nets(nets, MAX_BATCH)?;
+        let engine = match device {
+            Device::Vulkan => Engine::Vulkan(Box::new(crate::vulkan::Engine::new_nets(nets, MAX_BATCH)?)),
+            #[cfg(feature = "cuda")]
+            Device::Cuda => Engine::Cuda(Box::new(crate::cuda::Engine::new_nets(nets)?)),
+            #[cfg(not(feature = "cuda"))]
+            Device::Cuda => return Err("programme lab6 compilé sans CUDA (cargo build --features cuda)".into()),
+        };
         let device = engine.describe();
         let ring = std::sync::Arc::new(Ring {
             engine,

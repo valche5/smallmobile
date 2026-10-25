@@ -13,13 +13,15 @@
 //! - `encode`, `net`, `az` : ce que voit le réseau, le réseau, la recherche guidée par le réseau ;
 //! - `arena` : des milliers de parties pour comparer deux joueurs ;
 //! - `selfplay` : parties d'entraînement du réseau, plusieurs à la fois par fil, leurs évaluations
-//!   groupées (`batch`), par le processeur ou par le GPU (`gpu`, service `vulkan`).
+//!   groupées (`batch`), par le processeur ou par le GPU (`gpu`, moteurs `vulkan` et `cuda`).
 
 pub mod agent;
 pub mod arena;
 pub mod az;
 pub mod batch;
 pub mod compact;
+#[cfg(feature = "cuda")]
+pub mod cuda;
 pub mod gpu;
 pub mod selfplay;
 pub mod table;

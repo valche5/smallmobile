@@ -27,7 +27,7 @@ Labos :
 | `lab2` | Gumbel AlphaZero, nœuds de hasard, coups jeton après jeton, départ de zéro (`lab2/journal.md`) | Figé le 22 octobre 2026 après sa troisième boucle ; Expert `lab2/c060` du jeu, témoin de l'arène de lab3 |
 | `lab3` | Spécialisation puis reprise généraliste, c130 en 128×7 (`lab3/journal.md`) | Figé le 24 octobre 2026 ; Expert `lab3/c130` du jeu |
 | `lab4` | Budget, largeur, horizon et cibles de valeur depuis c130 ; essais sans progrès net de l'apprentissage | Figé le 25 octobre 2026 ; résultats dans `lab4/journal.md` |
-| `lab5` | Coups manqués par c130 : alternatives évaluées jusqu'à la fin, sélection et confirmation indépendantes ; reprise directe de lab3 | Figé le 25 octobre 2026 : marge locale +0,66 point [+0,07, +1,27], surtout à 4 joueurs (combinaisons, déclin) ; borne basse, méthode limitée (`lab5/journal.md`) |
+| `lab5` | Coups manqués par c130 : alternatives évaluées jusqu'à la fin, sélection et confirmation indépendantes ; reprise directe de lab3 | Figé le 25 octobre 2026 ; **résultats invalides** : calculés en Vulkan bf16 sur NVIDIA, qui calcule faux (erratum de `lab5/journal.md`) |
 | `lab6` | La marge de c130 face à une recherche beaucoup plus longue (arène 16× et 64× les simulations) ; essai CUDA | Ouvert le 25 octobre 2026 ; plan `lab6/lab.md` |
 
 Outils communs (ce dossier) :
@@ -101,6 +101,9 @@ calcul (aucune machine ne doit rester).
   pour le binaire compilé sur mini. Une image nue (`debian:trixie`) n'a pas de sshd : inutilisable.
 - Hôtes inégaux : un GPU occupé à 100 % au repos et Vulkan bloqué à l'ouverture (`drm_open`) ; un
   `authorized_keys` aux droits refusés par sshd. `vast.sh up` contrôle les deux et corrige les droits.
+- **Le shader Vulkan bf16 calcule faux sur NVIDIA** (RTX 5080, 25 octobre) : sur ces cartes, `--device
+  cuda` (lab6) ou `LAB6_VULKAN_F32=1`. `vast.sh up` compare le GPU au processeur (`labN check-gpu`)
+  et installe cuBLAS et NVRTC (paquets pip `nvidia-*`), chargés par les calculs lancés par `run`.
 - Sur la machine, `ps` et `pgrep` peuvent rester bloqués pendant qu'un calcul tient le GPU : le
   script suit ses calculs par numéro de processus et journal.
 - Hôtes, 25 octobre (numéro de machine vast, stable d'une location à l'autre) : **bons** 119726

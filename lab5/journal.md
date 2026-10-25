@@ -131,3 +131,14 @@ est une **borne basse** de la marge de c130, pas une mesure de son plafond. Angl
 Pour mesurer la marge autrement : viser les grandes décisions en essayant toutes leurs options
 (six combinaisons, déclin ou non) avec beaucoup plus de suites ; ou une arène de c130 contre
 c130 à beaucoup plus de simulations (16 fois), qui capte aussi les plans sur plusieurs coups.
+
+## Erratum (25 octobre, soir) : résultats vast.ai invalides
+
+Le shader Vulkan **bf16** (`net.comp`, écrit et vérifié sur la RX 9070 XT, RADV) **calcule faux sur
+les GPU NVIDIA** : sur la RTX 5080, `lab6 check-gpu` mesure contre le processeur un écart de 0,37
+sur la victoire, 10 pièces et 112 sur les logits (CUDA de lab6 : 0,0003 ; Vulkan f32 : 0,002).
+Le pilote et la **campagne c1 ont tourné en Vulkan bf16 sur des RTX 5080** : les parties n'étaient
+pas jouées par c130 mais par un réseau aux évaluations faussées. **Leurs chiffres ne mesurent rien
+sur c130** (+0,66 point, combinaisons, déclin : à oublier) ; seuls les coûts et durées restent
+indicatifs. Le constat sur les limites de la méthode (clôture) reste valable. Lab3 et lab4,
+calculés sur la carte AMD ou le processeur, ne sont pas touchés. Suite et vérification : lab6.

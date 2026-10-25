@@ -7,13 +7,14 @@
 //! lab6 arena --table 'az:net=poids.bin|hard|normal' [--deals 100] [--out r.tsv]   (table fixe)
 //! lab6 speed --agent az:net=poids.bin,n=200 [--positions 12] [--seed 1]   (temps et empreinte des recherches)
 //! lab6 selfplay --agent az:net=poids.bin --games 1000 --out lab6/data/gen1 [--players 2,3,4,5] [--pos true]
-//!     [--device cpu|vulkan]   (CPU par défaut ; Vulkan inclus à la compilation, `gpu` est un alias de `vulkan`)
+//!     [--device cpu|vulkan|cuda]   (CPU par défaut ; Vulkan inclus à la compilation, `gpu` est un alias de `vulkan`)
 //!     (auto-jeu, recette `selfplay::RECIPE`)
 //! lab6 check-net --net poids.bin --data parties.pos [--count 5]   (comparaison avec lab6/py/check.py)
 //! lab6 bench-net --net poids.bin --data parties.pos [--count 5000]   (vitesse et écarts du calcul bf16)
 //! lab6 bench-vulkan --net poids.bin [--regions 40] [--count N] [--rounds 20] [--stream LOTS]   (durée d'un lot sur
 //!     GPU selon sa taille, ou de `rounds` lots de N positions : une capture RGP, `MESA_VK_TRACE=rgp` ; en flux :
 //!     LOTS lots soumis à la suite ; Vulkan inclus à la compilation par défaut)
+//! lab6 check-gpu --net poids.bin --device vulkan|cuda   (le GPU comparé au processeur, positions de l'IA Normale)
 //! lab6 analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par labtools/export-room.ts)
 //! ```
 
@@ -22,6 +23,7 @@ use std::time::Instant;
 
 use smallmobile_lab6::agent::{self, Agent};
 use smallmobile_lab6::arena::{self, Config, Lineup, Sequential};
+use smallmobile_lab6::gpu::{Device, Gpu};
 use smallmobile_lab6::selfplay;
 use smallmobile_lab6::table::Table;
 
@@ -36,6 +38,7 @@ fn main() {
         "check-net" => check_net_cmd(&opts),
         "bench-net" => bench_net_cmd(&opts),
         "bench-vulkan" => bench_vulkan_cmd(&opts),
+        "check-gpu" => check_gpu_cmd(&opts),
         "analyze" => analyze_cmd(&opts),
         _ => usage(),
     }
@@ -44,18 +47,89 @@ fn main() {
 fn usage() -> ! {
     eprintln!(
         "usage : lab6 arena --hero A --field B [--players 2,3,4,5] [--deals N] [--threads N] [--seed S] [--out F] \
-         [--stop D] [--device cpu|vulkan]"
+         [--stop D] [--device cpu|vulkan|cuda]"
     );
     eprintln!("        lab6 arena --table 'A|B|B' [--deals N] [--threads N] [--seed S] [--out F]");
     eprintln!("        lab6 speed --agent az:… [--players 2,3,4,5] [--positions 12] [--seed S]");
     eprintln!(
-        "        lab6 selfplay --agent az:… --games N --out DIR [--players 2,3,4,5] [--seed S] [--device cpu|vulkan] [--pos true]"
+        "        lab6 selfplay --agent az:… --games N --out DIR [--players 2,3,4,5] [--seed S] [--device cpu|vulkan|cuda] [--pos true]"
     );
     eprintln!("        lab6 check-net --net poids.bin --data parties.pos [--count N]");
     eprintln!("        lab6 bench-net --net poids.bin --data parties.pos [--count N]");
     eprintln!("        lab6 bench-vulkan --net poids.bin [--regions R] [--count N] [--rounds R]");
+    eprintln!("        lab6 check-gpu --net poids.bin --device vulkan|cuda");
     eprintln!("        lab6 analyze --game partie.smk --agent az:net=poids.bin,n=20000");
     std::process::exit(2)
+}
+
+/// `--device cpu|vulkan|gpu|cuda` (le processeur par défaut).
+fn device(opts: &HashMap<String, String>) -> Option<Device> {
+    Device::parse(opts.get("device").map_or("cpu", String::as_str)).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        usage()
+    })
+}
+
+/// Le réseau sur GPU (`--device vulkan|cuda`) comparé au processeur, sur des positions de parties
+/// de l'IA Normale à 2, 3, 4 et 5 joueurs : écarts les plus grands (victoire, pièces, logits). Le
+/// moteur porte deux fois le réseau, et les positions vont à l'un ou l'autre, mêlées dans les
+/// calculs (l'arène : un réseau par joueur).
+fn check_gpu_cmd(opts: &HashMap<String, String>) {
+    use smallmobile_lab6::encode::encode;
+    use smallmobile_lab6::know::Knowledge;
+    use smallmobile_lab6::rand::{Rng, mix};
+    let net_path = std::path::Path::new(opts.get("net").unwrap_or_else(|| usage()));
+    let device = device(opts).unwrap_or_else(|| usage());
+    let cpu = smallmobile_lab6::net::Net::load(net_path).unwrap_or_else(|e| {
+        eprintln!("réseau illisible : {e}");
+        std::process::exit(2)
+    });
+    let (gpu, name) = Gpu::start_on(device, &[net_path, net_path]).unwrap_or_else(|e| {
+        eprintln!("GPU : {e}");
+        std::process::exit(2)
+    });
+    println!("{name}");
+    let normal = agent_named("normal");
+    let tables: Vec<Table> = (2..=5).map(|n| Table::new(n, mix(7, n as u64))).collect();
+    let mut positions = Vec::new();
+    for (t, table) in tables.iter().enumerate() {
+        let (mut g, mut k) = (table.game(t as u32 + 1), Knowledge::default());
+        let mut rng = Rng::new(mix(8, t as u64));
+        let mut step = 0;
+        while g.state.phase != smallmobile_kernel::Phase::GameOver && step < 2000 {
+            if step % 5 == 0 {
+                positions.push((encode(&g, &k), t));
+            }
+            for a in normal.act(&g, &k, &mut rng.fork()) {
+                k.apply(&mut g, &a).expect("action de l'IA Normale");
+            }
+            step += 1;
+        }
+    }
+    let items: Vec<_> = positions.iter().map(|(e, t)| (e, &tables[*t].map)).collect();
+    let mut lane = gpu.lanes(1).pop().expect("une file");
+    let mut far = Vec::new();
+    for chunk in items.chunks(lane.free().min(512) / 8) {
+        // huit envois en vol, réseaux alternés : un même calcul en reçoit des deux
+        let sent: Vec<_> = chunk.chunks(chunk.len().div_ceil(8)).enumerate().map(|(i, c)| lane.send(&gpu, c, (i % 2) as u8)).collect();
+        for s in sent {
+            far.extend(lane.take(&gpu, s));
+        }
+    }
+    let (mut win, mut gain, mut logit) = (0.0f32, 0.0f32, 0.0f32);
+    for ((e, t), g) in positions.iter().zip(&far) {
+        let c = cpu.eval(e, &tables[*t].map);
+        for q in 0..e.players {
+            win = win.max((c.win[q] - g.win[q]).abs());
+            gain = gain.max((c.gain[q] - g.gain[q]).abs());
+        }
+        for (a, b) in c.logits.iter().zip(&g.logits) {
+            if a.is_finite() || b.is_finite() {
+                logit = logit.max((a - b).abs());
+            }
+        }
+    }
+    println!("{} positions : écart maximal victoire {win:.4}, pièces {gain:.3}, logits {logit:.3}", positions.len());
 }
 
 fn options(args: &[String]) -> HashMap<String, String> {
@@ -130,12 +204,9 @@ fn arena_cmd(opts: &HashMap<String, String>) {
             (vec![agent(opts, "hero"), agent(opts, "field")], None)
         }
     };
-    // --device vulkan : chaque réseau des joueurs `az` sur un GPU, le sien
-    let on_gpu = match opts.get("device").map(String::as_str) {
-        None | Some("cpu") => false,
-        Some("gpu" | "vulkan") => true,
-        Some(_) => usage(),
-    };
+    // --device vulkan|cuda : chaque réseau des joueurs `az` sur un GPU, le sien
+    let device = device(opts);
+    let on_gpu = device.is_some();
     // les réseaux des joueurs `az`, sur un seul GPU (un moteur pour tous, `Gpu::start_nets`)
     let (mut paths, mut nets) = (Vec::new(), Vec::new());
     for (a, name) in agents.iter().zip(&named) {
@@ -147,11 +218,11 @@ fn arena_cmd(opts: &HashMap<String, String>) {
     }
     let gpu = (!paths.is_empty()).then(|| {
         let paths: Vec<&std::path::Path> = paths.iter().map(|p| p.as_path()).collect();
-        let (gpu, device) = smallmobile_lab6::gpu::Gpu::start_nets(&paths).unwrap_or_else(|e| {
+        let (gpu, name) = Gpu::start_on(device.expect("un GPU"), &paths).unwrap_or_else(|e| {
             eprintln!("GPU : {e}");
             std::process::exit(2)
         });
-        eprintln!("réseaux évalués par {device}");
+        eprintln!("réseaux évalués par {name}");
         gpu
     });
     let lineups: Vec<Lineup> = match &specs {
@@ -164,6 +235,14 @@ fn arena_cmd(opts: &HashMap<String, String>) {
             .collect(),
     };
     let names: Vec<String> = agents.iter().map(|a| a.name()).collect();
+    // le fichier de sortie avant l'arène : un chemin faux échoue tout de suite, pas après le calcul
+    // (et `exit` après le calcul laisserait le pilote attendre les commandes Vulkan soumises d'avance)
+    let out = opts.get("out").map(|path| {
+        std::fs::File::create(path).unwrap_or_else(|e| {
+            eprintln!("échec de la création de {path} : {e}");
+            std::process::exit(1)
+        })
+    });
     let start = Instant::now();
     let run = arena::run(&cfg, &lineups, gpu.as_ref().map(|g| (g, &nets[..])));
     // face à un champ homogène, seul le joueur testé compte (le champ en est le miroir)
@@ -188,11 +267,11 @@ fn arena_cmd(opts: &HashMap<String, String>) {
             None => println!("test séquentiel sans conclusion après {} donnes{shown}", run.deals),
         }
     }
-    if let Some(path) = opts.get("out") {
-        let written =
-            std::fs::File::create(path).and_then(|f| arena::write(&mut std::io::BufWriter::new(f), &cfg, &names, &run));
+    if let Some(f) = out {
+        let written = arena::write(&mut std::io::BufWriter::new(f), &cfg, &names, &run);
         if let Err(e) = written {
-            eprintln!("échec de l'écriture de {path} : {e}");
+            eprintln!("échec de l'écriture de {} : {e}", opts["out"]);
+            drop(gpu);
             std::process::exit(1)
         }
     }
@@ -279,24 +358,16 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
         pos: get(opts, "pos", false),
     };
     let out = opts.get("out").unwrap_or_else(|| usage());
-    // Le réseau sur GPU par Vulkan : les mêmes poids que la recherche.
-    let gpu = match opts.get("device").map(String::as_str) {
-        None | Some("cpu") => None,
-        Some("gpu" | "vulkan") => {
-            let net = name
-                .split(',')
-                .find_map(|p| p.strip_prefix("az:").unwrap_or(p).strip_prefix("net="))
-                .unwrap_or_else(|| usage());
-            let net = std::path::Path::new(net);
-            let (gpu, device) = smallmobile_lab6::gpu::Gpu::start(net).unwrap_or_else(|e| {
-                eprintln!("GPU : {e}");
-                std::process::exit(2)
-            });
-            eprintln!("réseau évalué par {device}");
-            Some(gpu)
-        }
-        Some(_) => usage(),
-    };
+    // Le réseau sur GPU (Vulkan ou CUDA) : les mêmes poids que la recherche.
+    let gpu = device(opts).map(|device| {
+        let net = name.split(',').find_map(|p| p.strip_prefix("az:").unwrap_or(p).strip_prefix("net=")).unwrap_or_else(|| usage());
+        let (gpu, name) = Gpu::start_on(device, &[std::path::Path::new(net)]).unwrap_or_else(|e| {
+            eprintln!("GPU : {e}");
+            std::process::exit(2)
+        });
+        eprintln!("réseau évalué par {name}");
+        gpu
+    });
     let start = Instant::now();
     if let Err(e) = selfplay::run(&cfg, &az, std::path::Path::new(out), gpu.as_ref()) {
         eprintln!("échec : {e}");
