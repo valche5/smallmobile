@@ -1,0 +1,527 @@
+#version 450
+// Le réseau entier (`net.rs`, `model.py`) sur une position par groupe de travail, les grands
+// produits des régions sur les unités matricielles du GPU (matrices coopératives 16 × 16 × 16, bf16,
+// sommes en f32) ; le reste en f32 comme `net32.comp`, sa référence.
+//
+// Les régions : 48 lignes, 3 tuiles de 16 ; chaque sous-groupe (32 fils) tient quelques tuiles de
+// sortie (`PER`), toujours les mêmes. Le flux résiduel h reste en f32 dans ses registres (`hacc`),
+// et en bf16 dans la mémoire partagée (`hb`), entrée des produits et des calculs élément par élément
+// (moyenne des voisines, pooling). Moins de 32 Ko de mémoire partagée par groupe : deux groupes à la
+// fois par unité de calcul.
+//
+// Arrondis en bf16 : h, la moyenne des voisines et relu(n1(…)), entrées des produits (comme le bf16
+// du processeur, `net.rs`) ; node_in et node_pol en deux parties bf16 (haute et basse) des poids,
+// et des entrées pour node_in : presque la précision du f32. Les biais s'ajoutent en f32 dans les
+// sommes (tuile lue avec un pas nul : la même ligne 16 fois).
+
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_EXT_bfloat16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+
+// PROFILE (net_prof.spv, `LAB5_VULKAN_PHASES=1`) : la durée de chaque étape d'une position, lue par
+// le fil 0 sur l'horloge du GPU après une barrière, cumulée par étape dans ses registres, écrite à
+// la fin (`prof`, 16 par position : la mémoire de l'hôte, lente à relire)
+#ifdef PROFILE
+#extension GL_EXT_shader_realtime_clock : require
+layout(std430, binding = 4) buffer Prof { uint prof[]; };
+#define MARK(phase) sync(); SUB(phase)
+// sans barrière : le temps du sous-groupe du fil 0 seul
+#define SUB(phase) { uint now_ = clockRealtime2x32EXT().x; spent_[phase] += now_ - last_; last_ = now_; }
+#else
+#define MARK(phase)
+#define SUB(phase)
+#endif
+
+layout(local_size_x = 256) in;
+
+// largeur du réseau (64 ou 128)
+layout(constant_id = 0) const uint H = 128u;
+
+const uint R = 48u;          // régions au plus (encode::REGIONS)
+const uint NODE = 77u;       // octets par région
+const uint NODE16 = 80u;     // ligne d'entrée d'une région, complétée à un multiple de 16
+const uint GLOBAL = 820u;    // octets de la partie
+const uint KEYS = 608u;
+const uint GLOBAL_KEYS = 32u;
+const uint KINDS = 9u;
+const uint OUT = KEYS + 10u;
+const uint THREADS = 256u;
+const uint RG = THREADS / H; // `gemv` : le fil `t` a la sortie `t % H`, sa part `t / H` des entrées
+const uint G4 = THREADS / (H / 4u); // `gemv4` : 4 sorties par fil, les entrées en G4 parts
+const uint NT = H / 16u;     // tuiles de colonnes
+const uint TILES = 3u * NT;  // tuiles de sortie d'un produit des régions
+const uint SUBGROUPS = THREADS / 32u;
+const uint PER = (TILES + SUBGROUPS - 1u) / SUBGROUPS;
+// les tuiles d'un sous-groupe ont toutes la colonne `sg % NT` (NT divise SUBGROUPS) : ses tuiles de
+// poids, lues une fois pour toutes ses tuiles de sortie, et toutes ensemble avant les produits (une
+// seule attente de la mémoire)
+const uint KIN = NODE16 / 16u;
+// les lignes de h dans hb et ub : H + 8 nombres, pour que les 16 lignes d'une tuile ne tombent pas
+// sur le même banc de la mémoire partagée (lignes de 256 octets : lectures 16 fois plus lentes)
+const uint HS = H + 8u;
+const uint ROWS16 = R * (HS > NODE16 ? HS : NODE16);
+
+layout(std430, binding = 0) readonly buffer Weights { float w[]; };
+layout(std430, binding = 1) readonly buffer Input { uint inp[]; };
+layout(std430, binding = 2) writeonly buffer Output { float outp[]; };
+layout(std430, binding = 3) readonly buffer Weights16 { bfloat16_t wb[]; };
+
+layout(push_constant) uniform Params {
+    uint node_off;
+    uint glob_off;
+    uint adj_off;
+    uint regions_off;
+    uint layers;
+    // les positions du calcul : les places de l'anneau rangées dans la file d'ordre (`order_off`,
+    // `ring` numéros), à partir de son numéro `first`
+    uint first;
+    uint ring;
+    uint order_off;
+    // ou, si ce n'est pas ~0u, l'étape du flot dont le tampon des étapes donne `first` (`launch`)
+    uint step;
+    // le réseau de chaque position (un octet par place), et où commencent les poids de chacun (f32,
+    // bf16), deux au plus
+    uint nets_off;
+    uint wbase0, wbbase0, wbase1, wbbase1;
+    // les couches du deuxième réseau (`layers` : celles du premier)
+    uint layers1;
+} p;
+layout(std430, binding = 5) readonly buffer Steps { uvec4 steps[]; };
+
+// la table en tête des poids (f32), puis les positions des poids en bf16 (dans `wb`) : node_in et
+// node_pol (parties haute et basse ; node_pol complété à 16 sorties), puis n1 et n2 de chaque couche
+const uint T_NODE_SCALE = 0u, T_GLOBAL_SCALE = 1u, T_NODE_IN = 2u, T_GLOB_IN = 4u, T_GLOB_POL1 = 6u,
+           T_GLOB_POL2 = 8u, T_NODE_POL = 10u, T_VAL1 = 12u, T_VAL2 = 14u, T_LAYERS = 16u,
+           T_NODE_IN16 = 80u, T_NODE_IN16_LOW = 81u, T_NODE_POL16 = 82u, T_NODE_POL16_LOW = 83u,
+           T_LAYERS16 = 84u;
+
+#define ACC coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>
+#define MATA coopmat<bfloat16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA>
+#define MATB coopmat<bfloat16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB>
+#define ACC16 coopmat<bfloat16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>
+#define ROW gl_CooperativeMatrixLayoutRowMajor
+#define COL gl_CooperativeMatrixLayoutColumnMajor
+// une tuile de poids (16 × 16, bf16) : rangées tuile par tuile, colonnes de sortie à la suite (`kb`
+// tuiles d'entrées par colonne de tuiles), chaque tuile par colonnes : 512 octets contigus, une
+// colonne de 16 entrées par fil (`vulkan.rs`, `Weights::tiles`)
+#define TILE(base, kb, nb, KB) ((base) + ((nb) * (KB) + (kb)) * 256u)
+
+shared bfloat16_t hb[ROWS16];       // h ; relu(n1(…)) ; au début, la partie haute des entrées
+shared bfloat16_t ub[ROWS16];       // la moyenne des voisines ; au début, la partie basse des entrées
+shared float cat[3u * H];           // [g, moyenne h, max h]
+shared float vout[H];
+shared float scratch[1024];         // sommes partielles des `gemv` et du pooling, sorties de node_pol
+shared uvec2 adj[R];
+
+// les poids du réseau de la position : sa table, puis ses positions décalées d'autant (`main`)
+uint WB, WBB;
+uint T(uint i) { return floatBitsToUint(w[WB + i]) + (i >= T_NODE_IN16 ? WBB : WB); }
+
+uint byte_at(uint at) { return (inp[at >> 2] >> ((at & 3u) * 8u)) & 0xffu; }
+
+void sync() {
+    memoryBarrierShared();
+    barrier();
+}
+
+// vout[0…n) = act(b + Σ_k x_k W[k][o]), x = cat (from_cat) ou vout (lu avant d'être réécrit), K
+// entrées (comme `net32.comp`)
+void gemv(bool from_cat, uint wt, uint bt, uint k, uint n, bool relu) {
+    uint t = gl_LocalInvocationID.x, o = t % H, part = t / H;
+    uint per = (k + RG - 1u) / RG;
+    uint k0 = part * per, k1 = min(k, k0 + per);
+    float s = 0.0;
+    if (o < n) {
+        uint kk = k0;
+        for (; kk + 8u <= k1; kk += 8u) {
+            float wv[8];
+            for (uint q = 0u; q < 8u; q++)
+                wv[q] = w[wt + (kk + q) * n + o];
+            for (uint q = 0u; q < 8u; q++)
+                s = fma(from_cat ? cat[kk + q] : vout[kk + q], wv[q], s);
+        }
+        for (; kk < k1; kk++)
+            s = fma(from_cat ? cat[kk] : vout[kk], w[wt + kk * n + o], s);
+    }
+    scratch[t] = s;
+    sync();
+    if (t < n) {
+        float v = w[bt + t];
+        for (uint q = 0u; q < RG; q++)
+            v += scratch[q * H + t];
+        vout[t] = relu ? max(v, 0.0) : v;
+    }
+    sync();
+}
+
+// l'entrée `k` d'un produit : cat, vout (lu avant d'être réécrit), ou les octets de la partie × leur
+// échelle (source 2)
+float x_at(uint source, uint k, uint glob, uint gs) {
+    if (source == 0u)
+        return cat[k];
+    if (source == 1u)
+        return vout[k];
+    return float(byte_at(glob + k)) * w[gs + k];
+}
+
+// le même produit pour H sorties, 4 à la fois par fil (lectures de 16 octets) : les entrées
+// partagées entre G4 groupes de fils, et seize lectures à la fois (un seul aller-retour vers la
+// mémoire pour 128 entrées ; avec douze, deux, et 10 % de positions en moins). Avec H = 128, un
+// groupe de fils est un sous-groupe : pour les entrées creuses (les octets de la partie, surtout des
+// zéros ; vout, sorties de relu, à moitié), ses 32 fils lisent 32 entrées à la fois, et seuls les
+// poids des entrées non nulles sont lus, dans le même ordre : la même somme. Sur une entrée dense
+// (cat), le vote et les échanges coûtent plus que les lectures évitées.
+void gemv4(uint source, uint wt, uint bt, uint k, bool relu, uint glob, uint gs) {
+    uint t = gl_LocalInvocationID.x, o = 4u * (t % (H / 4u)), part = t / (H / 4u);
+    uint per = (k + G4 - 1u) / G4;
+    uint k0 = part * per, k1 = min(k, k0 + per);
+    vec4 s = vec4(0.0);
+    uint kk = k0;
+    if (H == 128u && source != 0u) {
+        uint lane = gl_SubgroupInvocationID;
+        for (uint base = k0; base < k1; base += 32u) {
+            float xl = base + lane < k1 ? x_at(source, base + lane, glob, gs) : 0.0;
+            uint bits = subgroupBallot(xl != 0.0).x;
+            while (bits != 0u) {
+                vec4 wv[12];
+                float xv[12];
+                for (uint q = 0u; q < 12u; q++) {
+                    if (bits != 0u) {
+                        uint j = uint(findLSB(bits));
+                        bits &= bits - 1u;
+                        xv[q] = subgroupShuffle(xl, j);
+                        uint at = wt + (base + j) * H + o;
+                        wv[q] = vec4(w[at], w[at + 1u], w[at + 2u], w[at + 3u]);
+                    } else {
+                        xv[q] = 0.0;
+                        wv[q] = vec4(0.0);
+                    }
+                }
+                for (uint q = 0u; q < 12u; q++)
+                    s += xv[q] * wv[q];
+            }
+        }
+        kk = k1;
+    }
+    for (; kk + 16u <= k1; kk += 16u) {
+        vec4 wv[16];
+        float xv[16];
+        for (uint q = 0u; q < 16u; q++) {
+            uint at = wt + (kk + q) * H + o;
+            wv[q] = vec4(w[at], w[at + 1u], w[at + 2u], w[at + 3u]);
+            xv[q] = x_at(source, kk + q, glob, gs);
+        }
+        for (uint q = 0u; q < 16u; q++)
+            s += xv[q] * wv[q];
+    }
+    for (; kk < k1; kk++) {
+        uint at = wt + kk * H + o;
+        s += x_at(source, kk, glob, gs) * vec4(w[at], w[at + 1u], w[at + 2u], w[at + 3u]);
+    }
+    for (uint c = 0u; c < 4u; c++)
+        scratch[part * H + o + c] = s[c];
+    sync();
+    if (t < H) {
+        float v = w[bt + t];
+        for (uint q = 0u; q < G4; q++)
+            v += scratch[q * H + t];
+        vout[t] = relu ? max(v, 0.0) : v;
+    }
+    sync();
+}
+
+// f32 → bf16 au plus proche (pair en cas d'égalité), comme le processeur : la conversion d'ACO
+// (RADV 26.2, gfx1201) tronque ; arrondi d'abord en f32, elle devient exacte
+float rne(float x) {
+    uint b = floatBitsToUint(x);
+    return uintBitsToFloat((b + 0x7fffu + ((b >> 16) & 1u)) & 0xffff0000u);
+}
+
+bfloat16_t bf(float x) { return bfloat16_t(rne(x)); }
+
+ACC16 bf_acc(ACC c) {
+    for (int i = 0; i < c.length(); i++)
+        c[i] = rne(c[i]);
+    return ACC16(c);
+}
+
+void relu(inout ACC c) {
+    for (int i = 0; i < c.length(); i++)
+        c[i] = max(c[i], 0.0);
+}
+
+void main() {
+    uint first = p.step == ~0u ? p.first : steps[p.step].w;
+    uint pos = inp[(p.order_off >> 2) + (first + gl_WorkGroupID.x) % p.ring];
+    bool second = byte_at(p.nets_off + pos) != 0u;
+    WB = second ? p.wbase1 : p.wbase0;
+    WBB = second ? p.wbbase1 : p.wbbase0;
+    uint t = gl_LocalInvocationID.x;
+    uint sg = gl_SubgroupID;
+    uint n = sg % NT;
+    uint r = byte_at(p.regions_off + pos);
+#ifdef PROFILE
+    uint spent_[16];
+    for (uint q = 0u; q < 16u; q++)
+        spent_[q] = 0u;
+    uint last_ = clockRealtime2x32EXT().x;
+#endif
+
+    // les entrées : voisines, régions (bf16, parties haute dans hb et basse dans ub, lignes de
+    // NODE16) ; la partie est lue par glob_in
+    for (uint i = t; i < R; i += THREADS) {
+        uint word = (p.adj_off >> 2) + (pos * R + i) * 2u;
+        adj[i] = i < r ? uvec2(inp[word], inp[word + 1u]) : uvec2(0u);
+    }
+    uint ns = T(T_NODE_SCALE);
+    for (uint e = t; e < R * NODE16; e += THREADS) {
+        uint i = e / NODE16, k = e % NODE16;
+        float v = i < r && k < NODE ? float(byte_at(p.node_off + (pos * R + i) * NODE + k)) * w[ns + k] : 0.0;
+        bfloat16_t high = bf(v);
+        hb[e] = high;
+        ub[e] = bf(v - float(high));
+    }
+    MARK(0u)
+
+    // g = glob_in(x_g) (la barrière de `gemv4` attend aussi les entrées)
+    gemv4(2u, T(T_GLOB_IN), T(T_GLOB_IN + 1u), GLOBAL, false, p.glob_off + pos * GLOBAL, T(T_GLOBAL_SCALE));
+    if (t < H)
+        cat[t] = vout[t];
+    MARK(1u)
+
+    // h = node_in(x) + b : x W ≈ x_h W_h + x_h W_b + x_b W_h
+    ACC hacc[PER];
+    {
+        uint wt = T(T_NODE_IN16), wl = T(T_NODE_IN16_LOW);
+        MATB b[KIN], bl[KIN];
+        for (uint k = 0u; k < KIN; k++) {
+            coopMatLoad(b[k], wb, TILE(wt, k, n, KIN), 16u, COL);
+            coopMatLoad(bl[k], wb, TILE(wl, k, n, KIN), 16u, COL);
+        }
+        for (uint q = 0u; q < PER; q++) {
+            uint idx = sg + SUBGROUPS * q;
+            if (idx < TILES) {
+                uint m = idx / NT;
+                coopMatLoad(hacc[q], w, T(T_NODE_IN + 1u) + n * 16u, 0u, ROW);
+                for (uint k = 0u; k < KIN; k++) {
+                    MATA a, al;
+                    coopMatLoad(a, hb, m * 16u * NODE16 + k * 16u, NODE16, ROW);
+                    coopMatLoad(al, ub, m * 16u * NODE16 + k * 16u, NODE16, ROW);
+                    hacc[q] = coopMatMulAdd(a, b[k], hacc[q]);
+                    hacc[q] = coopMatMulAdd(a, bl[k], hacc[q]);
+                    hacc[q] = coopMatMulAdd(al, b[k], hacc[q]);
+                }
+            }
+        }
+    }
+    sync();
+    for (uint q = 0u; q < PER; q++) {
+        uint idx = sg + SUBGROUPS * q;
+        if (idx < TILES)
+            coopMatStore(bf_acc(hacc[q]), hb, (idx / NT) * 16u * HS + n * 16u, HS, ROW);
+    }
+    sync();
+    MARK(2u)
+
+    for (uint l = 0u; l < (second ? p.layers1 : p.layers); l++) {
+        uint base = T_LAYERS + 8u * l;
+        uint n1w = T(base), n1b = T(base + 1u), n2b = T(base + 3u);
+        uint g1w = T(base + 4u), g1b = T(base + 5u), g2w = T(base + 6u), g2b = T(base + 7u);
+        uint n1w16 = T(T_LAYERS16 + 2u * l), n2w16 = T(T_LAYERS16 + 2u * l + 1u);
+        // la moyenne des voisines : leur somme dans l'ordre, fois l'inverse de leur nombre ; 8
+        // colonnes voisines par fil (lectures de 16 octets)
+        for (uint e = t; e < R * H / 8u; e += THREADS) {
+            uint i = e / (H / 8u), o = 8u * (e % (H / 8u));
+            uvec2 bits = adj[i];
+            vec4 lo = vec4(0.0), hi = vec4(0.0);
+            for (uint half_ = 0u; half_ < 2u; half_++) {
+                uint b = half_ == 0u ? bits.x : bits.y;
+                while (b != 0u) {
+                    uint j = uint(findLSB(b)) + 32u * half_;
+                    b &= b - 1u;
+                    uint at = j * HS + o;
+                    lo += vec4(float(hb[at]), float(hb[at + 1u]), float(hb[at + 2u]), float(hb[at + 3u]));
+                    hi += vec4(float(hb[at + 4u]), float(hb[at + 5u]), float(hb[at + 6u]), float(hb[at + 7u]));
+                }
+            }
+            float inv = 1.0 / float(max(bitCount(bits.x) + bitCount(bits.y), 1u));
+            uint at = i * HS + o;
+            for (uint c = 0u; c < 4u; c++) {
+                ub[at + c] = bf(lo[c] * inv);
+                ub[at + 4u + c] = bf(hi[c] * inv);
+            }
+        }
+        MARK(3u)
+        // la part de g dans n1, et son biais, dans vout (la barrière de `gemv4` attend aussi ub)
+        gemv4(0u, n1w + 2u * H * H, n1b, H, false, 0u, 0u);
+        MARK(4u)
+        // relu(n1([h, a, g])) = relu(vout + W_h · h + W_a · a), écrit dans hb une fois h lu par tous
+        ACC mid[PER];
+        {
+            MATB bh[NT], ba[NT];
+            for (uint k = 0u; k < NT; k++) {
+                coopMatLoad(bh[k], wb, TILE(n1w16, k, n, 2u * NT), 16u, COL);
+                coopMatLoad(ba[k], wb, TILE(n1w16, NT + k, n, 2u * NT), 16u, COL);
+            }
+            // les entrées à l'extérieur, les tuiles à l'intérieur, W_h · h et W_a · a dans deux
+            // sommes : 2 PER chaînes de produits indépendantes entrelacées (une seule chaîne
+            // attend le résultat de chaque produit avant le suivant)
+            ACC mida[PER];
+            for (uint q = 0u; q < PER; q++) {
+                if (sg + SUBGROUPS * q < TILES) {
+                    coopMatLoad(mid[q], vout, n * 16u, 0u, ROW);
+                    mida[q] = ACC(0.0);
+                }
+            }
+            for (uint k = 0u; k < NT; k++) {
+                for (uint q = 0u; q < PER; q++) {
+                    uint idx = sg + SUBGROUPS * q;
+                    if (idx < TILES) {
+                        uint m = idx / NT;
+                        MATA a, aa;
+                        coopMatLoad(a, hb, m * 16u * HS + k * 16u, HS, ROW);
+                        coopMatLoad(aa, ub, m * 16u * HS + k * 16u, HS, ROW);
+                        mid[q] = coopMatMulAdd(a, bh[k], mid[q]);
+                        mida[q] = coopMatMulAdd(aa, ba[k], mida[q]);
+                    }
+                }
+            }
+            for (uint q = 0u; q < PER; q++) {
+                if (sg + SUBGROUPS * q < TILES) {
+                    mid[q] = mid[q] + mida[q];
+                    relu(mid[q]);
+                }
+            }
+        }
+        SUB(13u)
+        sync();
+        SUB(14u)
+        for (uint q = 0u; q < PER; q++) {
+            uint idx = sg + SUBGROUPS * q;
+            if (idx < TILES)
+                coopMatStore(bf_acc(mid[q]), hb, (idx / NT) * 16u * HS + n * 16u, HS, ROW);
+        }
+        sync();
+        MARK(5u)
+        // h += n2(…) + b, dans ses registres ; puis h en bf16 dans hb, une fois relu(n1) lu par tous
+        {
+            MATB b[NT];
+            for (uint k = 0u; k < NT; k++)
+                coopMatLoad(b[k], wb, TILE(n2w16, k, n, NT), 16u, COL);
+            // comme n1 : deux sommes par tuile (entrées paires et impaires), entrelacées
+            ACC even[PER], odd[PER];
+            for (uint q = 0u; q < PER; q++) {
+                if (sg + SUBGROUPS * q < TILES) {
+                    coopMatLoad(even[q], w, n2b + n * 16u, 0u, ROW);
+                    odd[q] = ACC(0.0);
+                }
+            }
+            for (uint k = 0u; k < NT; k += 2u) {
+                for (uint q = 0u; q < PER; q++) {
+                    uint idx = sg + SUBGROUPS * q;
+                    if (idx < TILES) {
+                        uint m = idx / NT;
+                        MATA a, a2;
+                        coopMatLoad(a, hb, m * 16u * HS + k * 16u, HS, ROW);
+                        coopMatLoad(a2, hb, m * 16u * HS + (k + 1u) * 16u, HS, ROW);
+                        even[q] = coopMatMulAdd(a, b[k], even[q]);
+                        odd[q] = coopMatMulAdd(a2, b[k + 1u], odd[q]);
+                    }
+                }
+            }
+            for (uint q = 0u; q < PER; q++)
+                if (sg + SUBGROUPS * q < TILES)
+                    hacc[q] = hacc[q] + even[q] + odd[q];
+        }
+        sync();
+        for (uint q = 0u; q < PER; q++) {
+            uint idx = sg + SUBGROUPS * q;
+            if (idx < TILES)
+                coopMatStore(bf_acc(hacc[q]), hb, (idx / NT) * 16u * HS + n * 16u, HS, ROW);
+        }
+        sync();
+        MARK(6u)
+        // moyenne et maximum des régions, puis g += g2(relu(g1([g, moyenne, max])))
+        // tous les fils : une colonne chacun, les lignes en RG parts (sommes partielles dans scratch)
+        {
+            uint o = t % H, part = t / H;
+            float sum = 0.0, mx = uintBitsToFloat(0xff800000u);
+            for (uint i = part; i < r; i += RG) {
+                float v = float(hb[i * HS + o]);
+                sum += v;
+                mx = max(mx, v);
+            }
+            scratch[t] = sum;
+            scratch[THREADS + t] = mx;
+        }
+        sync();
+        if (t < H) {
+            float sum = 0.0, mx = uintBitsToFloat(0xff800000u);
+            for (uint q = 0u; q < RG; q++) {
+                sum += scratch[q * H + t];
+                mx = max(mx, scratch[THREADS + q * H + t]);
+            }
+            cat[H + t] = sum / float(r);
+            cat[2u * H + t] = mx;
+        }
+        sync();
+        MARK(7u)
+        gemv4(0u, g1w, g1b, 3u * H, true, 0u, 0u);
+        MARK(8u)
+        gemv4(1u, g2w, g2b, H, false, 0u, 0u);
+        if (t < H)
+            cat[t] += vout[t];
+        sync();
+        MARK(9u)
+    }
+
+    uint out0 = pos * OUT;
+    // politique de la partie
+    gemv4(0u, T(T_GLOB_POL1), T(T_GLOB_POL1 + 1u), H, true, 0u, 0u);
+    gemv(false, T(T_GLOB_POL2), T(T_GLOB_POL2 + 1u), H, GLOBAL_KEYS, false);
+    if (t < GLOBAL_KEYS)
+        outp[out0 + t] = vout[t];
+    MARK(10u)
+    // politique des régions : node_pol([h_i, g]), la part de g une fois (16 sorties, 9 servent)
+    gemv(true, T(T_NODE_POL) + H * KINDS, T(T_NODE_POL + 1u), H, KINDS, false);
+    // la part de g en fin de scratch, après les sorties de node_pol (48 × 16)
+    if (t < 16u)
+        scratch[1008u + t] = t < KINDS ? vout[t] : 0.0;
+    sync();
+    if (sg < 3u) {
+        uint wt = T(T_NODE_POL16), wl = T(T_NODE_POL16_LOW);
+        ACC c;
+        coopMatLoad(c, scratch, 1008u, 0u, ROW);
+        for (uint k = 0u; k < NT; k++) {
+            MATA a;
+            MATB b, bl;
+            coopMatLoad(a, hb, sg * 16u * HS + k * 16u, HS, ROW);
+            coopMatLoad(b, wb, TILE(wt, k, 0u, NT), 16u, COL);
+            coopMatLoad(bl, wb, TILE(wl, k, 0u, NT), 16u, COL);
+            c = coopMatMulAdd(a, b, c);
+            c = coopMatMulAdd(a, bl, c);
+        }
+        coopMatStore(c, scratch, sg * 16u * 16u, 16u, ROW);
+    }
+    sync();
+    for (uint e = t; e < 64u * KINDS; e += THREADS) {
+        uint i = e % 64u, kind = e / 64u;
+        outp[out0 + GLOBAL_KEYS + e] = i < r ? scratch[i * 16u + kind] : uintBitsToFloat(0xff800000u);
+    }
+    MARK(11u)
+    // valeur : val2(relu(val1([g, moyenne h]))), la moyenne laissée par le dernier pooling
+    gemv4(0u, T(T_VAL1), T(T_VAL1 + 1u), 2u * H, true, 0u, 0u);
+    gemv(false, T(T_VAL2), T(T_VAL2 + 1u), H, 10u, false);
+    if (t < 10u)
+        outp[out0 + KEYS + t] = vout[t];
+    MARK(12u)
+#ifdef PROFILE
+    if (t == 0u)
+        for (uint q = 0u; q < 16u; q++)
+            prof[pos * 16u + q] = spent_[q];
+#endif
+}

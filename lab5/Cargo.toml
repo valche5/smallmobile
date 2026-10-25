@@ -1,0 +1,27 @@
+[package]
+name = "smallmobile-lab5"
+version = "0.1.0"
+edition = "2024"
+description = "Laboratoire 5 : mesurer les coups manqués par c130, depuis lab3 (journal.md)."
+publish = false
+
+[[bin]]
+name = "lab5"
+path = "src/bin/lab.rs"
+
+[features]
+# Vulkan inclus dans les compilations ordinaires ; --no-default-features pour un programme CPU seul.
+default = ["vulkan"]
+# Le réseau sur GPU pour la génération des parties (`lab5 selfplay --device vulkan`) ;
+# shaders compilés par glslc (build.rs).
+vulkan = ["dep:ash"]
+
+[dependencies]
+smallmobile-kernel = { path = "../kernel" }
+smallmobile-brain5 = { path = "brain" }
+# l'Expert de lab2, adversaire témoin de l'arène (`lab2:net=…`)
+smallmobile-brain2 = { path = "../lab2/brain" }
+ash = { version = "0.38", optional = true }
+
+[dev-dependencies]
+smallmobile-brain3 = { path = "../lab3/brain" }

@@ -1,0 +1,13 @@
+[package]
+name = "smallmobile-brain5"
+version = "0.1.0"
+edition = "2024"
+description = "L'IA Expert du labo 5 : Gumbel AlphaZero avec nœuds de hasard, copie de lab3/c130 pour le diagnostic des coups, pour le jeu et pour le labo."
+publish = false
+
+[[bin]]
+name = "lab5-expert"
+path = "src/bin/expert.rs"
+
+[dependencies]
+smallmobile-kernel = { path = "../../kernel" }

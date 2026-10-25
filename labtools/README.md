@@ -26,12 +26,15 @@ Labos :
 | `lab1` | Recherche AlphaZero sur mondes possibles (boucle ouverte), fins simulées de 3 tours, coups regroupés ; réseaux gen0 à gen11 | Figé le 21 octobre 2026 ; Expert `lab1/gen11` du jeu |
 | `lab2` | Gumbel AlphaZero, nœuds de hasard, coups jeton après jeton, départ de zéro (`lab2/journal.md`) | Figé le 22 octobre 2026 après sa troisième boucle ; Expert `lab2/c060` du jeu, témoin de l'arène de lab3 |
 | `lab3` | Spécialisation puis reprise généraliste, c130 en 128×7 (`lab3/journal.md`) | Figé le 24 octobre 2026 ; Expert `lab3/c130` du jeu |
-| `lab4` | Budget, largeur et horizon de recherche depuis c130 ; plan `lab4/lab.md` | Ouvert le 24 octobre 2026 ; aucune campagne lancée |
+| `lab4` | Budget, largeur, horizon et cibles de valeur depuis c130 ; essais sans progrès net de l'apprentissage | Figé le 25 octobre 2026 ; résultats dans `lab4/journal.md` |
+| `lab5` | Coups manqués par c130 : alternatives évaluées jusqu'à la fin, sélection et confirmation indépendantes ; reprise directe de lab3 | Ouvert le 25 octobre 2026 ; outils prêts, aucune campagne lancée ; plan `lab5/lab.md` |
 
 Outils communs (ce dossier) :
 
 - `cloud.sh` : machines de calcul AWS (`LAB=labN labtools/cloud.sh job …`, mode d'emploi en
   tête du script) ; `aws/` : politiques du compte ; `state/` (hors Git) : la machine en cours ;
+- `vast.sh` : machines à GPU louées sur vast.ai (`LAB=labN labtools/vast.sh up OFFRE`, mode
+  d'emploi en tête du script ; section « Les machines vast.ai ») ; journal dans `state/vast/` ;
 - `score.py` : le score d'une arène (`labN arena --out r.tsv`) et ses intervalles par donne ;
 - `games.ts` : résumé des parties archivées par le serveur (`data/games/`) ;
 - `export-room.ts` : une salle du serveur au format du noyau, pour l'analyser dans un labo.
@@ -85,6 +88,23 @@ Commun à tous les labos ; un labo peut le compléter dans son journal.
   unique peut cacher une dépendance à la composition de la table.
 - Tests ciblés pour chaque modification, puis vérifications Rust du projet avec timeout.
   Entraînement et campagnes de parties se font sur AWS.
+
+## Les machines vast.ai
+
+Constaté le 25 octobre 2026 : compte de l'utilisateur, 25 $ de crédit offert, clé SSH
+`~/.ssh/id_ed25519` de mini déclarée ; client `vastai` de `lab4/py/.venv`. Mêmes règles que pour
+AWS : accord de l'utilisateur avant toute dépense, étapes courtes, `vast.sh status` après chaque
+calcul (aucune machine ne doit rester).
+
+- Image `vastai/base-image:stock-ubuntu26.04-…` : SSH et Vulkan NVIDIA fournis, glibc assez récente
+  pour le binaire compilé sur mini. Une image nue (`debian:trixie`) n'a pas de sshd : inutilisable.
+- Hôtes inégaux : un GPU occupé à 100 % au repos et Vulkan bloqué à l'ouverture (`drm_open`) ; un
+  `authorized_keys` aux droits refusés par sshd. `vast.sh up` contrôle les deux et corrige les droits.
+- Sur la machine, `ps` et `pgrep` peuvent rester bloqués pendant qu'un calcul tient le GPU : le
+  script suit ses calculs par numéro de processus et journal.
+- Le binaire Vulkan se compile sur mini avec shaderc 2026.4 extrait dans
+  `~/.local/opt/shaderc-2026.4` (Debian 13 : 2025.2, insuffisant pour le shader bf16), dans
+  `~/.cache/vast-target` pour ne pas toucher `target/release`.
 
 ## Les machines AWS
 
