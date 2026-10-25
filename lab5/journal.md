@@ -77,3 +77,36 @@ moyen ? Taille fixée sur le pilote seulement (son coût, et la dispersion de se
   (machine perdue), reprise sur le même modèle, notée ici.
 - Lecture : `py/probe.py`, intervalles bootstrap par position. Pas d'arrêt anticipé selon le
   résultat ; positions à examiner ensuite seulement, dans une étape distincte.
+
+### Campagne c1 : résultats (25 octobre)
+
+Une machine vast.ai (offre 53189390, Pays-Bas, machine 119726 : RTX 5080 bridée à 250 W, pilote
+595.84, Ryzen 9 9950X, 31 fils), binaire `0dade407c00b` (commit `ab9eb2f`), `DEVICE=vulkan` pour
+les trois étapes. `positions` 88 s ; `select` 10 min (coupé à 47 positions, repris) puis 46 min ;
+`confirm` 57 min. Location 128 min, ~0,90 $. GPU à 100 % (237 W sur 250), processeur chargé
+de 1 à 8 fils sur 31 : le débit est celui du GPU. Une position à 4 joueurs en début de partie
+prend jusqu'à 19 min sur un fil : ne pas découper ces étapes en tranches courtes.
+
+Gain de victoire du coup retenu sur celui de c130 (confirmation, bootstrap par position, 95 %) :
+
+| Joueurs | Début | Milieu | Fin |
+| --- | --- | --- | --- |
+| 2 | −0,05 [−0,94, +0,91] | −0,14 [−0,88, +0,63] | +0,10 [−0,62, +0,75] |
+| 4 | **+2,30 [+0,34, +4,48]** | +1,63 [−0,41, +4,02] | +0,12 [−0,88, +1,18] |
+
+Global équilibré **+0,66 [+0,07, +1,27]** points ; 121 coups changés sur 300 par la sélection.
+
+- À 2 joueurs, aucune marge mesurable parmi les candidats essayés : c130 y joue à peu près au
+  mieux de ce que la méthode sait voir.
+- À 4 joueurs, début et milieu de partie : de vraies occasions manquées.
+- Par sorte de coup retenu (exploratoire) : **choix d'une combinaison peuple/pouvoir** 14 fois,
+  +10,1 points en moyenne (12 positifs), phase `Pick` +4,2 en moyenne sur ses 34 positions ;
+  **passer en déclin** 9 fois, +11,3 (6 positifs). Les autres changements (conquêtes, abandons,
+  jetons, fin des conquêtes) sont nuls ou négatifs en moyenne : la sélection sur 32 suites y
+  retient surtout du bruit.
+- Cas extrêmes à examiner : p000057 (4 j., milieu, prendre Ratmen Swamp plutôt que Wizards Hill :
+  30,5 → 68,8 %), p000135 (4 j., milieu, déclin plutôt qu'abandon d'une région : 24,2 → 57,0 %),
+  p000187 (4 j., début, déclin : 17,2 → 44,9 %).
+
+Lecture : gain local d'un coup changé suivi par c130, pas un gain en arène. La piste est le choix
+des combinaisons et le moment du déclin à 4 joueurs.

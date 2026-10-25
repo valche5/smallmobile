@@ -25,13 +25,14 @@
 # SSH : connexion directe, délai de 10 s, connexion morte détectée en 30 s, trois essais si la
 # connexion échoue. Les calculs tournent détachés (setsid) : une coupure ne les arrête pas.
 #
-# Réglages (variables d'environnement) : LAB, MAX_PRICE ($/h, 0,6), DISK (Go, 16), KEEP, VAST (le
+# Réglages (variables d'environnement) : VAST_NAME (une machine de plus à côté, état séparé :
+# labtools/state/NOM), IMAGE, LAB, NET (réseau du test Vulkan, labN/nets/c130.bin), MAX_PRICE ($/h, 0,6), DISK (Go, 16), KEEP, VAST (le
 # client vastai), GLSLC_DIR (shaderc 2026.4 extrait, `usr/bin/glslc`).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VAST=${VAST:-$(command -v vastai || echo lab4/py/.venv/bin/vastai)}
-IMAGE=vastai/base-image:stock-ubuntu26.04-2026-10-23
+IMAGE=${IMAGE:-vastai/base-image:stock-ubuntu26.04-2026-10-23}
 # certains hôtes laissent authorized_keys avec des droits que sshd refuse
 ONSTART='chown -R root:root /root/.ssh; chmod 700 /root/.ssh; chmod 600 /root/.ssh/authorized_keys'
 GLSLC_DIR=${GLSLC_DIR:-$HOME/.local/opt/shaderc-2026.4}
@@ -40,7 +41,7 @@ MAX_PRICE=${MAX_PRICE:-0.6}
 DISK=${DISK:-16}
 KEEP=${KEEP:-}
 LAB=${LAB:-}
-ST=labtools/state/vast
+ST=labtools/state/${VAST_NAME:-vast}
 REMOTE=/root/sm
 mkdir -p "$ST/jobs"
 LOG=$ST/vast.log
@@ -59,11 +60,11 @@ SSHOPT=(-o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 
 rsh() {
   local t=$1 i code
   shift
-  for i in 1 2 3; do
+  for i in 1 2 3 4 5; do
     code=0
     timeout --kill-after=5 "$t" ssh "${SSHOPT[@]}" -p "$(st port)" "root@$(st host)" "$@" || code=$?
     [ "$code" -ne 255 ] && return "$code"
-    say "ssh : connexion impossible (essai $i/3)"
+    say "ssh : connexion impossible (essai $i/5)"
     sleep $((i * 5))
   done
   return 255
@@ -125,6 +126,7 @@ push_cmd() {
   { git rev-parse HEAD; git status --short | head -20; } 2>/dev/null |
     rsh 30 "cat > $REMOTE/vast-commit.txt"
   say "envoyé : $(rsh 30 "du -sh $REMOTE | cut -f1")"
+  touch "$ST/pushed"
 }
 
 up_cmd() {
@@ -166,32 +168,50 @@ print(d["dph_total"])' > "$ST/conn"
     sleep 10
   done
   rsh 20 true || die "SSH ne répond pas en 2 min"
-  say "SSH prêt"
-  # 3. machine et GPU au repos
+  # l'image continue de démarrer après `running` et relance son sshd : attendre trois connexions
+  # réussies d'affilée, à 10 s d'intervalle (3 min au plus)
+  local ok=0
+  for i in $(seq 18); do
+    sleep 10
+    if timeout 15 ssh "${SSHOPT[@]}" -p "$(st port)" "root@$(st host)" true 2>/dev/null; then
+      ok=$((ok + 1))
+    else
+      ok=0
+      say "SSH coupé pendant le démarrage de l'image, nouvelle attente"
+    fi
+    [ "$ok" -ge 3 ] && break
+  done
+  [ "$ok" -ge 3 ] || die "SSH instable pendant 3 min"
+  say "SSH prêt et stable"
+  # 3. l'image finit son démarrage ; un GPU ouvert trop tôt a déjà bloqué des hôtes
+  say "attente de 2 min avant de toucher au GPU (démarrage de l'image)"
+  sleep 120
   rsh 30 'nvidia-smi --query-gpu=name,driver_version,utilization.gpu,memory.total --format=csv,noheader;
     echo "$(nproc) fils, $(grep -m1 "model name" /proc/cpuinfo | cut -d: -f2-)";
     free -g | awk "/Mem/{print \$2\" Go de mémoire\"}"; df -h / | awk "NR==2{print \$4\" libres sur le disque\"}"' |
     tee "$ST/machine" | note
   say "$(paste -sd ';' "$ST/machine")"
+  # occupé au repos à trois lectures : sur trois hôtes, le signe d'un GPU bloqué (Vulkan figé ensuite)
   local busy
-  busy=$(head -1 "$ST/machine" | cut -d, -f3 | tr -dc 0-9)
-  [ "${busy:-100}" -lt 20 ] || die "GPU occupé à ${busy} % au repos : hôte défectueux"
-  # 4. Vulkan, détaché : un pilote bloqué ne bloque pas mini (40 s)
-  rsh 20 'setsid nohup timeout -s KILL 40 vulkaninfo > /root/vulkan.txt 2>&1 < /dev/null & echo $! > /root/vulkan.pid'
+  busy=$(rsh 30 'for i in 1 2 3; do nvidia-smi --query-gpu=utilization.gpu,power.draw,power.limit \
+    --format=csv,noheader,nounits; sleep 3; done' | tee -a "$LOG" |
+    awk -F', ' '$1 >= 90 { n++ } END { print n + 0 }')
+  [ "$busy" -lt 3 ] || die "GPU occupé au repos : hôte défectueux"
+  # 4. le labo, puis Vulkan par le labo lui-même, détaché (40 s) : un pilote bloqué ne bloque pas mini
+  push_cmd
+  rsh 20 "cd $REMOTE || exit 1; setsid nohup timeout -s KILL 40 target/release/$LAB bench-vulkan --net ${NET:-$LAB/nets/c130.bin} \
+    --count 1024 > vast-jobs/vulkan.txt 2>&1 < /dev/null & echo \$! > vast-jobs/vulkan.pid"
   for i in $(seq 9); do
     sleep 5
-    rsh 20 'kill -0 $(cat /root/vulkan.pid) 2> /dev/null' || break
+    rsh 20 "kill -0 \$(cat $REMOTE/vast-jobs/vulkan.pid) 2> /dev/null" || break
   done
-  rsh 20 'grep -E "deviceName|driverInfo" /root/vulkan.txt | sort -u | head -4;
-    grep -o -E "VK_KHR_cooperative_matrix|VK_KHR_shader_bfloat16" /root/vulkan.txt | sort -u' | tee "$ST/vulkan" | note
-  grep -q 'deviceName.*NVIDIA' "$ST/vulkan" || die "Vulkan ne voit pas le GPU NVIDIA"
-  if [ "$(grep -c VK_KHR "$ST/vulkan")" -lt 2 ]; then
-    say "attention : pas de bf16 coopératif, le shader f32 de secours sera utilisé (plus lent)"
+  rsh 20 "cat $REMOTE/vast-jobs/vulkan.txt" | tee "$ST/vulkan" | note
+  grep -q 'GPU NVIDIA' "$ST/vulkan" || die "Vulkan inutilisable (journal : $LOG)"
+  if grep -q 'bf16' "$ST/vulkan"; then
+    say "Vulkan prêt : $(tail -1 "$ST/vulkan" | tr -s ' ')"
   else
-    say "Vulkan prêt (bf16, matrices coopératives)"
+    say "attention : pas de bf16 coopératif, le shader f32 de secours sera utilisé (plus lent)"
   fi
-  # 5. le labo
-  push_cmd
   trap - EXIT
   say "machine $id prête"
 }
@@ -199,8 +219,8 @@ up_failed() {
   local code=$?
   trap - EXIT
   [ "$code" -eq 0 ] && return
-  say "échec de up : derniers messages de la machine"
-  timeout 30 "$VAST" logs "$(st id)" --tail 30 2>&1 | note || true
+  say "échec de up (code $code$([ "$code" -eq 124 ] && echo " : délai dépassé")) ; derniers messages de la machine"
+  timeout 30 "$VAST" logs "$(st id)" --tail 60 2>&1 | note || true
   if [ -n "$KEEP" ]; then
     say "KEEP=1 : machine $(st id) gardée pour diagnostic (down pour la détruire)"
   else
@@ -235,7 +255,7 @@ run_cmd() {
   rsh 20 "mkdir -p $REMOTE/vast-jobs && cat > $REMOTE/vast-jobs/$name.cmd" <<< "$cmd"
   rsh 20 "cat > $REMOTE/vast-jobs/job.sh" <<< "$JOB"
   # sans ps ni pgrep : ils peuvent rester bloqués sur un processus qui tient le GPU
-  rsh 20 "cd $REMOTE && setsid nohup bash vast-jobs/job.sh $name $limit > /dev/null 2>&1 < /dev/null &
+  rsh 20 "cd $REMOTE || exit 1; setsid nohup bash vast-jobs/job.sh $name $limit > /dev/null 2>&1 < /dev/null &
     echo \$! > vast-jobs/$name.pid; sleep 1; kill -0 \$(cat vast-jobs/$name.pid)"
   say "calcul $name lancé (au plus $limit s) : $cmd"
 }
@@ -290,7 +310,7 @@ down_cmd() {
   local id i cost
   id=$(st id)
   [ -n "$id" ] || { say "aucune machine louée"; status_cmd; return; }
-  if [ -n "$(st host)" ]; then
+  if [ -f "$ST/pushed" ]; then
     rget 60 "$REMOTE/vast-jobs/" "$ST/jobs/$id/" || true
   fi
   say "destruction de la machine $id"
@@ -307,7 +327,7 @@ down_cmd() {
   else
     say "machine $id détruite"
   fi
-  rm -f "$ST"/{id,start,conn,host,port,dph,machine,vulkan}
+  rm -f "$ST"/{id,start,conn,host,port,dph,machine,vulkan,pushed}
   status_cmd
 }
 

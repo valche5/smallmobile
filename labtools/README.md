@@ -102,6 +102,11 @@ calcul (aucune machine ne doit rester).
   `authorized_keys` aux droits refusés par sshd. `vast.sh up` contrôle les deux et corrige les droits.
 - Sur la machine, `ps` et `pgrep` peuvent rester bloqués pendant qu'un calcul tient le GPU : le
   script suit ses calculs par numéro de processus et journal.
+- Hôtes, 25 octobre (numéro de machine vast, stable d'une location à l'autre) : **bons** 119726
+  (Pays-Bas, RTX 5080 bridée à 250 W, Ryzen 9 9950X ; campagne c1 de lab5) et 153202 (Nevada,
+  RTX 5080, Ryzen 9 7945HX ; pilote de lab5, puis GPU bloqué après une ouverture de Vulkan
+  pendant le démarrage de l'image). **GPU occupé avant tout calcul** (100 %, 96 à 118 W au
+  repos) : les RTX 5090 des offres 34461819 (Belgique) et 19559317 (Norvège). Préférer les bons.
 - Le binaire Vulkan se compile sur mini avec shaderc 2026.4 extrait dans
   `~/.local/opt/shaderc-2026.4` (Debian 13 : 2025.2, insuffisant pour le shader bf16), dans
   `~/.cache/vast-target` pour ne pas toucher `target/release`.
