@@ -319,6 +319,24 @@ win = 0,5. Suivi : valeur sur les positions fixes à chaque réseau (`runs/w2/tr
 c150, confirmations sur 920 donnes (contre c130 à win = 0,5 puis à 1, graines 42013 et 42014) et
 valeur sur les positions du plafond (`runs/w2/final.txt`).
 
+Résultat : **rien de mesurable**, le palier tient. Les 20 pas ont duré 3 h 20 (selfplay 394 s,
+entraînement 150 s environ, duel 40 à 60 s). Les duels de la boucle restent autour de zéro
+(de −4,2 ± 3,3 pour c134 à +2,8 ± 2,0 pour c146, seul « gain » du test séquentiel). Confirmations
+sur 920 donnes, n = 400 :
+
+| c150 (win = 1) contre | 2 j. | 3 j. | 4 j. | 5 j. | score |
+|---|---|---|---|---|---|
+| c130 à win = 0,5 (avant/après) | +2,6 ± 2,8 | +1,5 ± 3,5 | −0,4 ± 2,8 | −0,3 ± 2,3 | **+0,9 ± 1,4** |
+| c130 à win = 1 (l'entraînement seul) | +1,4 ± 3,2 | −1,6 ± 3,7 | +1,1 ± 2,7 | −1,4 ± 2,1 | **−0,1 ± 1,5** |
+
+Le critère de victoire seul dans la recherche vaut toujours un point environ (déjà vu : win = 0,75
++1,3 ± 1,0, win = 1 +1,2 ± 1,5), sans être significatif ici ; les 20 pas d'entraînement à win = 1
+et TD = 0,5 n'y ajoutent rien. Valeur sur les positions fixes : quasi immobile de c131 à c150. À
+2 joueurs l'entropie passe de 0,272 à 0,277 dès c131 (la perte reste 0,268–0,269) ; à 5 joueurs
+elle baisse doucement (1,330 → 1,323, début de partie 1,581 → 1,574) sans gain de perte (1,333).
+La valeur ne s'effondre pas vers l'uniforme. Plafond, part atteinte (3/4/5 joueurs) : c130
+51/61/70 %, c140 54/60/68 %, c150 54/60/68 %, dans le bruit (même tableau que l'ablation TD).
+
 ## Résultats de force
 
 **Aucun tournoi complet ni entraînement lancé. Aucun gain revendiqué.** Les mini-arènes du pilote
