@@ -2,7 +2,7 @@
 # kernel : le jeu (règles, IA, cartes), compilé en WebAssembly pour le téléphone et le serveur.
 # labN : un laboratoire de l'IA Expert (une approche, son journal, ses données) ; labN/brain : son
 # Expert, joué par le serveur (programme labN-expert) et par les labos. Voir labtools/README.md.
-members = ["kernel", "lab1", "lab1/brain", "lab2", "lab2/brain", "lab3", "lab3/brain", "lab4", "lab4/brain", "lab5", "lab5/brain"]
+members = ["kernel", "lab1", "lab1/brain", "lab2", "lab2/brain", "lab3", "lab3/brain", "lab4", "lab4/brain", "lab5", "lab5/brain", "lab6", "lab6/brain"]
 resolver = "3"
 
 [profile.release]

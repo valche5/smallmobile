@@ -28,6 +28,7 @@ Labos :
 | `lab3` | Spécialisation puis reprise généraliste, c130 en 128×7 (`lab3/journal.md`) | Figé le 24 octobre 2026 ; Expert `lab3/c130` du jeu |
 | `lab4` | Budget, largeur, horizon et cibles de valeur depuis c130 ; essais sans progrès net de l'apprentissage | Figé le 25 octobre 2026 ; résultats dans `lab4/journal.md` |
 | `lab5` | Coups manqués par c130 : alternatives évaluées jusqu'à la fin, sélection et confirmation indépendantes ; reprise directe de lab3 | Figé le 25 octobre 2026 : marge locale +0,66 point [+0,07, +1,27], surtout à 4 joueurs (combinaisons, déclin) ; borne basse, méthode limitée (`lab5/journal.md`) |
+| `lab6` | La marge de c130 face à une recherche beaucoup plus longue (arène 16× et 64× les simulations) ; essai CUDA | Ouvert le 25 octobre 2026 ; plan `lab6/lab.md` |
 
 Outils communs (ce dossier) :
 
