@@ -110,3 +110,24 @@ Global équilibré **+0,66 [+0,07, +1,27]** points ; 121 coups changés sur 300 
 
 Lecture : gain local d'un coup changé suivi par c130, pas un gain en arène. La piste est le choix
 des combinaisons et le moment du déclin à 4 joueurs.
+
+## Clôture (25 octobre)
+
+Labo figé à la demande de l'utilisateur, qui n'est pas convaincu par la méthode. Le résultat de c1
+est une **borne basse** de la marge de c130, pas une mesure de son plafond. Angles morts :
+
+- six candidats au plus, choisis par les a priori de c130 : un bon coup que le réseau sous-estime
+  n'est jamais essayé (souvent des dizaines de coups légaux en conquête ou en redéploiement) ;
+- un seul coup changé, puis c130 continue : un coup qui demande un plan sur plusieurs décisions
+  est joué ensuite à la manière de c130 et paraît moins bon (biais vers son style) ;
+- décisions jeton par jeton : la plupart des positions tirées sont de petits morceaux de tour
+  (179 sur 300 sans changement) ;
+- 32 suites par candidat en sélection, soit ±8 points environ : un gain réel de 3 à 4 points est
+  le plus souvent noyé dans le bruit ;
+- les grandes décisions sont rares dans l'échantillon (34 choix de combinaison sur 300), alors
+  que c'est là que les gros écarts sont apparus ;
+- adversaires tous c130.
+
+Pour mesurer la marge autrement : viser les grandes décisions en essayant toutes leurs options
+(six combinaisons, déclin ou non) avec beaucoup plus de suites ; ou une arène de c130 contre
+c130 à beaucoup plus de simulations (16 fois), qui capte aussi les plans sur plusieurs coups.

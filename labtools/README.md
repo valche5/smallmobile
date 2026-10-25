@@ -27,7 +27,7 @@ Labos :
 | `lab2` | Gumbel AlphaZero, nœuds de hasard, coups jeton après jeton, départ de zéro (`lab2/journal.md`) | Figé le 22 octobre 2026 après sa troisième boucle ; Expert `lab2/c060` du jeu, témoin de l'arène de lab3 |
 | `lab3` | Spécialisation puis reprise généraliste, c130 en 128×7 (`lab3/journal.md`) | Figé le 24 octobre 2026 ; Expert `lab3/c130` du jeu |
 | `lab4` | Budget, largeur, horizon et cibles de valeur depuis c130 ; essais sans progrès net de l'apprentissage | Figé le 25 octobre 2026 ; résultats dans `lab4/journal.md` |
-| `lab5` | Coups manqués par c130 : alternatives évaluées jusqu'à la fin, sélection et confirmation indépendantes ; reprise directe de lab3 | Ouvert le 25 octobre 2026 ; outils prêts, aucune campagne lancée ; plan `lab5/lab.md` |
+| `lab5` | Coups manqués par c130 : alternatives évaluées jusqu'à la fin, sélection et confirmation indépendantes ; reprise directe de lab3 | Figé le 25 octobre 2026 : marge locale +0,66 point [+0,07, +1,27], surtout à 4 joueurs (combinaisons, déclin) ; borne basse, méthode limitée (`lab5/journal.md`) |
 
 Outils communs (ce dossier) :
 
