@@ -36,3 +36,21 @@ Graines réservées : 61001 (mini-arène de coût), 62001 (16×), 63001 (64×).
   Le fichier de sortie manquait (dossier absent) : `lab6 arena` crée désormais `--out` avant de
   jouer ; après l'échec, `exit` laissait le pilote NVIDIA attendre les commandes soumises d'avance.
 - Arène 16× lancée : graine 62001, 400 donnes, même machine.
+
+## Le shader Vulkan bf16 faux sur NVIDIA ; moteur CUDA
+
+`lab6 check-gpu` (positions de l'IA Normale, 2 à 5 joueurs, GPU contre processeur), RTX 5080 :
+Vulkan bf16 écart maximal victoire 0,37, pièces 10,0, logits 112 (faux) ; Vulkan f32 0,002, 0,06,
+0,63 ; **CUDA** (`--device cuda`, `src/cuda.rs` : cuBLAS bf16 pour les grands produits, noyaux NVRTC,
+régions à la suite) 0,0003, 0,006, 0,11, et pareil avec deux réseaux mêlés dans les calculs.
+Selfplay c130, 1 000 parties : CUDA 47 s (~790 positions/s), Vulkan f32 73 s, Vulkan bf16 (faux)
+33 s. Le banc PyTorch laisse de la marge au moteur CUDA (premier jet). La première arène 16×,
+lancée en Vulkan bf16, a été arrêtée sans score (même graine reprise ensuite).
+
+### Arène 16× (graine 62001, 400 donnes, CUDA, 27 min)
+
+c130 à 6 400 simulations face à des c130 à 400 (`runs/arena16.tsv`, `labtools/score.py`) :
+2 joueurs −0,8 ± 4,3 ; 3 joueurs +4,9 ± 5,7 ; 4 joueurs +0,5 ± 4,2 ; 5 joueurs +2,4 ± 3,4 ;
+**score +1,8 ± 2,2 points**, indécis, comme 8× dans lab4 (+2,0 ± 2,3). 8,3 s par décision de la
+recherche longue (p95 28 s). Seize fois plus de recherche n'apporte presque rien : c130 est proche du
+plafond de ce que sa recherche tire de ce réseau.
