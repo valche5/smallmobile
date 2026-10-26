@@ -1,0 +1,17 @@
+[package]
+name = "smallmobile-brain8"
+version = "0.1.0"
+edition = "2024"
+description = "L'IA Expert du labo 8 : Gumbel AlphaZero avec nœuds de hasard (c130 de lab3) et fins simulées de lab7, pour le jeu et pour le labo."
+publish = false
+
+[[bin]]
+name = "lab8-expert"
+path = "src/bin/expert.rs"
+
+[dependencies]
+smallmobile-kernel = { path = "../../kernel" }
+
+[dev-dependencies]
+# la recherche de lab6, témoin des tests : sans option, celle de lab8 doit lui être identique
+smallmobile-brain6 = { path = "../../lab6/brain" }
