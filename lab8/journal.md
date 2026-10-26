@@ -197,6 +197,20 @@ partagent un seul lot (`vulkan::Shared`).
   3 joueurs, 6 donnes : 18 victoires sur 18 (la fin simulée joue les vraies règles), 284 ms par
   décision.
 
+## Phase 1 : les parties d'imitation (27 octobre, 0 h 25)
+
+`lab8 record --games 100000 --out lab8/data/c130 --seed 81000000 --device vulkan` : 100 000 parties
+en 5 804 s (17,2 parties/s), 8 068 556 plans, 8,3 Go (forme compacte) ; GPU : 723 000 évaluations/s,
+lots de 116 en moyenne ; fils de jeu en attente du GPU 7,6 % du temps.
+
+Mesures GPU libre, aussitôt après :
+- `bench-gpu` (réseau 256 × 6 au hasard) : 3 125 positions/s en lots de 16, 5 990 en lots de 64,
+  5 540 en lots de 1 024 ; `gemm` 77 %, `pack` 10 %, `attention` 8,5 %. Les produits tournent à ~5
+  TFLOPS : le kernel `gemm` est à reprendre (c130 en Vulkan atteint ~40 TFLOPS sur la même carte).
+- Arène de contrôle, k = 16, m = 4 (mêmes donnes que plus haut) : `gpu=1` 9,4 s en tout (lectures
+  49 s, pas 74 s, temps cumulés des fils), `gpu=enc` 17,4 s (lectures 157 s, pas 77 s). GPU libre,
+  le tout-GPU l'emporte : la lenteur d'avant venait du GPU partagé avec la phase 1.
+
 ## Phase 2 : protocole (fixé le 26 octobre, avant le calcul)
 
 - Données : `lab8/data/c130` (100 000 parties, graine 81000000) ; validation : les parties dont la
