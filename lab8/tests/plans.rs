@@ -31,7 +31,7 @@ fn the_decoder_plays_whole_games() {
 /// La recherche sur des plans (réseau au hasard, 4 candidats, 2 mondes) finit ses parties.
 #[test]
 fn the_plan_search_plays_whole_games() {
-    let plans = Plans::named(&format!("plans:net={},k=4,m=2", fixture_net())).unwrap();
+    let plans = Plans::named(&format!("plans:net={},k=4,m=2,mods=2", fixture_net())).unwrap();
     let field = Plan::named(&format!("plan:net={},t=1", fixture_net())).unwrap();
     for n in 2..=5 {
         let table = Table::new(n, 5000 + n as u64);

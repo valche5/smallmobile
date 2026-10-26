@@ -68,16 +68,19 @@ pub struct Config {
     /// Poids de la victoire dans la valeur, le reste à l'avance en pièces (lab7 : 0,5).
     pub win: f32,
     pub head: Head,
+    /// Candidats ajoutés par modification locale du meilleur (DORA) : rejoué jusqu'à une de ses
+    /// décisions tirée au hasard, puis réécrit par le décodeur ; évalués dans les mêmes mondes.
+    pub mods: usize,
 }
 
 impl Default for Config {
     fn default() -> Config {
-        Config { candidates: 16, worlds: 4, temperature: 1.0, mix: 0.5, win: 0.5, head: Head::Final }
+        Config { candidates: 16, worlds: 4, temperature: 1.0, mix: 0.5, win: 0.5, head: Head::Final, mods: 0 }
     }
 }
 
 impl Config {
-    /// `k=16,m=4,t=1,mix=0.5,win=0.5,head=next` (tout facultatif).
+    /// `k=16,m=4,t=1,mix=0.5,win=0.5,head=next,mods=8` (tout facultatif).
     pub fn parse(text: &str) -> Option<Config> {
         let mut cfg = Config::default();
         for part in text.split(',').filter(|p| !p.is_empty()) {
@@ -86,6 +89,7 @@ impl Config {
                 "k" => cfg.candidates = v.parse().ok().filter(|&k| k >= 1)?,
                 "m" => cfg.worlds = v.parse().ok().filter(|&m| m >= 1)?,
                 "t" => cfg.temperature = v.parse().ok()?,
+                "mods" => cfg.mods = v.parse().ok()?,
                 "mix" => cfg.mix = v.parse().ok()?,
                 "win" => cfg.win = v.parse().ok()?,
                 "head" => {
@@ -181,6 +185,9 @@ struct Lane<'m> {
     plan: Option<(Start, Rc<Memory>, Cache, Option<Key>)>,
     /// Coups imposés à jouer d'abord (le candidat), puis le décodeur.
     forced: std::vec::IntoIter<Move>,
+    /// Décisions imposées au décodeur (leurs clés) : il les lit sans les choisir (modifications
+    /// locales).
+    prefix: std::vec::IntoIter<Key>,
     /// Arrêt : au début de ce tour (fin simulée), ou à la fin du premier plan (candidat).
     horizon: Option<i64>,
     /// Température du décodeur.
@@ -374,8 +381,13 @@ fn run(net: &Net, reader: &dyn Reader, cfg: &Config, lanes: &mut [Lane], dist: &
         for (i, all) in stepping.into_iter().zip(logits) {
             let Need::Step(legal) = &needs[i] else { unreachable!() };
             let lane = &mut lanes[i];
-            let choice: Vec<f32> = legal.iter().map(|c| all[c.key as usize]).collect();
-            let c = legal[pick(&choice, lane.t, &mut lane.rng)];
+            let c = match lane.prefix.next() {
+                Some(key) => *legal.iter().find(|c| c.key == key).expect("décision du préfixe"),
+                None => {
+                    let choice: Vec<f32> = legal.iter().map(|c| all[c.key as usize]).collect();
+                    legal[pick(&choice, lane.t, &mut lane.rng)]
+                }
+            };
             lane.plan.as_mut().expect("plan en cours").3 = Some(c.key);
             lane.decisions += 1;
             lane.play(c.mv);
@@ -383,85 +395,152 @@ fn run(net: &Net, reader: &dyn Reader, cfg: &Config, lanes: &mut [Lane], dist: &
     }
 }
 
+/// Une voie neuve depuis `g` (ou un monde de `g`).
+fn lane<'m>(w: &Game<'m>, k: &Knowledge) -> Lane<'m> {
+    Lane {
+        w: *w,
+        k: *k,
+        plan: None,
+        forced: Vec::new().into_iter(),
+        prefix: Vec::new().into_iter(),
+        horizon: None,
+        t: 0.0,
+        rng: Rng::new(0),
+        played: Vec::new(),
+        decisions: 0,
+        first: None,
+        end: None,
+        die: None,
+        cand: 0,
+        weight: 1.0,
+    }
+}
+
+/// Écrit des plans depuis `g` avec le décodeur, d'une seule lecture de la racine (`root`) : un par
+/// (préfixe de décisions imposées, température).
+#[allow(clippy::too_many_arguments)]
+fn write_plans(
+    net: &Net,
+    reader: &dyn Reader,
+    cfg: &Config,
+    g: &Game,
+    k: &Knowledge,
+    root: &Rc<Memory>,
+    tries: Vec<(Vec<Key>, f32)>,
+    rng: &mut Rng,
+    dist: &[u8],
+    count: &mut (usize, usize),
+) -> Vec<Vec<Move>> {
+    let mut lanes: Vec<Lane> = tries
+        .into_iter()
+        .enumerate()
+        .map(|(i, (prefix, t))| {
+            let mut l = lane(g, k);
+            l.prefix = prefix.into_iter();
+            l.t = t;
+            l.rng = Rng::new(mix(rng.next_u64(), i as u64));
+            l.plan = Some((Start::of(g), root.clone(), Cache::default(), None));
+            l
+        })
+        .collect();
+    run(net, reader, cfg, &mut lanes, dist, count);
+    lanes.into_iter().map(|l| l.played).collect()
+}
+
+/// Les clés des décisions d'un plan joué depuis `g` (coups forcés exclus).
+fn decisions(g: &Game, k: &Knowledge, plan: &[Move]) -> Vec<Key> {
+    let (mut w, mut kw) = (*g, *k);
+    let mut out = Vec::new();
+    for mv in plan {
+        let legal = moves::legal(&w, &kw);
+        if legal.len() > 1 {
+            out.push(legal.iter().find(|c| c.mv == *mv).expect("coup du plan").key);
+        }
+        kw.play(&mut w, mv).expect("coup du plan");
+    }
+    out
+}
+
+/// La valeur moyenne de chaque candidat pour le joueur `me`, dans les mondes `worlds`, chaque
+/// candidat fini par un dé joué à chacune de ses issues.
+#[allow(clippy::too_many_arguments)]
+fn evaluate(
+    net: &Net,
+    reader: &dyn Reader,
+    cfg: &Config,
+    g: &Game,
+    k: &Knowledge,
+    worlds: &[Game],
+    candidates: &[Vec<Move>],
+    dist: &[u8],
+    count: &mut (usize, usize),
+) -> Vec<f32> {
+    let me = g.state.actor().expect("un joueur doit agir");
+    let h = horizon(g);
+    let mut lanes: Vec<Lane> = Vec::new();
+    for w in worlds {
+        for (c, plan) in candidates.iter().enumerate() {
+            let dice = outcomes(g, k, plan);
+            let branches: Vec<(Option<DieOutcome>, f32)> =
+                if dice.is_empty() { vec![(None, 1.0)] } else { dice.iter().map(|&(o, p)| (Some(o), p)).collect() };
+            for (die, weight) in branches {
+                let mut l = lane(w, k);
+                l.forced = plan.clone().into_iter();
+                l.horizon = Some(h);
+                l.die = die;
+                l.cand = c;
+                l.weight = weight;
+                lanes.push(l);
+            }
+        }
+    }
+    run(net, reader, cfg, &mut lanes, dist, count);
+    let mut scores = vec![0.0f32; candidates.len()];
+    for l in &lanes {
+        let end = l.end.expect("fin simulée finie");
+        let first = l.first.unwrap_or(end);
+        scores[l.cand] += l.weight * (cfg.mix * end[me] + (1.0 - cfg.mix) * first[me]) / worlds.len() as f32;
+    }
+    scores
+}
+
 /// Une recherche depuis `g`, où le joueur qui agit a une décision. `reader` lit les positions (`net`
 /// lui-même, ou un moteur GPU) ; `net` décode.
 pub fn search(net: &Net, reader: &dyn Reader, cfg: &Config, g: &Game, k: &Knowledge, rng: &mut Rng) -> Searched {
     let dist = distances(g.map);
-    let me = g.state.actor().expect("un joueur doit agir");
     let mut count = (0, 0);
-    // 1. les candidats : le plus probable, puis des tirages, sans doublon
-    let mut candidates: Vec<Vec<Move>> = Vec::new();
-    let tries = 3 * cfg.candidates;
-    let mut lanes: Vec<Lane> = (0..tries)
-        .map(|i| Lane {
-            w: *g,
-            k: *k,
-            plan: None,
-            forced: Vec::new().into_iter(),
-            horizon: None,
-            t: if i == 0 { 0.0 } else { cfg.temperature },
-            rng: Rng::new(mix(rng.next_u64(), i as u64)),
-            played: Vec::new(),
-            decisions: 0,
-            first: None,
-            end: None,
-            die: None,
-            cand: i,
-            weight: 1.0,
-        })
-        .collect();
-    // une seule lecture de la racine pour tous
+    // une seule lecture de la racine pour tous les candidats
     let root = Rc::new(read_all(reader, &[(g, k)], &dist).pop().expect("lecture"));
     count.0 += 1;
-    for lane in &mut lanes {
-        lane.plan = Some((Start::of(g), root.clone(), Cache::default(), None));
-    }
-    run(net, reader, cfg, &mut lanes, &dist, &mut count);
-    for lane in &lanes {
-        if candidates.len() < cfg.candidates && !candidates.contains(&lane.played) {
-            candidates.push(lane.played.clone());
+    // 1. les candidats : le plus probable, puis des tirages, sans doublon
+    let tries = (0..3 * cfg.candidates).map(|i| (Vec::new(), if i == 0 { 0.0 } else { cfg.temperature })).collect();
+    let mut candidates: Vec<Vec<Move>> = Vec::new();
+    for plan in write_plans(net, reader, cfg, g, k, &root, tries, rng, &dist, &mut count) {
+        if candidates.len() < cfg.candidates && !candidates.contains(&plan) {
+            candidates.push(plan);
         }
     }
     // 2-4. chaque candidat dans chaque monde, avec sa fin simulée
     let worlds: Vec<Game> = (0..cfg.worlds).map(|_| determinize(g, k, rng)).collect();
-    let h = horizon(g);
-    let dice: Vec<Vec<(DieOutcome, f32)>> = candidates.iter().map(|c| outcomes(g, k, c)).collect();
-    let mut lanes: Vec<Lane> = Vec::new();
-    for w in &worlds {
-        for (c, plan) in candidates.iter().enumerate() {
-            let branches: Vec<(Option<DieOutcome>, f32)> = if dice[c].is_empty() {
-                vec![(None, 1.0)]
-            } else {
-                dice[c].iter().map(|&(o, p)| (Some(o), p)).collect()
-            };
-            for (die, weight) in branches {
-                lanes.push(Lane {
-                    w: *w,
-                    k: *k,
-                    plan: None,
-                    forced: plan.clone().into_iter(),
-                    horizon: Some(h),
-                    t: 0.0,
-                    rng: Rng::new(0),
-                    played: Vec::new(),
-                    decisions: 0,
-                    first: None,
-                    end: None,
-                    die,
-                    cand: c,
-                    weight,
-                });
+    let mut scores = evaluate(net, reader, cfg, g, k, &worlds, &candidates, &dist, &mut count);
+    // modifications locales du meilleur, évaluées dans les mêmes mondes
+    if cfg.mods > 0 {
+        let best = (0..candidates.len())
+            .max_by(|&a, &b| scores[a].total_cmp(&scores[b]).then(b.cmp(&a)))
+            .expect("un candidat");
+        let keys = decisions(g, k, &candidates[best]);
+        let tries: Vec<(Vec<Key>, f32)> =
+            (0..3 * cfg.mods).map(|_| (keys[..rng.below(keys.len())].to_vec(), cfg.temperature)).collect();
+        let mut fresh = Vec::new();
+        for plan in write_plans(net, reader, cfg, g, k, &root, tries, rng, &dist, &mut count) {
+            if fresh.len() < cfg.mods && !candidates.contains(&plan) && !fresh.contains(&plan) {
+                fresh.push(plan);
             }
         }
+        scores.extend(evaluate(net, reader, cfg, g, k, &worlds, &fresh, &dist, &mut count));
+        candidates.extend(fresh);
     }
-    run(net, reader, cfg, &mut lanes, &dist, &mut count);
     let n = candidates.len();
-    let mut scores = vec![0.0f32; n];
-    for lane in &lanes {
-        let end = lane.end.expect("fin simulée finie");
-        let first = lane.first.unwrap_or(end);
-        scores[lane.cand] += lane.weight * (cfg.mix * end[me] + (1.0 - cfg.mix) * first[me]) / cfg.worlds as f32;
-    }
     let best = (0..n).max_by(|&a, &b| scores[a].total_cmp(&scores[b]).then(b.cmp(&a))).expect("un candidat");
     Searched {
         plan: candidates[best].clone(),

@@ -155,7 +155,11 @@ Ajouts de la nuit :
   phase 1) : lectures 227 s pour 133 159 positions, pas du décodeur 103 s pour 369 245 pas, reste
   0,7 s (temps cumulés des fils) ; 592 ms par décision. Le GPU, partagé, est le frein.
 
-Pas encore : les modifications locales de candidats, le halving.
+- modifications locales du meilleur candidat (DORA, option `mods=N`, éteinte par défaut) : rejoué
+  jusqu'à une de ses décisions tirée au hasard (le décodeur lit les décisions imposées), puis réécrit
+  à la température `t` ; les nouveaux candidats sont évalués dans les mêmes mondes.
+
+Pas encore : le halving.
 
 ### L'encodeur sur GPU (`src/vulkan.rs`, `shaders/`), phase 3 commencée
 
