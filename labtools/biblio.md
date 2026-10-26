@@ -9,7 +9,9 @@ Degré de lecture, indiqué pour chaque entrée :
 - **parcouru** : passages clés lus ;
 - **résumé** : seulement le résumé et des sources secondaires.
 
-Recherche faite le 26 octobre 2026.
+Recherche faite le 26 octobre 2026. Six articles sont lus en entier ; leurs notes de lecture sont à
+la fin, avec ce qu'elles changent pour nos pistes. Les PDF payants (IEEE) sont dans
+`labtools/pdf/` (hors Git).
 
 ## Ce qu'il faut retenir
 
@@ -82,16 +84,17 @@ joueurs, et des ordres donnés à toutes les unités à chaque tour.
     été essayées.
 
 - **Jacob et al. (Meta), « Modeling Strong and Human-Like Gameplay with KL-Regularized Search »
-  (piKL), ICML 2022.** [arXiv 2112.07544](https://arxiv.org/abs/2112.07544) — *résumé.*
+  (piKL), ICML 2022.** [arXiv 2112.07544](https://arxiv.org/abs/2112.07544) — *lu (note de
+  lecture).*
   - **L'idée.** La recherche est pénalisée selon sa distance à une politique d'ancrage. Elle
     prédit mieux les coups des joueurs forts et joue mieux que l'imitation seule (échecs, go,
     Diplomacy).
-  - **Pour nous.** C'est une parade directe si la recherche choisit les coups que le réseau
-    surestime (l'hypothèse « exploitation » de la discussion du 26 octobre).
+  - **Pour nous.** Notre recherche Gumbel a déjà cette forme, mais son ancrage faiblit quand les
+    visites augmentent (voir la note).
 
 - **Bakhtin et al. (Meta), « Mastering the Game of No-Press Diplomacy via Human-Regularized
   Reinforcement Learning and Planning » (Diplodocus), ICLR 2023.**
-  [arXiv 2210.05492](https://arxiv.org/abs/2210.05492) — *résumé.*
+  [arXiv 2210.05492](https://arxiv.org/abs/2210.05492) — *lu (note de lecture).*
   - **La méthode.** piKL appliqué pendant le selfplay (RL-DiL-piKL).
   - **Le résultat.** Premier et troisième d'un tournoi de 200 parties contre 62 humains.
   - **La thèse.** Le selfplay seul ne suffit pas quand l'agent joue avec des humains.
@@ -119,7 +122,7 @@ l'adversaire.
 - **Justesen, Mahlmann, Risi & Togelius, « Playing Multi-Action Adversarial Games: Online
   Evolutionary Planning versus Tree Search », *IEEE Transactions on Games* 10(3), 2018.**
   [Notice](https://pure.itu.dk/en/publications/playing-multi-action-adversarial-games-online-evolutionary-planni/)
-  — *résumé.*
+  — *lu (note de lecture ; PDF dans `labtools/pdf/justesen2017.pdf`).*
   - **Le jeu.** Hero Academy, 5 actions par tour.
   - **La méthode.** Un algorithme évolutionnaire cherche directement la séquence entière du tour,
     jugée par une fonction d'évaluation. Il bat MCTS, d'autant plus nettement que le tour compte
@@ -128,7 +131,8 @@ l'adversaire.
 
 - **Baier & Cowling, « Evolutionary MCTS for Multi-Action Adversarial Games », IEEE CIG 2018**, et
   **« Evolutionary MCTS with Flexible Search Horizon », AIIDE 2018.**
-  [AIIDE](https://ojs.aaai.org/index.php/AIIDE/article/view/13023) — *résumé.*
+  [AIIDE](https://ojs.aaai.org/index.php/AIIDE/article/view/13023) — *les deux lus (notes de
+  lecture ; PDF de CIG dans `labtools/pdf/baier2018.pdf`).*
   - **La méthode.** Un arbre dont les nœuds sont des séquences d'actions entières et les branches
     des mutations de ces séquences.
   - **Sa limite.** La première version ne voyait pas au-delà du tour du joueur.
@@ -158,7 +162,7 @@ l'adversaire.
     modèle stochastique du tour.
 
 - **Hubert et al. (DeepMind), « Learning and Planning in Complex Action Spaces » (Sampled MuZero),
-  ICML 2021.** [arXiv 2104.06303](https://arxiv.org/abs/2104.06303) — *résumé.*
+  ICML 2021.** [arXiv 2104.06303](https://arxiv.org/abs/2104.06303) — *lu (note de lecture).*
   - **La méthode.** La recherche porte sur un échantillon de coups tirés de la politique, avec une
     correction pour que l'amélioration de politique reste juste.
   - **Pour nous.** Le cadre théorique pour chercher sur des plans de tour échantillonnés plutôt que
@@ -185,7 +189,7 @@ l'adversaire.
 - **Blomqvist, *Playing the Game of Risk with an AlphaZero Agent*, mémoire de master, KTH, 2020,
   avec l'agence suédoise de recherche pour la défense (FOI).**
   [PDF](https://forums.triplea-game.org/assets/uploads/files/1637032761173-fulltext01.pdf)
-  — *résumé.*
+  — *lu (note de lecture).*
   - **Le jeu.** Risk : conquêtes au dé, plusieurs joueurs. Le plus proche de Small World par le
     thème.
   - **La méthode.** MCTS guidé par un réseau appris par Expert Iteration. Les entrées sont plates,
@@ -305,5 +309,201 @@ l'adversaire.
 - **Rien sur la façon de découper un tour** (une décision à la fois ou un tour entier) dans un jeu
   séquentiel avec hasard au milieu du tour. Diplomacy n'a pas de dés, Hero Academy n'a que 2
   joueurs.
-- **À lire en entier en priorité** : piKL et Diplodocus (la laisse sur la recherche), Baier &
-  Cowling AIIDE 2018 (la recherche par tours entiers avec fins simulées), et le mémoire sur Risk.
+
+## Notes de lecture (26 octobre 2026)
+
+Six articles lus en entier. Chaque note sépare ce que dit l'article (section ou tableau entre
+parenthèses) de notre interprétation (« pour nous »). Les chiffres clés ont été revérifiés dans
+les textes.
+
+### Jeux à plusieurs actions par tour : Justesen 2017, Baier & Cowling 2018 (CIG et AIIDE)
+
+**Le cadre commun.** Hero AIcademy, un clone simplifié de Hero Academy :
+- 2 joueurs, 5 points d'action par tour (jusqu'à 15 dans les essais) ;
+- environ 7,8 × 10⁸ tours possibles ;
+- rendu déterministe et à information complète pour les expériences ;
+- une évaluation écrite à la main (la valeur des unités), très bon marché, rien n'est appris.
+
+**Justesen et al.**
+- **OEP.** Un algorithme évolutionnaire dont le génome est la séquence des actions du tour :
+  population de 100, croisement et mutation avec réparation des séquences illégales, 6 s par tour.
+- **Le résultat.** OEP bat le MCTS de base à 98 %. Il fait jeu égal avec deux MCTS « contraints » :
+  sans exploration, ou en ne gardant que le meilleur fils de la racine à chaque phase (tableau II).
+- **L'arbre ne voit pas l'adversaire.** Le MCTS de base fait 258 488 itérations par tour, mais
+  n'atteint que 201 fins de tour distinctes. Ses feuilles sont en moyenne à 4,86 actions de
+  profondeur : à peine le tour adverse (§VII-A). C'est notre constat de lab6.
+- **L'adversaire est ignoré.** Le simuler au hasard n'apportait rien (§IV).
+
+**Baier & Cowling, CIG 2018 (EMCTS).**
+- **La méthode.** Un nœud est un tour entier, une arête est une mutation (changer une action). La
+  racine est le tour glouton, et une feuille est jugée par l'évaluation statique.
+- **Le résultat.** Elle bat OEP de 52 à 65 % selon la longueur du tour et le temps (tableau I).
+- **Sa limite.** Elle ne regarde toujours pas l'adversaire.
+
+**Baier & Cowling, AIIDE 2018 (« Flexible Search Horizon »).**
+- **La méthode.** Le génome continue au-delà du tour. Les actions adverses y sont insérées et
+  **toujours régénérées par un modèle glouton** après chaque mutation, sans branchement.
+- **Le résultat.** Elle bat EMCTS de 62 à 85 % (tableau 1). Un modèle adverse faible suffit, et
+  l'horizon aide surtout quand les tours sont courts.
+
+**Pour nous.**
+- **Ce que ces articles valident.** Nos fins simulées : un adversaire déterministe et bon marché
+  inséré dans l'évaluation, sans branchement, c'est leur meilleure méthode.
+- **Ce qu'ils ne valident pas.** Un arbre de plans de tour avec branchement sur les réponses
+  adverses : aucun des trois ne le fait, et ils le présentent comme un problème ouvert.
+- **Ce qu'on peut reprendre.**
+  - Engendrer les candidats par **mutation et réparation autour du plan glouton du réseau**,
+    plutôt qu'avec une liste fixe.
+  - Le **redéploiement** s'y prête bien : il est déterministe, puisqu'il vient après le dé.
+  - Une fin simulée jouée par une **politique plus légère** pourrait garder une bonne part du gain
+    pour moins que 12 fois le calcul.
+- **La prudence.** Ces études portent sur 2 joueurs, un jeu déterministe, une évaluation qui
+  permet 10⁴ à 10⁵ évaluations par tour (nous en avons 100 à 400, coûteuses), et des MCTS de
+  référence sans réseau. L'ampleur de leurs gains ne se transpose pas.
+
+### piKL (Jacob et al., ICML 2022)
+
+**Le problème.** L'imitation prédit bien les coups humains mais joue faiblement. Le selfplay joue
+fort mais d'une façon étrangère aux humains. La critique porte sur la ressemblance aux humains,
+pas sur les erreurs de la valeur.
+
+**La méthode.**
+- **L'idée.** Maximiser l'utilité moins λ fois la distance (KL) à une politique d'ancrage τ, ici
+  un réseau d'imitation humaine.
+- **Aux échecs et au go.** Rien de nouveau : le MCTS PUCT fait déjà cela, avec un λ qui dépend de
+  c_puct et diminue avec les visites (annexe C).
+- **En Diplomacy.** Un algorithme pour coups simultanés (piKL-Hedge) avec λ fixe.
+
+**Les résultats.**
+- **Aux échecs et au go**, moins d'ancrage donne un agent plus fort : de 72 % à 94 % contre le
+  réseau brut aux échecs (tableau 4). Mais la prédiction des coups humains est la meilleure pour
+  un λ intermédiaire.
+- **En Diplomacy**, un ancrage léger (λ = 10⁻³) améliore à la fois le score et la prédiction
+  (§4.3.2).
+- **Au Hanabi**, il passe de 20,23 à 23,11 points (tableau 13). Les auteurs l'expliquent par un
+  modèle appris utilisé hors de sa distribution, une situation proche de notre hypothèse
+  « exploitation ».
+
+**Pour nous.**
+- **Notre recherche Gumbel a déjà cette forme.** La politique améliorée, softmax(logits + σ(q)),
+  est une régularisation KL vers notre réseau. Le λ effectif vaut l'écart des valeurs divisé par
+  `(50 + visites du coup le plus vu) × 0,1` (`lab7/brain/src/search.rs`, `completed_into`).
+- **Deux différences avec piKL, deux leviers possibles pour l'hypothèse « exploitation » :**
+  - Notre ancrage **faiblit quand on cherche plus**. Le facteur vaut environ 10 à n = 200 et
+    dépasse 80 à 16 fois plus de simulations (estimation). C'est la recette Gumbel standard
+    (mctx), pas une erreur, mais elle pourrait expliquer que chercher plus ne rapporte rien.
+  - Les valeurs sont **ramenées entre 0 et 1 dans chaque nœud** : des écarts de bruit entre coups
+    presque égaux deviennent aussi décisifs qu'un vrai écart.
+- **Limite.** Le gain de force de l'ancrage n'est démontré qu'en Diplomacy, avec un ancrage
+  humain qui apporte une information extérieure. Le nôtre n'en apporte pas.
+- **Coût.** Une constante ou une formule à changer, sans réapprentissage.
+
+### Diplodocus (Bakhtin et al., ICLR 2023)
+
+**Le problème.** À 2 joueurs en somme nulle, le selfplay converge vers un jeu sûr. Dès qu'il y a
+de la coopération ou plus de 2 joueurs, il ne garantit plus rien : beaucoup de conventions sont
+possibles, et les humains n'en utilisent que quelques-unes (§1).
+
+**La méthode.**
+- **DiL-piKL.** C'est piKL avec un λ tiré à chaque itération : chaque valeur représente un type
+  de joueur.
+- **Deux λ distincts.** Les adversaires sont modélisés près de l'ancrage, tandis que l'agent joue
+  avec un λ bas, presque en meilleure réponse (§3.1).
+- **RL-DiL-piKL.** Le selfplay de DORA avec cette recherche, l'ancrage restant fixe pendant tout
+  l'apprentissage.
+
+**Les résultats.**
+- **Contre les humains.** 1er et 3e d'un tournoi de 200 parties contre 62 humains (tableau 2).
+  Les auteurs reconnaissent des marges larges.
+- **À l'inférence seulement**, la méthode n'apporte presque rien. Le gain vient des réseaux
+  réentraînés avec elle (fig. 6).
+
+**Ce qu'ils disent du selfplay pur.**
+- DORA, superhumain à 2, joue mal à 7 avec des agents de type humain (§2).
+- Deux agents appris séparément, aussi forts l'un que l'autre, paraissent faibles l'un au milieu
+  de l'autre : leurs conventions sont incompatibles (annexe D). Les auteurs évaluent donc sur une
+  **population** d'agents, jamais un agent contre des copies de lui-même.
+
+**Pour nous.**
+- **Nos arènes sont ce genre de mesure.** L'Expert y joue contre des copies de c130. Une partie de
+  nos gains pourrait n'être qu'une adaptation à c130.
+- **Ce qui se transpose sans humains : les deux λ.** On modéliserait les adversaires plus près du
+  réseau que soi-même. Nos fins simulées, où tous jouent le coup préféré du réseau, en sont une
+  forme extrême.
+
+### Blomqvist, Risk (KTH, 2020)
+
+**Le cadre.**
+- 1 contre 1 plus un joueur neutre, sur la carte standard de 42 territoires, sans information
+  cachée.
+- Le tour est découpé en décisions, avec des **quantités grossières** : placer 1 troupe, la
+  moitié ou tout, et des nœuds « attaquer ou arrêter », « fortifier ou non ».
+
+**La méthode.**
+- **Le réseau.** Entrées plates (troupes par territoire, sans voisinages), 3 couches denses.
+- **Les sorties.** Cinq têtes de politique (une par type de décision) et une valeur scalaire.
+- **La recherche.** Expert Iteration, MCTS à 10 000 simulations, rollouts au hasard coupés après
+  8 tours.
+
+**Les résultats.**
+- **La politique aide.** La recherche guidée par le réseau bat le MCTS pur à 72,5 % (tableau 5.4).
+- **Puis plus rien ne progresse** : le réseau 1 vaut les réseaux 3 à 6 (tableau 5.2).
+- **La valeur dégrade le jeu.** Les agents qui l'utilisent perdent à 76 % et 89 % (tableau 5.3).
+  Selon l'auteur, elle agit en classifieur du vainqueur plutôt qu'en estimation (ch. 6).
+
+**Pour nous.**
+- **Les symptômes ressemblent aux nôtres, mais pas la cause.** Leur échelle est minuscule
+  (environ 100 000 positions, une décision par partie), donc on n'en tire aucun diagnostic.
+- **À retenir.** Les quantités grossières (1 / moitié / tout), qui raccourciraient notre
+  redéploiement jeton par jeton, et la remarque sur des constantes d'exploration identiques pour
+  des décisions très différentes.
+
+### Sampled MuZero (Hubert et al., ICML 2021)
+
+**Le problème.** Chercher quand on ne peut pas énumérer les coups.
+
+**La méthode.**
+- On tire K coups d'une loi β (en pratique la politique elle-même).
+- Dans la recherche, l'a priori est remplacé par (β̂/β)·π, où β̂ est la fréquence des tirages.
+  Avec β = π, l'a priori devient simplement la fréquence des tirages.
+- Sans cette correction, un coup probable compte deux fois : plus souvent tiré, et favorisé par
+  son a priori (§4–5, ablation de la fig. 13).
+- La cible de la politique reste la part des visites à la racine.
+
+**Les résultats.**
+- **Au go**, K = 50 coups sur 362 approchent la recherche complète (fig. 2).
+- **En contrôle continu**, K = 3 à 10 suffisent.
+
+**Pour nous, si un coup devient un plan de tour tiré en déroulant la politique.**
+- **Calculer β exactement** : le produit des probabilités de chaque décision, température, bruit
+  et masques compris.
+- **Corriger l'a priori comme ci-dessus**, sans compter π deux fois.
+- **Se méfier du dédoublonnage.** Retirer les doublons revient à tirer sans remise : la correction
+  n'est plus exacte. C'est le cas de Gumbel-Top-k, à creuser.
+- **L'apprentissage peut rester décision par décision.** La cible se décompose en entropies
+  croisées sur chaque décision des plans, pondérées par les visites.
+- **Le dé de renfort coupe le plan** : un plan de conquêtes, un nœud de hasard, puis un plan de
+  redéploiement.
+- **Ce que la méthode ne fait pas.** Elle corrige la recherche, pas la valeur. Avec des plans,
+  chaque feuille devient une fin de tour, et la faiblesse de la valeur pèse encore plus.
+
+### Ce que ces lectures changent pour nos pistes
+
+1. **Un essai nouveau, presque gratuit : l'ancrage de la recherche.** Il découle de piKL.
+   - **Les variantes.** Comparer la recette actuelle à un ancrage qui ne faiblit pas avec les
+     visites, puis à un λ fixe sans ramener les valeurs entre 0 et 1, à n = 200 et à 16 fois plus.
+   - **La prédiction.** Si l'hypothèse « exploitation » est juste, ces variantes gagnent plus à
+     16 fois qu'à n = 200, et elles réduisent le gain des fins simulées, puisqu'elles corrigent le
+     même défaut.
+   - **Des diagnostics sans arène.** Mesurer l'écart entre la politique de la racine et le réseau
+     en fonction de n, et l'écart entre la valeur du coup choisi et sa valeur après fin simulée.
+2. **Les fins simulées sont la méthode la mieux soutenue.** Elles le sont par la littérature
+   multi-actions et par Diplomacy. Piste de coût : une fin simulée jouée par une politique plus
+   légère.
+3. **Les plans de tour restent sans preuve directe.** Si on y va, Sampled MuZero donne les règles
+   pour rester juste, et EMCTS une façon d'engendrer les candidats. Le redéploiement, déterministe,
+   est le bon premier terrain. Ce chantier ne règle pas la valeur, il la sollicite davantage.
+4. **Nos mesures.** Diplodocus montre qu'à plusieurs joueurs, un agent jugé contre ses propres
+   copies peut tromper. Deux remèdes :
+   - évaluer contre une **population** (réseau brut, Expert témoin, Expert avec fins simulées) ;
+   - regarder les **parties contre les humains** archivées dans `data/games/`.
