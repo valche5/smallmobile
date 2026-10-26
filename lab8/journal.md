@@ -197,5 +197,24 @@ partagent un seul lot (`vulkan::Shared`).
   3 joueurs, 6 donnes : 18 victoires sur 18 (la fin simulée joue les vraies règles), 284 ms par
   décision.
 
+## Phase 2 : protocole (fixé le 26 octobre, avant le calcul)
+
+- Données : `lab8/data/c130` (100 000 parties, graine 81000000) ; validation : les parties dont la
+  donne est un multiple de 20 (5 %), 50 000 de leurs plans mesurés à chaque validation.
+- Réseau : 256 × 6, 8 têtes, décodeur de 2 couches (7,9 millions de paramètres), neuf.
+- Apprentissage : lots de 256, AdamW (taux 3e-4, montée sur 500 lots, cosinus jusqu'à 10 %,
+  décroissance 0,01), 125 000 lots (~4 passes, ~3 h 30 à 2 500 plans/s), EMA des poids ; validation
+  tous les 5 000 lots, chaque réseau écrit (`lab8/runs/i1/i1-NNNNNN.bin`), état de reprise.
+- Critère (`lab.md`) : sur les plans mis de côté, le meilleur réseau (par la somme pol + val de la
+  validation) a une politique (entropie croisée face à la recherche de c130) et une valeur finale
+  (entropie croisée face au vainqueur) au moins aussi bonnes que le réseau de c130 seul, en tout et
+  par nombre de joueurs.
+- Ensuite (remplace la phase 4, la recherche coup par coup du nouveau réseau n'étant pas écrite) :
+  parité des politiques seules, `plan:net=…` (le décodeur, le coup le plus probable) contre
+  `az:net=lab7/nets/c130.bin,n=1` (le coup préféré du réseau de c130), 920 donnes, graine 82001 ;
+  attendu : dans ±2 points de 0 si l'imitation est réussie.
+- Puis la phase 5 : `plans:net=…` contre c130 à n = 400 (sur le processeur, pour ne pas partager le
+  GPU), 920 donnes, graine 82002.
+
 Reste, pour les phases suivantes : la recherche sur plans et la recherche coup par coup du nouveau
 réseau (phases 4 et 5), le moteur GPU du transformer (phase 3).
