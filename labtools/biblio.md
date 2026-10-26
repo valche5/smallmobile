@@ -10,8 +10,9 @@ Degré de lecture, indiqué pour chaque entrée :
 - **résumé** : seulement le résumé et des sources secondaires.
 
 Recherche faite le 26 octobre 2026. Six articles sont lus en entier ; leurs notes de lecture sont à
-la fin, avec ce qu'elles changent pour nos pistes. Les PDF payants (IEEE) sont dans
-`labtools/pdf/` (hors Git).
+la fin, avec ce qu'elles changent pour nos pistes. Leurs PDF sont dans `labtools/pdf/` :
+`justesen2017.pdf`, `baier2018.pdf` (CIG), `baier2018-aiide.pdf`, `jacob2022-pikl.pdf`,
+`bakhtin2023-diplodocus.pdf`, `blomqvist2020-risk.pdf`, `hubert2021-sampled-muzero.pdf`.
 
 ## Ce qu'il faut retenir
 

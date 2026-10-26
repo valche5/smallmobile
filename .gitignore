@@ -16,8 +16,6 @@ __pycache__/
 /lab[0-9]*/data/
 /lab[0-9]*/nets/*.pt
 /labtools/state/
-# articles de la bibliographie (labtools/biblio.md), dont certains payants : jamais publiés
-/labtools/pdf/
 
 # un dossier « ~ » créé par erreur dans le dépôt (configuration et identifiants d'un outil) : jamais suivi
 /~/
