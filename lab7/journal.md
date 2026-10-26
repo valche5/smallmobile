@@ -2,8 +2,8 @@
 
 Ouvert le 26 octobre 2026 à la demande de l'utilisateur, depuis **lab6** au commit `65d3daf`, pour
 tester les pistes de la revue des six journaux. Lab6 est figé. Plan et raisons : [lab.md](lab.md).
-**Figé le 26 octobre 2026** : la suite, le plan de tour en un passage du réseau pour des fins
-simulées moins chères, se fait dans `lab8/journal.md`.
+**Figé le 26 octobre 2026** : la suite, la recherche sur des plans de tour écrits par un décodeur, avec un
+transformer neuf, se fait dans `lab8/journal.md`.
 
 **Bilan (26 octobre)** : les fins simulées à la décision battent c130 de **+5,4 ± 1,5 points** à
 n = 100 (confirmé sur 920 donnes neuves) et +8,9 ± 2,3 à n = 400 : le premier progrès net depuis

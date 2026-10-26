@@ -43,6 +43,10 @@ cours (`bun test` seul ne reconstruit rien). Pendant le développement, s'en ten
 
 ## Calcul du labo sur AWS
 
+**Depuis lab8 (26 octobre 2026), tout le calcul du labo se fait sur le PC fixe de l'utilisateur**
+(i7-12700KF, RX 9070 XT, Vulkan ; `lab8/lab.md`) : plus d'AWS ni de vast.ai. Ce qui suit concerne
+les labos 1 à 7.
+
 mini sert le jeu : **aucun calcul lourd sur mini** (`lab arena`, `label`, `selfplay`, `train.py`).
 Tout part sur des machines AWS via `labtools/cloud.sh` (en-tête du script : mode d'emploi ;
 `labtools/README.md`, « Les machines AWS » : le compte, les prix, les limites).

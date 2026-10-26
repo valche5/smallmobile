@@ -30,7 +30,7 @@ Labos :
 | `lab5` | Coups manqués par c130 : alternatives évaluées jusqu'à la fin, sélection et confirmation indépendantes ; reprise directe de lab3 | Figé le 25 octobre 2026 ; **résultats invalides** : calculés en Vulkan bf16 sur NVIDIA, qui calcule faux (erratum de `lab5/journal.md`) |
 | `lab6` | La marge de c130 face à une recherche beaucoup plus longue (arène 16× et 64× les simulations) ; moteur CUDA | Figé le 26 octobre 2026 : 16× = +1,8 ± 2,2, indécis (`lab6/journal.md`) |
 | `lab7` | Les pistes de sortie du plateau : fins simulées, marché branché aux choix de peuple, histoire vide de l'Expert du jeu, bruit du selfplay ; quatre boucles d'apprentissage ; moteur CUDA ×2 | Figé le 26 octobre 2026 : fins simulées +5,4 ± 1,5 (n = 100, confirmé), +8,9 ± 2,3 (n = 400) ; apprentissage : rien en 10 pas ; rapport `lab7/rapport.html` |
-| `lab8` | Le plan de tour en un passage du réseau (régions à prendre, répartition des jetons) pour des fins simulées moins chères ; calcul sur le PC fixe (RX 9070 XT, Vulkan) | Ouvert le 26 octobre 2026 ; plan `lab8/lab.md`, sorties du réseau à valider |
+| `lab8` | Recherche sur des plans de tour écrits par un décodeur, transformer neuf qui commence par imiter c130, fins simulées par plans ; calcul sur le PC fixe (RX 9070 XT, Vulkan) | Ouvert le 26 octobre 2026 ; plan `lab8/lab.md`, phase 0 (base) à faire |
 
 Outils communs (ce dossier) :
 
