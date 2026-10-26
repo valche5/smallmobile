@@ -196,6 +196,21 @@ fn arena_cmd(opts: &HashMap<String, String>) {
     print!("{}", arena::describe(&arena::report(&run, 0), &names[0], &names[1]));
     println!("temps par décision : {}", arena::describe_times(&run.times[0]));
     println!("durée : {:.1} s", start.elapsed().as_secs_f64());
+    {
+        use smallmobile_lab8::search::{N_READS, N_STEPS, T_OTHER, T_READ, T_STEP, TIMES};
+        use std::sync::atomic::Ordering::Relaxed;
+        let t = |i: usize| TIMES[i].load(Relaxed) as f64 / 1e9;
+        if TIMES[N_READS].load(Relaxed) > 0 {
+            println!(
+                "recherches sur plans (s, tous fils) : lectures {:.1} ({} positions), pas du décodeur {:.1} ({} pas), reste {:.1}",
+                t(T_READ),
+                TIMES[N_READS].load(Relaxed),
+                t(T_STEP),
+                TIMES[N_STEPS].load(Relaxed),
+                t(T_OTHER)
+            );
+        }
+    }
     if let Some(mut f) = out {
         arena::write(&mut f, &cfg, &names, &run).expect("écriture des résultats");
     }

@@ -141,8 +141,21 @@ Toutes les voies avancent ensemble : à chaque tour, leurs lectures partent d'un
 garde la suite du plan choisi entre deux décisions du jeu. Test : des parties entières de 2 à 5 joueurs
 sans plan trop court, suites reprises.
 
-Pas encore : le dé de renfort à ses deux issues pondérées (pour l'instant tiré dans chaque monde),
-les modifications locales de candidats, le halving.
+Ajouts de la nuit :
+- un candidat qui finit par un dé est joué à chacune de ses issues (renfort : réussite et échec ;
+  Berserks : 0 à 3), pondérées par leur probabilité exacte (`die_chance`) : le dé du monde est
+  changé jusqu'à donner l'issue voulue ;
+- les pas du décodeur de toutes les voies d'un tour sont faits ensemble (`Net::step_batch`) : un
+  pas seul lit ~9 Mo de poids, plus que les caches du cœur ; ensemble, chaque ligne de poids sert à
+  toutes les voies. Mêmes logits au bit près (test `batched_steps_match_lone_ones`) ;
+- le produit scalaire en AVX2 et FMA, choisi à l'exécution (les binaires sont compilés pour le x86-64
+  de base) : encodeur sur processeur −24 %, pas seul −12 % (`LAB8_NO_AVX=1` pour comparer, même
+  charge) ;
+- l'arène affiche le temps des recherches : `plans:…,gpu=1,k=16,m=4` (réseau au hasard, pendant la
+  phase 1) : lectures 227 s pour 133 159 positions, pas du décodeur 103 s pour 369 245 pas, reste
+  0,7 s (temps cumulés des fils) ; 592 ms par décision. Le GPU, partagé, est le frein.
+
+Pas encore : les modifications locales de candidats, le halving.
 
 ### L'encodeur sur GPU (`src/vulkan.rs`, `shaders/`), phase 3 commencée
 

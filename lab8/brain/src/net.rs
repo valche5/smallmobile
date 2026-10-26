@@ -49,6 +49,19 @@ impl Linear {
         }
     }
 
+    /// `apply` à chaque vecteur de `xs`, ligne de poids par ligne de poids : chaque ligne est lue une
+    /// fois pour tous.
+    fn batch(&self, xs: &[Vec<f32>]) -> Vec<Vec<f32>> {
+        let mut out = vec![vec![0.0; self.out]; xs.len()];
+        for o in 0..self.out {
+            let row = &self.w[o * self.inp..][..self.inp];
+            for (x, y) in xs.iter().zip(out.iter_mut()) {
+                y[o] = self.b[o] + dot(row, x);
+            }
+        }
+        out
+    }
+
     fn rows(&self, x: &[f32], rows: usize) -> Vec<f32> {
         let mut y = vec![0.0; rows * self.out];
         for r in 0..rows {
@@ -250,6 +263,23 @@ impl Cache {
 }
 
 fn dot(a: &[f32], b: &[f32]) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    if *AVX2.get_or_init(|| {
+        std::env::var_os("LAB8_NO_AVX").is_none()
+            && std::arch::is_x86_feature_detected!("avx2")
+            && std::arch::is_x86_feature_detected!("fma")
+    }) {
+        // SAFETY : le processeur a AVX2 et FMA (vérifié juste avant)
+        return unsafe { dot_avx2(a, b) };
+    }
+    dot_portable(a, b)
+}
+
+/// AVX2 et FMA sont-ils là (et permis : `LAB8_NO_AVX` force le calcul portable, pour comparer) ?
+#[cfg(target_arch = "x86_64")]
+static AVX2: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+fn dot_portable(a: &[f32], b: &[f32]) -> f32 {
     // huit sommes partielles : vectorisé par le compilateur
     let mut acc = [0.0f32; 8];
     let ((ca, ra), (cb, rb)) = (a.as_chunks::<8>(), b.as_chunks::<8>());
@@ -263,6 +293,41 @@ fn dot(a: &[f32], b: &[f32]) -> f32 {
         s += x * y;
     }
     s
+}
+
+/// Le produit scalaire en AVX2 et FMA : quatre sommes de 8 nombres (32 par tour), pour masquer la
+/// latence des FMA. Les binaires sont compilés pour le x86-64 de base (sans AVX) : choisi à
+/// l'exécution.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn dot_avx2(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let n = a.len().min(b.len());
+    let (pa, pb) = (a.as_ptr(), b.as_ptr());
+    let mut acc = [_mm256_setzero_ps(); 4];
+    let mut i = 0;
+    // SAFETY : chaque lecture est dans les tranches (i + 32 ≤ n, puis i + 8 ≤ n)
+    unsafe {
+        while i + 32 <= n {
+            for (j, s) in acc.iter_mut().enumerate() {
+                *s = _mm256_fmadd_ps(_mm256_loadu_ps(pa.add(i + 8 * j)), _mm256_loadu_ps(pb.add(i + 8 * j)), *s);
+            }
+            i += 32;
+        }
+        while i + 8 <= n {
+            acc[0] = _mm256_fmadd_ps(_mm256_loadu_ps(pa.add(i)), _mm256_loadu_ps(pb.add(i)), acc[0]);
+            i += 8;
+        }
+        let s = _mm256_add_ps(_mm256_add_ps(acc[0], acc[1]), _mm256_add_ps(acc[2], acc[3]));
+        let mut lanes = [0.0f32; 8];
+        _mm256_storeu_ps(lanes.as_mut_ptr(), s);
+        let mut total = lanes.iter().sum::<f32>();
+        while i < n {
+            total += *pa.add(i) * *pb.add(i);
+            i += 1;
+        }
+        total
+    }
 }
 
 fn gelu(x: f32) -> f32 {
@@ -573,77 +638,129 @@ impl Net {
     /// Un pas du décodeur : les logits des `KEYS` coups (`NEG` pour une région absente), après le coup
     /// `prev` (`None` : premier pas du plan), dans une position aux entrées de pas `dy`.
     pub fn step(&self, mem: &Memory, cache: &mut Cache, prev: Option<Key>, dy: &[u8; DYN]) -> Vec<f32> {
+        self.step_batch(&mut [StepIn { mem, cache, prev, dy: *dy }]).pop().expect("un pas")
+    }
+
+    /// Un pas du décodeur pour chaque plan de `items`, d'un coup : le même calcul que `step`, mais
+    /// chaque ligne de poids est lue une fois pour tous les plans (un pas seul lit ~9 Mo de poids,
+    /// plus que les caches du cœur).
+    pub fn step_batch(&self, items: &mut [StepIn]) -> Vec<Vec<f32>> {
         let (d, h) = (self.d, self.heads);
         let dh = d / h;
-        if cache.steps == 0 {
-            cache.me = vec![(Vec::new(), Vec::new()); self.dec_layers.len()];
-            cache.counts = vec![0; REGIONS];
-        }
-        // l'entrée du pas
-        let mut x = vec![0.0; d];
-        let mut count = 0;
-        match prev {
-            None => x.copy_from_slice(&self.dec_start),
-            Some(key) if (key as usize) < GLOBAL_KEYS => x.copy_from_slice(&self.dec_glob[key as usize * d..][..d]),
-            Some(key) => {
-                let (kind, region) = ((key as usize - GLOBAL_KEYS) / 64, (key as usize - GLOBAL_KEYS) % 64);
-                cache.counts[region] = cache.counts[region].saturating_add(1);
-                count = (cache.counts[region] as usize).min(COUNTS - 1);
-                for ((x, a), b) in x.iter_mut().zip(&self.dec_kind[kind * d..][..d]).zip(&mem.reg[region * d..][..d]) {
-                    *x = a + b;
+        // l'entrée de chaque pas
+        let mut xs: Vec<Vec<f32>> = Vec::with_capacity(items.len());
+        let mut counts = Vec::with_capacity(items.len());
+        for it in items.iter_mut() {
+            let cache = &mut *it.cache;
+            if cache.steps == 0 {
+                cache.me = vec![(Vec::new(), Vec::new()); self.dec_layers.len()];
+                cache.counts = vec![0; REGIONS];
+            }
+            let mut x = vec![0.0; d];
+            let mut count = 0;
+            match it.prev {
+                None => x.copy_from_slice(&self.dec_start),
+                Some(key) if (key as usize) < GLOBAL_KEYS => x.copy_from_slice(&self.dec_glob[key as usize * d..][..d]),
+                Some(key) => {
+                    let (kind, region) = ((key as usize - GLOBAL_KEYS) / 64, (key as usize - GLOBAL_KEYS) % 64);
+                    cache.counts[region] = cache.counts[region].saturating_add(1);
+                    count = (cache.counts[region] as usize).min(COUNTS - 1);
+                    for ((x, a), b) in
+                        x.iter_mut().zip(&self.dec_kind[kind * d..][..d]).zip(&it.mem.reg[region * d..][..d])
+                    {
+                        *x = a + b;
+                    }
                 }
             }
+            xs.push(x);
+            counts.push(count);
         }
-        let scaled: Vec<f32> = dy.iter().zip(&self.dyn_scale).map(|(&a, &b)| a as f32 * b).collect();
-        let mut y = vec![0.0; d];
-        self.dec_dyn.apply(&scaled, &mut y);
-        for i in 0..d {
-            x[i] += y[i] + self.dec_count[count * d + i];
-        }
-        let scale = 1.0 / (dh as f32).sqrt();
-        let mut n = vec![0.0; d];
-        let mut q = vec![0.0; d];
-        let mut o = vec![0.0; d];
-        for (l, layer) in self.dec_layers.iter().enumerate() {
-            // attention causale : ce pas et les précédents
-            layer.ln1.apply(&x, &mut n);
-            layer.me.q.apply(&n, &mut q);
-            let (keys, values) = &mut cache.me[l];
-            let at = keys.len();
-            keys.resize(at + d, 0.0);
-            values.resize(at + d, 0.0);
-            layer.me.k.apply(&n, &mut keys[at..]);
-            layer.me.v.apply(&n, &mut values[at..]);
-            let steps = keys.len() / d;
-            attend(&q, keys, values, steps, None, h, scale, &mut o);
-            layer.me.o.apply(&o, &mut y);
-            x.iter_mut().zip(&y).for_each(|(a, b)| *a += b);
-            // attention aux jetons de l'encodeur
-            layer.ln2.apply(&x, &mut n);
-            layer.cross.q.apply(&n, &mut q);
-            let (keys, values) = &mem.cross[l];
-            attend(&q, keys, values, TOKENS, Some(&mem.valid), h, scale, &mut o);
-            layer.cross.o.apply(&o, &mut y);
-            x.iter_mut().zip(&y).for_each(|(a, b)| *a += b);
-            layer.ln3.apply(&x, &mut n);
-            layer.mlp.apply(&n, &mut y);
-            x.iter_mut().zip(&y).for_each(|(a, b)| *a += b);
-        }
-        cache.steps += 1;
-        self.dec_ln.apply(&x, &mut n);
-        let mut logits = vec![NEG; KEYS];
-        self.out_glob.apply(&n, &mut logits[..GLOBAL_KEYS]);
-        let mut kq = vec![0.0; KINDS.len() * d];
-        self.out_kind.apply(&n, &mut kq);
-        let norm = 1.0 / (d as f32).sqrt();
-        for kind in 0..KINDS.len() {
-            let qk = &kq[kind * d..][..d];
-            for r in 0..mem.regions {
-                logits[GLOBAL_KEYS + kind * 64 + r] = dot(qk, &mem.x[r * d..][..d]) * norm;
+        let scaled: Vec<Vec<f32>> =
+            items.iter().map(|it| it.dy.iter().zip(&self.dyn_scale).map(|(&a, &b)| a as f32 * b).collect()).collect();
+        let dyn_out = self.dec_dyn.batch(&scaled);
+        for ((x, y), &count) in xs.iter_mut().zip(&dyn_out).zip(&counts) {
+            for i in 0..d {
+                x[i] += y[i] + self.dec_count[count * d + i];
             }
         }
-        logits
+        let scale = 1.0 / (dh as f32).sqrt();
+        let norm_all = |ln: &Norm, xs: &[Vec<f32>]| -> Vec<Vec<f32>> {
+            xs.iter()
+                .map(|x| {
+                    let mut n = vec![0.0; d];
+                    ln.apply(x, &mut n);
+                    n
+                })
+                .collect()
+        };
+        let add = |xs: &mut [Vec<f32>], ys: &[Vec<f32>]| {
+            for (x, y) in xs.iter_mut().zip(ys) {
+                x.iter_mut().zip(y).for_each(|(a, b)| *a += b);
+            }
+        };
+        for (l, layer) in self.dec_layers.iter().enumerate() {
+            // attention causale : ce pas et les précédents
+            let n = norm_all(&layer.ln1, &xs);
+            let (q, k, v) = (layer.me.q.batch(&n), layer.me.k.batch(&n), layer.me.v.batch(&n));
+            let mut o = Vec::with_capacity(items.len());
+            for (i, it) in items.iter_mut().enumerate() {
+                let (keys, values) = &mut it.cache.me[l];
+                keys.extend_from_slice(&k[i]);
+                values.extend_from_slice(&v[i]);
+                let mut out = vec![0.0; d];
+                attend(&q[i], keys, values, keys.len() / d, None, h, scale, &mut out);
+                o.push(out);
+            }
+            add(&mut xs, &layer.me.o.batch(&o));
+            // attention aux jetons de l'encodeur
+            let n = norm_all(&layer.ln2, &xs);
+            let q = layer.cross.q.batch(&n);
+            let o: Vec<Vec<f32>> = items
+                .iter()
+                .zip(&q)
+                .map(|(it, q)| {
+                    let (keys, values) = &it.mem.cross[l];
+                    let mut out = vec![0.0; d];
+                    attend(q, keys, values, TOKENS, Some(&it.mem.valid), h, scale, &mut out);
+                    out
+                })
+                .collect();
+            add(&mut xs, &layer.cross.o.batch(&o));
+            let n = norm_all(&layer.ln3, &xs);
+            let mut hidden = layer.mlp.a.batch(&n);
+            hidden.iter_mut().for_each(|v| v.iter_mut().for_each(|x| *x = gelu(*x)));
+            add(&mut xs, &layer.mlp.b.batch(&hidden));
+        }
+        let n = norm_all(&self.dec_ln, &xs);
+        let glob = self.out_glob.batch(&n);
+        let kq = self.out_kind.batch(&n);
+        let norm = 1.0 / (d as f32).sqrt();
+        items
+            .iter_mut()
+            .enumerate()
+            .map(|(i, it)| {
+                it.cache.steps += 1;
+                let mut logits = vec![NEG; KEYS];
+                logits[..GLOBAL_KEYS].copy_from_slice(&glob[i]);
+                for kind in 0..KINDS.len() {
+                    let qk = &kq[i][kind * d..][..d];
+                    for r in 0..it.mem.regions {
+                        logits[GLOBAL_KEYS + kind * 64 + r] = dot(qk, &it.mem.x[r * d..][..d]) * norm;
+                    }
+                }
+                logits
+            })
+            .collect()
     }
+}
+
+/// Un pas à faire (`Net::step_batch`) : la lecture du début du plan, le décodeur, le coup précédent,
+/// les entrées du pas.
+pub struct StepIn<'a> {
+    pub mem: &'a Memory,
+    pub cache: &'a mut Cache,
+    pub prev: Option<Key>,
+    pub dy: [u8; DYN],
 }
 
 /// Attention d'une requête `q` aux `n` clés et valeurs (lignes de d), têtes séparées ; `valid`

@@ -3,7 +3,8 @@
 //! 1. **candidats** : le plan le plus probable du décodeur, et des plans tirés à la température
 //!    `temperature`, sans doublon, jusqu'à `candidates` (tirés depuis une seule lecture de la racine) ;
 //! 2. **mondes** : `worlds` mondes possibles (pioches cachées, dés), les mêmes pour tous les
-//!    candidats ;
+//!    candidats ; un candidat qui finit par un dé (renfort, Berserks) est joué à chacune de ses
+//!    issues, pondérées par leur probabilité exacte ;
 //! 3. dans chaque monde, chaque candidat est joué, puis la **fin simulée par plans** : chaque joueur
 //!    joue le plan le plus probable du décodeur, jusqu'au début du prochain tour du joueur de la racine
 //!    (ou la fin de la partie, au résultat exact) ;
@@ -23,11 +24,24 @@ use smallmobile_kernel::{Game, Phase};
 use crate::encode::{Encoded, encode};
 use crate::know::{Knowledge, determinize};
 use crate::moves::{self, Choice, Key, Move};
-use crate::net::{Cache, Memory, Net, Value};
+use crate::net::{Cache, Memory, Net, StepIn, Value};
 use crate::outcome::Outcome;
 use crate::plan::{Start, pick};
 use crate::rand::{Rng, mix};
 use crate::tokens::{distances, dynamics};
+
+/// Le temps des recherches (ns) : lectures des positions, pas du décodeur, le reste (règles, coups) ;
+/// et le nombre de lectures et de pas. Affiché par l'arène.
+pub static TIMES: [std::sync::atomic::AtomicU64; 5] = [const { std::sync::atomic::AtomicU64::new(0) }; 5];
+pub const T_READ: usize = 0;
+pub const T_STEP: usize = 1;
+pub const T_OTHER: usize = 2;
+pub const N_READS: usize = 3;
+pub const N_STEPS: usize = 4;
+
+fn spent(slot: usize, since: std::time::Instant) {
+    TIMES[slot].fetch_add(since.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+}
 
 /// Échelle de l'avance en pièces dans la valeur (lab7).
 const SCALE: f32 = 8.0;
@@ -178,6 +192,49 @@ struct Lane<'m> {
     /// La valeur à la première lecture après le candidat, et celle du bout.
     first: Option<[f32; MAX_PLAYERS]>,
     end: Option<[f32; MAX_PLAYERS]>,
+    /// L'issue imposée au dé qui finit le candidat (`Outcome`), son candidat et son poids.
+    die: Option<DieOutcome>,
+    cand: usize,
+    weight: f32,
+}
+
+/// L'issue d'un dé : réussite ou échec du dé de renfort, valeur du dé des Berserks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DieOutcome {
+    Reinforce(bool),
+    Berserk(i32),
+}
+
+/// Les issues du dé qui finit le plan `plan` joué depuis `g` (`k`), avec leur probabilité exacte ;
+/// aucune si le plan ne finit pas par un dé.
+fn outcomes(g: &Game, k: &Knowledge, plan: &[Move]) -> Vec<(DieOutcome, f32)> {
+    let (mut w, mut kw) = (*g, *k);
+    let Some((last, before)) = plan.split_last() else { return Vec::new() };
+    for mv in before {
+        kw.play(&mut w, mv).expect("coup du candidat");
+    }
+    match *last {
+        Move::Region(moves::Kind::Reinforce, r) => {
+            let need = w.targets().iter().find(|t| t.region == r as usize).map_or(1, |t| t.need);
+            let p = smallmobile_kernel::ids::die_chance(need) as f32;
+            [(DieOutcome::Reinforce(true), p), (DieOutcome::Reinforce(false), 1.0 - p)]
+                .into_iter()
+                .filter(|o| o.1 > 0.0)
+                .collect()
+        }
+        Move::Berserk => {
+            let faces = smallmobile_kernel::ids::DIE_FACES;
+            let mut out: Vec<(DieOutcome, f32)> = Vec::new();
+            for f in faces {
+                match out.iter_mut().find(|o| o.0 == DieOutcome::Berserk(f)) {
+                    Some(o) => o.1 += 1.0 / faces.len() as f32,
+                    None => out.push((DieOutcome::Berserk(f), 1.0 / faces.len() as f32)),
+                }
+            }
+            out
+        }
+        _ => Vec::new(),
+    }
 }
 
 impl<'m> Lane<'m> {
@@ -197,6 +254,11 @@ impl<'m> Lane<'m> {
                 return Need::Done;
             }
             if let Some(mv) = self.forced.next() {
+                if self.forced.len() == 0
+                    && let Some(want) = self.die
+                {
+                    self.force_die(mv, want);
+                }
                 self.play(mv);
                 continue;
             }
@@ -212,6 +274,25 @@ impl<'m> Lane<'m> {
             }
             return if self.plan.is_some() { Need::Step(legal) } else { Need::Encode };
         }
+    }
+
+    /// Change les dés à venir du monde pour que le dé de `mv` donne `want` (`DieOutcome`).
+    fn force_die(&mut self, mv: Move, want: DieOutcome) {
+        let base = self.w.state.rng;
+        for i in 0..1000u32 {
+            let (mut w, mut k) = (self.w, self.k);
+            w.state.rng = base.wrapping_add(i.wrapping_mul(0x9e37_79b9));
+            k.play(&mut w, &mv).expect("dé du candidat");
+            let got = w.state.last_die.map(|d| match want {
+                DieOutcome::Reinforce(_) => DieOutcome::Reinforce(d.success == Some(true)),
+                DieOutcome::Berserk(_) => DieOutcome::Berserk(d.value),
+            });
+            if got == Some(want) {
+                self.w.state.rng = base.wrapping_add(i.wrapping_mul(0x9e37_79b9));
+                return;
+            }
+        }
+        panic!("issue du dé introuvable : {want:?}");
     }
 
     fn play(&mut self, mv: Move) {
@@ -247,13 +328,18 @@ fn read_all(reader: &dyn Reader, games: &[(&Game, &Knowledge)], dist: &[u8]) -> 
 /// de leur premier plan ; les fins simulées, à leur horizon. `count` : lectures et pas demandés.
 fn run(net: &Net, reader: &dyn Reader, cfg: &Config, lanes: &mut [Lane], dist: &[u8], count: &mut (usize, usize)) {
     loop {
+        let t0 = std::time::Instant::now();
         let needs: Vec<Need> = lanes.iter_mut().map(|l| l.advance(cfg)).collect();
+        spent(T_OTHER, t0);
         if needs.iter().all(|n| matches!(n, Need::Done)) {
             return;
         }
         // les lectures
         let reading: Vec<usize> = (0..lanes.len()).filter(|&i| matches!(needs[i], Need::Encode)).collect();
+        let t0 = std::time::Instant::now();
         let read = read_all(reader, &reading.iter().map(|&i| (&lanes[i].w, &lanes[i].k)).collect::<Vec<_>>(), dist);
+        spent(T_READ, t0);
+        TIMES[N_READS].fetch_add(read.len() as u64, std::sync::atomic::Ordering::Relaxed);
         count.0 += read.len();
         for (&i, mem) in reading.iter().zip(read) {
             let lane = &mut lanes[i];
@@ -267,16 +353,30 @@ fn run(net: &Net, reader: &dyn Reader, cfg: &Config, lanes: &mut [Lane], dist: &
                 lane.plan = Some((Start::of(&lane.w), Rc::new(mem), Cache::default(), None));
             }
         }
-        // les pas du décodeur
-        for (i, need) in needs.into_iter().enumerate() {
-            let Need::Step(legal) = need else { continue };
+        // les pas du décodeur, tous ensemble
+        let stepping: Vec<usize> = (0..lanes.len()).filter(|&i| matches!(needs[i], Need::Step(_))).collect();
+        let t0 = std::time::Instant::now();
+        let logits = {
+            let mut items: Vec<StepIn> = Vec::with_capacity(stepping.len());
+            for (i, lane) in lanes.iter_mut().enumerate() {
+                if !matches!(needs[i], Need::Step(_)) {
+                    continue;
+                }
+                let dy = dynamics(&lane.w, &lane.k);
+                let (_, mem, cache, prev) = lane.plan.as_mut().expect("plan en cours");
+                items.push(StepIn { mem, cache, prev: *prev, dy });
+            }
+            net.step_batch(&mut items)
+        };
+        spent(T_STEP, t0);
+        TIMES[N_STEPS].fetch_add(logits.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        count.1 += logits.len();
+        for (i, all) in stepping.into_iter().zip(logits) {
+            let Need::Step(legal) = &needs[i] else { unreachable!() };
             let lane = &mut lanes[i];
-            let (_, mem, cache, prev) = lane.plan.as_mut().expect("plan en cours");
-            let all = net.step(mem, cache, *prev, &dynamics(&lane.w, &lane.k));
-            count.1 += 1;
-            let logits: Vec<f32> = legal.iter().map(|c| all[c.key as usize]).collect();
-            let c = legal[pick(&logits, lane.t, &mut lane.rng)];
-            *prev = Some(c.key);
+            let choice: Vec<f32> = legal.iter().map(|c| all[c.key as usize]).collect();
+            let c = legal[pick(&choice, lane.t, &mut lane.rng)];
+            lane.plan.as_mut().expect("plan en cours").3 = Some(c.key);
             lane.decisions += 1;
             lane.play(c.mv);
         }
@@ -305,6 +405,9 @@ pub fn search(net: &Net, reader: &dyn Reader, cfg: &Config, g: &Game, k: &Knowle
             decisions: 0,
             first: None,
             end: None,
+            die: None,
+            cand: i,
+            weight: 1.0,
         })
         .collect();
     // une seule lecture de la racine pour tous
@@ -322,31 +425,42 @@ pub fn search(net: &Net, reader: &dyn Reader, cfg: &Config, g: &Game, k: &Knowle
     // 2-4. chaque candidat dans chaque monde, avec sa fin simulée
     let worlds: Vec<Game> = (0..cfg.worlds).map(|_| determinize(g, k, rng)).collect();
     let h = horizon(g);
+    let dice: Vec<Vec<(DieOutcome, f32)>> = candidates.iter().map(|c| outcomes(g, k, c)).collect();
     let mut lanes: Vec<Lane> = Vec::new();
     for w in &worlds {
-        for plan in &candidates {
-            lanes.push(Lane {
-                w: *w,
-                k: *k,
-                plan: None,
-                forced: plan.clone().into_iter(),
-                horizon: Some(h),
-                t: 0.0,
-                rng: Rng::new(0),
-                played: Vec::new(),
-                decisions: 0,
-                first: None,
-                end: None,
-            });
+        for (c, plan) in candidates.iter().enumerate() {
+            let branches: Vec<(Option<DieOutcome>, f32)> = if dice[c].is_empty() {
+                vec![(None, 1.0)]
+            } else {
+                dice[c].iter().map(|&(o, p)| (Some(o), p)).collect()
+            };
+            for (die, weight) in branches {
+                lanes.push(Lane {
+                    w: *w,
+                    k: *k,
+                    plan: None,
+                    forced: plan.clone().into_iter(),
+                    horizon: Some(h),
+                    t: 0.0,
+                    rng: Rng::new(0),
+                    played: Vec::new(),
+                    decisions: 0,
+                    first: None,
+                    end: None,
+                    die,
+                    cand: c,
+                    weight,
+                });
+            }
         }
     }
     run(net, reader, cfg, &mut lanes, &dist, &mut count);
     let n = candidates.len();
     let mut scores = vec![0.0f32; n];
-    for (i, lane) in lanes.iter().enumerate() {
+    for lane in &lanes {
         let end = lane.end.expect("fin simulée finie");
         let first = lane.first.unwrap_or(end);
-        scores[i % n] += (cfg.mix * end[me] + (1.0 - cfg.mix) * first[me]) / cfg.worlds as f32;
+        scores[lane.cand] += lane.weight * (cfg.mix * end[me] + (1.0 - cfg.mix) * first[me]) / cfg.worlds as f32;
     }
     let best = (0..n).max_by(|&a, &b| scores[a].total_cmp(&scores[b]).then(b.cmp(&a))).expect("un candidat");
     Searched {
