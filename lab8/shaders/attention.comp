@@ -1,7 +1,8 @@
 #version 450
 // L'attention de l'encodeur : un groupe par (position, tête), un fil par jeton qui regarde. Scores
 // q·k / √dh + biais de la relation (tokens::relations, calculée ici d'après les distances et les
-// occupants des régions) ; les jetons absents ne sont pas regardés. qkv : lignes [q | k | v].
+// occupants des régions) ; les jetons absents ne sont pas regardés. qkv : lignes [q | k | v] ; la
+// sortie en bf16 (act16), entrée du produit qui suit.
 #include "common.glsl"
 
 layout(local_size_x = 64) in;
@@ -59,7 +60,7 @@ void main() {
     for (uint c = 0u; c < DH; c++) out_[c] = 0.0;
     uint at = p.out_off + (row0 + t) * p.d + head * DH;
     if (valid[t] == 0u) {
-        for (uint c = 0u; c < DH; c++) act[at + c] = 0.0;
+        for (uint c = 0u; c < DH; c++) act16[at + c] = bfloat16_t(0.0);
         return;
     }
     float q[DH];
@@ -81,5 +82,5 @@ void main() {
         sum += e;
         for (uint c = 0u; c < DH; c++) out_[c] += e * vs[j * DH + c];
     }
-    for (uint c = 0u; c < DH; c++) act[at + c] = out_[c] / sum;
+    for (uint c = 0u; c < DH; c++) act16[at + c] = bfloat16_t(out_[c] / sum);
 }

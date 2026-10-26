@@ -12,6 +12,8 @@ layout(std430, binding = 2) buffer Act { float act[]; };
 layout(std430, binding = 3) readonly buffer Input { uint inp[]; };
 layout(std430, binding = 4) writeonly buffer Out16 { bfloat16_t out16[]; };
 layout(std430, binding = 5) writeonly buffer OutF { float outf[]; };
+// les activations lues par les produits, en bf16 (sorties des normalisations, de l'attention, de gelu)
+layout(std430, binding = 11) buffer Act16 { bfloat16_t act16[]; };
 
 const uint R = 48u;
 const uint NODE = 77u;

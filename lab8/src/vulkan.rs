@@ -354,10 +354,7 @@ struct Acts {
     market: u32,
     game: u32,
     x: u32,
-    n: u32,
     qkv: u32,
-    att: u32,
-    h: u32,
     o: u32,
     pool: u32,
     v1: u32,
@@ -367,15 +364,21 @@ struct Acts {
     kv: u32,
     reg: u32,
     dx: u32,
-    dn: u32,
     dqkv: u32,
-    datt: u32,
-    dh: u32,
     ddyn: u32,
     dq: u32,
     dg: u32,
     dkq: u32,
     size: usize,
+    /// Dans act16 (bf16) : sorties des normalisations, de l'attention, de gelu (entrées des produits).
+    n16: u32,
+    att16: u32,
+    h16: u32,
+    o16: u32,
+    dn16: u32,
+    datt16: u32,
+    dh16: u32,
+    size16: usize,
 }
 
 impl Acts {
@@ -387,16 +390,13 @@ impl Acts {
             a
         };
         let rows = max * TOKENS;
-        Acts {
+        let mut acts = Acts {
             region: take(max * REGIONS * 80),
             player: take(max * PLAYERS * 128),
             market: take(max * 6 * 48),
             game: take(max * 80),
             x: take(rows * d),
-            n: take(rows * d),
             qkv: take(rows * 3 * d),
-            att: take(rows * d),
-            h: take(rows * 4 * d),
             o: take(rows * d),
             pool: take(max * 2 * d),
             v1: take(max * d),
@@ -406,16 +406,38 @@ impl Acts {
             kv: take(rows * 2 * dec * d),
             reg: take(max * REGIONS * d),
             dx: take(MAX_LANES * d),
-            dn: take(MAX_LANES * d),
             dqkv: take(MAX_LANES * 3 * d),
-            datt: take(MAX_LANES * d),
-            dh: take(MAX_LANES * 4 * d),
             ddyn: take(MAX_LANES * 32),
             dq: take(MAX_LANES * d),
             dg: take(MAX_LANES * 32),
             dkq: take(MAX_LANES * 9 * d),
             size: at,
-        }
+            n16: 0,
+            att16: 0,
+            h16: 0,
+            o16: 0,
+            dn16: 0,
+            datt16: 0,
+            dh16: 0,
+            size16: 0,
+        };
+        // les lectures directes de `gemm` prennent des tuiles de 16 lignes jusqu'au bout de leur groupe
+        // de 128 : 256 lignes de marge
+        let mut at16 = 0usize;
+        let mut take16 = |rows: usize, width: usize| {
+            let a = at16 as u32;
+            at16 += (rows + 256) * width;
+            a
+        };
+        acts.n16 = take16(rows, d);
+        acts.att16 = take16(rows, d);
+        acts.h16 = take16(rows, 4 * d);
+        acts.o16 = take16(rows, d);
+        acts.dn16 = take16(MAX_LANES, d);
+        acts.datt16 = take16(MAX_LANES, d);
+        acts.dh16 = take16(MAX_LANES, 4 * d);
+        acts.size16 = at16;
+        acts
     }
 }
 
@@ -707,6 +729,7 @@ impl Encoder {
             let (lanebuf, lmem) =
                 self.buffer(memory, MAX_LANES * LANE_WORDS * 4, storage, &[M::DEVICE_LOCAL | host, host])?;
             let (logbuf, gmem) = self.buffer(memory, MAX_LANES * KEYS * 4, storage, &[host | M::HOST_CACHED, host])?;
+            let (a16buf, _) = self.buffer(memory, self.acts.size16 * 2, storage, &[M::DEVICE_LOCAL])?;
             let map = |m| d.map_memory(m, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty());
             self.input = map(imem).map_err(vk_err("projection"))? as *mut u8;
             self.out16 = map(omem).map_err(vk_err("projection"))? as *const u16;
@@ -714,7 +737,7 @@ impl Encoder {
             self.lanes = map(lmem).map_err(vk_err("projection"))? as *mut u32;
             self.logits = map(gmem).map_err(vk_err("projection"))? as *const f32;
 
-            let bindings: Vec<_> = (0..11)
+            let bindings: Vec<_> = (0..12)
                 .map(|b| {
                     vk::DescriptorSetLayoutBinding::default()
                         .binding(b)
@@ -734,7 +757,7 @@ impl Encoder {
                     None,
                 )
                 .map_err(vk_err("disposition"))?;
-            let sizes = [vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(11)];
+            let sizes = [vk::DescriptorPoolSize::default().ty(vk::DescriptorType::STORAGE_BUFFER).descriptor_count(12)];
             self.descriptor_pool = d
                 .create_descriptor_pool(&vk::DescriptorPoolCreateInfo::default().max_sets(1).pool_sizes(&sizes), None)
                 .map_err(vk_err("réserve"))?;
@@ -746,7 +769,7 @@ impl Encoder {
                 )
                 .map_err(vk_err("descripteurs"))?[0];
             let infos: Vec<[vk::DescriptorBufferInfo; 1]> =
-                [wbuf, w16buf, abuf, ibuf, obuf, fbuf, slotbuf, infobuf, cachebuf, lanebuf, logbuf]
+                [wbuf, w16buf, abuf, ibuf, obuf, fbuf, slotbuf, infobuf, cachebuf, lanebuf, logbuf, a16buf]
                     .iter()
                     .map(|&b| [vk::DescriptorBufferInfo::default().buffer(b).range(vk::WHOLE_SIZE)])
                     .collect();
@@ -881,23 +904,23 @@ impl Encoder {
             let rows = b * TOKENS;
             let norm_groups = (rows.div_ceil(8) as u32, 1);
             for l in &w.layers {
-                self.dispatch(LAYERNORM, &[rows as u32, d, a.x, a.n, l.ln1.g, l.ln1.b], norm_groups);
-                self.gemm(rows, l.qkv, (a.n, d, one, 0), (a.qkv, 3 * d, one, 0), 0);
-                self.dispatch(ATTENTION, &[a.qkv, a.att, d, w.heads as u32, l.rel], (bu, w.heads as u32));
-                self.gemm(rows, l.o, (a.att, d, one, 0), (a.x, d, one, 0), 4);
-                self.dispatch(LAYERNORM, &[rows as u32, d, a.x, a.n, l.ln2.g, l.ln2.b], norm_groups);
-                self.gemm(rows, l.a, (a.n, d, one, 0), (a.h, 4 * d, one, 0), 1);
-                self.gemm(rows, l.b, (a.h, 4 * d, one, 0), (a.x, d, one, 0), 4);
+                self.dispatch(LAYERNORM, &[rows as u32, d, a.x, 0, l.ln1.g, l.ln1.b, 2, a.n16], norm_groups);
+                self.gemm(rows, l.qkv, (a.n16, d, one, 0), (a.qkv, 3 * d, one, 0), 8);
+                self.dispatch(ATTENTION, &[a.qkv, a.att16, d, w.heads as u32, l.rel], (bu, w.heads as u32));
+                self.gemm(rows, l.o, (a.att16, d, one, 0), (a.x, d, one, 0), 8 | 4);
+                self.dispatch(LAYERNORM, &[rows as u32, d, a.x, 0, l.ln2.g, l.ln2.b, 2, a.n16], norm_groups);
+                self.gemm(rows, l.a, (a.n16, d, one, 0), (a.h16, 4 * d, one, 0), 8 | 16 | 1);
+                self.gemm(rows, l.b, (a.h16, 4 * d, one, 0), (a.x, d, one, 0), 8 | 4);
             }
-            self.dispatch(LAYERNORM, &[rows as u32, d, a.x, a.o, w.enc_ln.g, w.enc_ln.b], norm_groups);
+            self.dispatch(LAYERNORM, &[rows as u32, d, a.x, a.o, w.enc_ln.g, w.enc_ln.b, 3, a.o16], norm_groups);
             self.dispatch(POOL, &[a.o, a.pool, d], (bu, 1));
             self.gemm(b, w.val.0, (a.pool, 2 * d, one, 0), (a.v1, d, one, 0), 2);
             self.gemm(b, w.val.1, (a.v1, d, one, 0), (a.v2, 16, one, 0), 0);
             self.gemm(b, w.next.0, (a.pool, 2 * d, one, 0), (a.n1, d, one, 0), 2);
             self.gemm(b, w.next.1, (a.n1, d, one, 0), (a.n2, 16, one, 0), 0);
             let kvw = 2 * w.dec as u32 * d;
-            self.gemm(rows, w.kv, (a.o, d, one, 0), (a.kv, kvw, one, 0), 0);
-            self.gemm(b * REGIONS, w.reg, (a.o, d, r, t), (a.reg, d, one, 0), 0);
+            self.gemm(rows, w.kv, (a.o16, d, one, 0), (a.kv, kvw, one, 0), 8);
+            self.gemm(b * REGIONS, w.reg, (a.o16, d, r, t), (a.reg, d, one, 0), 8);
             let out = if to_slots { STORE } else { PACK };
             self.dispatch(out, &[a.o, a.reg, a.kv, a.v2, a.n2, d, w.dec as u32, self.per16 as u32], (bu, 1));
             dev.end_command_buffer(self.command).map_err(vk_err("commandes"))?;
@@ -1107,21 +1130,21 @@ impl Encoder {
             self.gemm(n, w.dec_dyn, (a.ddyn, 32, one, 0), (a.dx, d, one, 0), 4);
             let groups = (n.div_ceil(8) as u32, 1);
             for (l, layer) in w.dec_layers.iter().enumerate() {
-                self.dispatch(LAYERNORM, &[nu, d, a.dx, a.dn, layer.ln1.g, layer.ln1.b], groups);
-                self.gemm(n, layer.qkv, (a.dn, d, one, 0), (a.dqkv, 3 * d, one, 0), 0);
-                self.dispatch(DEC_SELF, &[a.dqkv, a.datt, d, h, l as u32, w.dec as u32, MAX_STEPS as u32], (nu, h));
-                self.gemm(n, layer.o, (a.datt, d, one, 0), (a.dx, d, one, 0), 4);
-                self.dispatch(LAYERNORM, &[nu, d, a.dx, a.dn, layer.ln2.g, layer.ln2.b], groups);
-                self.gemm(n, layer.q, (a.dn, d, one, 0), (a.dq, d, one, 0), 0);
-                self.dispatch(DEC_CROSS, &[a.dq, a.datt, d, h, l as u32, self.per16 as u32], (nu, h));
-                self.gemm(n, layer.cross_o, (a.datt, d, one, 0), (a.dx, d, one, 0), 4);
-                self.dispatch(LAYERNORM, &[nu, d, a.dx, a.dn, layer.ln3.g, layer.ln3.b], groups);
-                self.gemm(n, layer.a, (a.dn, d, one, 0), (a.dh, 4 * d, one, 0), 1);
-                self.gemm(n, layer.b, (a.dh, 4 * d, one, 0), (a.dx, d, one, 0), 4);
+                self.dispatch(LAYERNORM, &[nu, d, a.dx, 0, layer.ln1.g, layer.ln1.b, 2, a.dn16], groups);
+                self.gemm(n, layer.qkv, (a.dn16, d, one, 0), (a.dqkv, 3 * d, one, 0), 8);
+                self.dispatch(DEC_SELF, &[a.dqkv, a.datt16, d, h, l as u32, w.dec as u32, MAX_STEPS as u32], (nu, h));
+                self.gemm(n, layer.o, (a.datt16, d, one, 0), (a.dx, d, one, 0), 8 | 4);
+                self.dispatch(LAYERNORM, &[nu, d, a.dx, 0, layer.ln2.g, layer.ln2.b, 2, a.dn16], groups);
+                self.gemm(n, layer.q, (a.dn16, d, one, 0), (a.dq, d, one, 0), 8);
+                self.dispatch(DEC_CROSS, &[a.dq, a.datt16, d, h, l as u32, self.per16 as u32], (nu, h));
+                self.gemm(n, layer.cross_o, (a.datt16, d, one, 0), (a.dx, d, one, 0), 8 | 4);
+                self.dispatch(LAYERNORM, &[nu, d, a.dx, 0, layer.ln3.g, layer.ln3.b, 2, a.dn16], groups);
+                self.gemm(n, layer.a, (a.dn16, d, one, 0), (a.dh16, 4 * d, one, 0), 8 | 16 | 1);
+                self.gemm(n, layer.b, (a.dh16, 4 * d, one, 0), (a.dx, d, one, 0), 8 | 4);
             }
-            self.dispatch(LAYERNORM, &[nu, d, a.dx, a.dn, w.dec_ln.g, w.dec_ln.b], groups);
-            self.gemm(n, w.out_glob, (a.dn, d, one, 0), (a.dg, 32, one, 0), 0);
-            self.gemm(n, w.out_kind, (a.dn, d, one, 0), (a.dkq, 9 * d, one, 0), 0);
+            self.dispatch(LAYERNORM, &[nu, d, a.dx, 0, w.dec_ln.g, w.dec_ln.b, 2, a.dn16], groups);
+            self.gemm(n, w.out_glob, (a.dn16, d, one, 0), (a.dg, 32, one, 0), 8);
+            self.gemm(n, w.out_kind, (a.dn16, d, one, 0), (a.dkq, 9 * d, one, 0), 8);
             self.dispatch(DEC_OUT, &[a.dg, a.dkq, d, self.per16 as u32], (nu, 1));
             dev.end_command_buffer(self.command).map_err(vk_err("commandes"))?;
         }

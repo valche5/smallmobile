@@ -43,5 +43,5 @@ void main() {
         sum += e;
         out_ += e * cache[vbase + j * p.d + head * DH + c];
     }
-    act[p.out_off + lane * p.d + head * DH + c] = out_ / sum;
+    act16[p.out_off + lane * p.d + head * DH + c] = bfloat16_t(out_ / sum);
 }
