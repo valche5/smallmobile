@@ -39,7 +39,9 @@ Outils communs (ce dossier) :
   d'emploi en tête du script ; section « Les machines vast.ai ») ; journal dans `state/vast/` ;
 - `score.py` : le score d'une arène (`labN arena --out r.tsv`) et ses intervalles par donne ;
 - `games.ts` : résumé des parties archivées par le serveur (`data/games/`) ;
-- `export-room.ts` : une salle du serveur au format du noyau, pour l'analyser dans un labo.
+- `export-room.ts` : une salle du serveur au format du noyau, pour l'analyser dans un labo ;
+- `biblio.md` : bibliographie commentée des IA de jeux proches (Diplomacy, jeux à plusieurs
+  actions par tour, Catan, Risk, Small World).
 
 Le jeu propose l'Expert de chaque labo listé dans `src/shared/experts.ts` (le dernier par
 défaut) ; `bun run kernel:build` construit le programme `labN-expert` de chaque labo.
