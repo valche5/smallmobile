@@ -361,6 +361,8 @@ pub struct Config {
     pub seed: u64,
     /// Écrire aussi les entrées pleines (`.raw`), pour vérifier la forme compacte.
     pub raw: bool,
+    /// Parties menées par chaque fil en même temps, avec le GPU.
+    pub concurrent: usize,
 }
 
 /// La partie `i` (donne, carte et hasard tirés de `cfg.seed` et `i`), découpée en plans.
@@ -373,9 +375,6 @@ async fn game(i: usize, cfg: &Config, az: &Az, oracle: &impl Oracle) -> (Game_, 
     let segments = play(&table, seed, az, &mut rng, oracle).await;
     (Game_ { deal, map_seed, seed, players }, segments)
 }
-
-/// Parties menées par chaque fil en même temps, avec le GPU (comme le selfplay de lab7).
-const GPU_GAMES: usize = 16;
 
 type Running<'a> = Pin<Box<dyn Future<Output = (Game_, Vec<Segment>)> + 'a>>;
 
@@ -401,12 +400,12 @@ fn advance<'a>(
 }
 
 /// Les parties d'imitation, en parallèle, un jeu de fichiers par fil dans `dir`. Avec `gpu`, chaque
-/// fil mène `GPU_GAMES` parties, chacune reprise dès que ses évaluations sont là ; sans, une partie à
+/// fil mène `Config::concurrent` parties, chacune reprise dès que ses évaluations sont là ; sans, une partie à
 /// la fois par fil, évaluée sur le processeur.
 pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Result<()> {
     let mut lanes = gpu.map(|gpu| gpu.lanes(cfg.threads)).unwrap_or_default();
     if let Some(lane) = lanes.first()
-        && GPU_GAMES * smallmobile_lab7::az::CONSIDERED > lane.free()
+        && cfg.concurrent * smallmobile_lab7::az::CONSIDERED > lane.free()
     {
         return Err(std::io::Error::other("l'anneau du GPU ne tient pas les parties d'un fil"));
     }
@@ -443,8 +442,9 @@ pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Res
                             let i = next.fetch_add(1, Ordering::Relaxed);
                             (i < cfg.games).then(|| Box::pin(game(i, cfg, az, &batch)) as Running)
                         };
-                        let mut slots: Vec<Option<Running>> = (0..GPU_GAMES).map(|_| None).collect();
-                        let mut ready: Vec<(usize, Option<Vec<Eval>>)> = (0..GPU_GAMES).map(|s| (s, None)).collect();
+                        let mut slots: Vec<Option<Running>> = (0..cfg.concurrent).map(|_| None).collect();
+                        let mut ready: Vec<(usize, Option<Vec<Eval>>)> =
+                            (0..cfg.concurrent).map(|s| (s, None)).collect();
                         let mut waiting = std::collections::VecDeque::new();
                         loop {
                             while let Some((s, evals)) = ready.pop() {

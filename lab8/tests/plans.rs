@@ -69,7 +69,7 @@ fn imitation_games_split_into_plans() {
     let c130 = Path::new(env!("CARGO_MANIFEST_DIR")).join("../lab7/nets/c130.bin");
     let player = agent::by_name(&format!("az:net={},n=8", c130.display())).unwrap();
     let dir = std::env::temp_dir().join(format!("lab8-record-{}", std::process::id()));
-    let cfg = record::Config { players: vec![2, 5], games: 2, threads: 1, seed: 3, raw: true };
+    let cfg = record::Config { players: vec![2, 5], games: 2, threads: 1, seed: 3, raw: true, concurrent: 1 };
     record::run(&cfg, player.az().unwrap(), &dir, None).unwrap();
     let prefix = dir.join("r3-00");
     let f: Vec<Vec<u8>> = EXTENSIONS.iter().map(|e| read(&prefix, e)).collect();

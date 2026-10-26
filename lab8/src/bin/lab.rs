@@ -124,6 +124,7 @@ fn record_cmd(opts: &HashMap<String, String>) {
         threads: get(opts, "threads", threads()),
         seed: get(opts, "seed", 81_000_000),
         raw: get(opts, "raw", false),
+        concurrent: get(opts, "concurrent", 16),
     };
     let dir = PathBuf::from(opts.get("out").unwrap_or_else(|| usage()));
     let gpu = start_gpu(device(opts), &[net_path(spec)]);
@@ -132,7 +133,24 @@ fn record_cmd(opts: &HashMap<String, String>) {
         eprintln!("échec : {e}");
         std::process::exit(1)
     });
-    eprintln!("{} parties en {:.0} s", cfg.games, start.elapsed().as_secs_f64());
+    let secs = start.elapsed().as_secs_f64();
+    eprintln!("{} parties en {secs:.0} s", cfg.games);
+    // où passe le temps des fils de jeu, et ce qu'ils ont envoyé au GPU
+    use smallmobile_lab7::batch::{SENT, SENT_LOTS, SENT_POSITIONS, TIME_DECODE, TIME_SUBMIT, TIME_WAIT, TIMES};
+    use std::sync::atomic::Ordering::Relaxed;
+    let all = secs * cfg.threads as f64;
+    let share = |i: usize| 100.0 * TIMES[i].load(Relaxed) as f64 / 1e9 / all;
+    let (positions, lots) = (SENT[SENT_POSITIONS].load(Relaxed) as f64, SENT[SENT_LOTS].load(Relaxed) as f64);
+    if lots > 0.0 {
+        eprintln!(
+            "fils de jeu : envoi {:.1} %, attente du GPU {:.1} %, décodage {:.1} % ; GPU : {:.0} évaluations/s, lots de {:.1} en moyenne",
+            share(TIME_SUBMIT),
+            share(TIME_WAIT),
+            share(TIME_DECODE),
+            positions / secs,
+            positions / lots
+        );
+    }
 }
 
 fn arena_cmd(opts: &HashMap<String, String>) {

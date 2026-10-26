@@ -95,5 +95,28 @@ même pour la lecture Python (32 101 plans identiques) ; `half_rounds_to_nearest
 conversion en f16. Décodage d'un lot de 256 plans : 5,2 ms sur un fil (le GPU en apprend un en
 ~100 ms) ; apprentissage `--bench 80` : 2 546 plans par seconde, comme avant.
 
+### Débit des parties d'imitation (26 octobre)
+
+Question de l'utilisateur : peut-on accélérer la génération ? `lab8 record` affiche maintenant la
+répartition du temps des fils de jeu et ce qu'ils envoient au GPU ; `--concurrent` règle le nombre
+de parties par fil. Sur 2 000 parties (graine 81000000) :
+
+| Parties par fil | Durée | Parties/s | Attente du GPU | Évaluations/s | Lot moyen |
+| --- | --- | --- | --- | --- | --- |
+| 16 | 119 s | 16,8 | 7,4 % | 708 000 | 101 |
+| 32 | 130 s | 15,4 | 2,7 % | 648 000 | 90 |
+| 64 | — | — | — | — | l'anneau du GPU ne les tient pas |
+
+Le GPU n'est pas le frein : les fils l'attendent 7 % du temps, et une partie envoie seule ses
+positions (le lot ne grossit pas avec le nombre de parties ; plus de parties par fil chargent les
+caches et ralentissent). Les fils calculent ~86 % du temps (processeur occupé à ~78 %). `perf`
+(1 000 parties) : copies mémoire 15 % (parties copiées par `determinize`, positions encodées copiées
+dans les requêtes du GPU, cibles des conquêtes), allocations ~6 %, `encode` 8 %, l'arbre de la
+recherche (`fingerprint`, `select`, `completed_into`) 16 %, les règles (`reach`, `target`, `block`,
+`income_lines`…) ~15 %. Tout est dans le code de lab7 (figé) et du noyau : gagner 15 à 20 %
+demanderait de copier et réécrire la recherche de c130 dans lab8, pour une génération faite une
+fois (≈ 2 h). Non fait : l'effort d'optimisation va au moteur du transformer et à la recherche sur
+plans, qui servent à chaque coup. 16 parties par fil reste le réglage par défaut.
+
 Reste, pour les phases suivantes : la recherche sur plans et la recherche coup par coup du nouveau
 réseau (phases 4 et 5), le moteur GPU du transformer (phase 3).
