@@ -1,0 +1,22 @@
+[package]
+name = "smallmobile-lab8"
+version = "0.1.0"
+edition = "2024"
+description = "Laboratoire 8 : recherche sur des plans de tour écrits par un décodeur, transformer neuf qui imite d'abord c130 (lab8/lab.md)."
+publish = false
+
+[[bin]]
+name = "lab8"
+path = "src/bin/lab.rs"
+
+[features]
+# Vulkan pour c130 (parties d'imitation, adversaire des arènes) ; --no-default-features : processeur seul.
+default = ["vulkan"]
+vulkan = ["smallmobile-lab7/vulkan"]
+
+[dependencies]
+smallmobile-kernel = { path = "../kernel" }
+smallmobile-brain8 = { path = "brain" }
+smallmobile-brain7 = { path = "../lab7/brain" }
+# c130 et son moteur GPU, l'arène, les joueurs : ceux de lab7 (figé), tels quels
+smallmobile-lab7 = { path = "../lab7", default-features = false }

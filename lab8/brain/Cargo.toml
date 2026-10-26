@@ -1,0 +1,11 @@
+[package]
+name = "smallmobile-brain8"
+version = "0.1.0"
+edition = "2024"
+description = "L'IA Expert du labo 8 : transformer et décodeur de plans de tour, recherche sur des plans (lab8/lab.md)."
+publish = false
+
+[dependencies]
+smallmobile-kernel = { path = "../../kernel" }
+# les coups, ce que sait un joueur, les mondes possibles et l'encodage de lab7, inchangés
+smallmobile-brain7 = { path = "../../lab7/brain" }

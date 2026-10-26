@@ -131,10 +131,14 @@ glslc. PyTorch 2.14.1+rocm7.14 voit la carte (`lab3/py/.venv`).
   0,575 (en CUDA, lab7 : 0,0004, 0,012, 0,11 ; l'écart des logits est à surveiller).
 - `lab7 bench-gpu` : 1,18 million de positions par seconde en lots de 2 048 (RTX 4090 en CUDA, lab7 :
   0,66 million).
-- Arène c130 contre c130, n = 400, 80 donnes de 2 à 5 joueurs : 21,3 s, 100 ms par décision en
-  moyenne (p95 336 ms). 100 000 parties d'imitation prendraient donc environ 7 h 30.
-- Un transformer de 5 millions de paramètres coûte environ 10 fois c130 par position (estimation) :
-  à mesurer en phase 0.
+- Arène c130 contre c130, n = 400, 80 donnes de 2 à 5 joueurs (280 parties : chaque donne est
+  rejouée à toutes les places) : 21,3 s, 100 ms par décision en moyenne (p95 336 ms).
+- Parties d'imitation (`lab8 record`, phase 0) : 15 parties par seconde, 80 plans par partie,
+  335 ko par partie. 100 000 parties : ≈ 2 h et 33 Go.
+- Transformer de départ (256 × 6, 8 têtes, décodeur de 2 couches : 7,9 millions de paramètres) :
+  apprentissage à 2 350 plans par seconde sur la carte (bf16, lots de 256, sans optimisation), soit
+  ≈ 1 h par passe sur 8 millions de plans ; sur un cœur, en f32, 19,5 ms par lecture de position et
+  0,3 ms par pas du décodeur (le moteur GPU de la phase 3 est indispensable à la recherche).
 
 ## Phases et critères, fixés avant tout calcul
 
@@ -142,12 +146,12 @@ Chaque commande longue a un délai maximal (AGENTS.md).
 
 | Phase | Travail | Critère pour continuer |
 | --- | --- | --- |
-| 0, base | Paquets `smallmobile-lab8` et `smallmobile-brain8`. Copie élaguée de lab7 pour ce qui ne change pas (`know`, `rand`, `outcome`, `moves`, `compact`, arène, moteur Vulkan). Neufs : l'encodage en jetons, le réseau (référence Rust sur processeur et PyTorch), le décodeur, la recherche sur plans. c130 par dépendance à `smallmobile-brain7` (données, adversaire). | Tests : mêmes sorties en Rust et en PyTorch ; tout plan joué est légal ; probabilités du dé exactes ; débit mesuré. |
+| 0, base | Paquets `smallmobile-lab8` et `smallmobile-brain8`, qui reprennent de lab7 (figé), par dépendance, ce qui ne change pas : coups, savoir, hasard, encodage, arène, c130 et son moteur GPU. Neufs : les jetons, le réseau (référence Rust sur processeur et PyTorch), le décodeur, le découpage en plans, l'enregistreur des parties d'imitation, l'apprentissage. | Tests : mêmes sorties en Rust et en PyTorch ; tout plan joué est légal ; débits mesurés. **Fait le 26 octobre** (journal). |
 | 1, données | 100 000 parties de c130 (graines 81 000 000 et suivantes), 5 % de parties mises de côté | — |
 | 2, imitation | Tailles choisies sur les parties mises de côté, entraînement de 24 h au plus | Sur les parties mises de côté, politique et valeur au moins aussi bonnes que le réseau de c130 face à sa propre recherche (par phase et par nombre de joueurs) |
 | 3, moteur | Encodeur et décodeur en Vulkan (`check-gpu` contre le processeur, `bench-gpu`) | Écarts du niveau de c130 |
-| 4, parité | Le nouveau réseau avec la recherche coup par coup de lab7, n = 400, contre c130 à n = 400 ; 920 donnes, graine 82001 | Score dans ±2 points de 0 |
-| 5, plans | La recherche sur plans contre c130 à n = 400, 920 donnes, graine 82002. Sur les mêmes donnes, le meilleur de lab7 (`n=400,roll=1,mix=0.5`), pour une comparaison appariée | Différence appariée avec lab7 au-dessus de 0. Temps par décision (moyenne, p95) noté, sans plafond |
+| 4, parité | Le nouveau réseau avec une recherche coup par coup comme celle de lab7 (à adapter au décodeur), n = 400, contre c130 à n = 400 ; 920 donnes, graine 82001 | Score dans ±2 points de 0 |
+| 5, plans | La recherche sur plans (écrite après la phase 2 : probabilités exactes du dé, candidats, fins simulées par plans) contre c130 à n = 400, 920 donnes, graine 82002. Sur les mêmes donnes, le meilleur de lab7 (`n=400,roll=1,mix=0.5`), pour une comparaison appariée | Différence appariée avec lab7 au-dessus de 0. Temps par décision (moyenne, p95) noté, sans plafond |
 | 6, selfplay | Boucle avec la recherche sur plans ; puis la même recherche sans fins simulées | Gain sur la phase 5 ; les fins simulées retirées quand l'arène ne les distingue plus |
 
 Si l'imitation (phase 2) ne rejoint pas c130, ou si l'entraînement dépasse le budget, on s'arrête pour
