@@ -29,7 +29,9 @@
 #
 # Réglages (variables d'environnement) : VAST_NAME (une machine de plus à côté, état séparé :
 # labtools/state/NOM), IMAGE, LAB, NET (réseau du test Vulkan, labN/nets/c130.bin), MAX_PRICE ($/h, 0,6), DISK (Go, 16), KEEP, VAST (le
-# client vastai), GLSLC_DIR (shaderc 2026.4 extrait, `usr/bin/glslc`).
+# client vastai), GLSLC_DIR (shaderc 2026.4 extrait, `usr/bin/glslc`), CUDA_PIP (cuBLAS et NVRTC
+# installés par pip : ceux de CUDA 13.0, comme PyTorch cu130 ; plus récents, leur PTX est refusé par
+# le pilote 595 des hôtes : CUDA_ERROR_UNSUPPORTED_PTX_VERSION, 26 octobre).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -40,6 +42,7 @@ ONSTART='chown -R root:root /root/.ssh; chmod 700 /root/.ssh; chmod 600 /root/.s
 GLSLC_DIR=${GLSLC_DIR:-$HOME/.local/opt/shaderc-2026.4}
 TARGET=${CARGO_TARGET_DIR:-$HOME/.cache/vast-target}
 MAX_PRICE=${MAX_PRICE:-0.6}
+CUDA_PIP=${CUDA_PIP:-nvidia-cublas==13.0.2.14 nvidia-cuda-nvrtc==13.0.88}
 DISK=${DISK:-16}
 KEEP=${KEEP:-}
 LAB=${LAB:-}
@@ -202,8 +205,8 @@ print(d["dph_total"])' > "$ST/conn"
   # 4. le labo ; cuBLAS et NVRTC pour `--device cuda` (paquets pip, sans PyTorch), chargés par les
   # calculs de `run` (cuda.env)
   push_cmd
-  rsh 300 'py=/venv/main/bin/python; [ -x $py ] || py=python3
-    $py -m pip install -q --break-system-packages nvidia-cublas nvidia-cuda-nvrtc > /dev/null 2>&1 || true
+  rsh 300 "py=/venv/main/bin/python; [ -x \$py ] || py=python3
+    \$py -m pip install -q --break-system-packages $CUDA_PIP > /dev/null 2>&1 || true"'
     lib=$(dirname "$(find / -xdev -name "libcublas.so.1[0-9]" 2>/dev/null | head -1)")
     [ "$lib" != . ] && echo "export LD_LIBRARY_PATH=$lib:\${LD_LIBRARY_PATH:-}" > /root/sm/cuda.env; cat /root/sm/cuda.env' | note || true
   # 5. le GPU comparé au processeur, par moteur, détaché (60 s) : un pilote bloqué ne bloque pas mini

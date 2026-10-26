@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab7 : sortir l'IA Expert du plateau</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --accent: #2a78d6;
+    --deemph: #898781;
+    --before: #86b6ef;
+    --after: #1c5cab;
+    --good: #006300;
+    --wash: rgba(42, 120, 214, 0.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #f0efec;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --accent: #3987e5;
+      --deemph: #898781;
+      --before: #184f95;
+      --after: #86b6ef;
+      --good: #0ca30c;
+      --wash: rgba(57, 135, 229, 0.12);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #f0efec;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --accent: #3987e5;
+    --deemph: #898781;
+    --before: #184f95;
+    --after: #86b6ef;
+    --good: #0ca30c;
+    --wash: rgba(57, 135, 229, 0.12);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 980px; margin: 0 auto; padding: 40px 20px 80px; }
+  header p { color: var(--ink-2); margin: 4px 0 0; }
+  h1 { font-size: 28px; line-height: 1.2; margin: 0; }
+  h2 { font-size: 20px; margin: 44px 0 10px; padding-top: 12px; border-top: 1px solid var(--grid); }
+  h3 { font-size: 16px; margin: 24px 0 6px; }
+  p, li { color: var(--ink); }
+  .secondary { color: var(--ink-2); }
+  .small { font-size: 13px; color: var(--ink-2); }
+  code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--wash); padding: 1px 4px; border-radius: 4px; }
+  a { color: var(--accent); }
+
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-top: 24px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .tile .label { font-size: 13px; color: var(--ink-2); }
+  .tile .value { font-size: 30px; font-weight: 600; line-height: 1.2; margin: 4px 0; }
+  .tile .note { font-size: 13px; color: var(--ink-2); }
+  .tile.hero { grid-column: 1 / -1; }
+  .tile.hero .value { font-size: 52px; }
+
+  figure.chart { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 16px 8px; margin: 18px 0; }
+  figure.chart figcaption .title { font-weight: 600; }
+  figure.chart figcaption .sub { font-size: 13px; color: var(--ink-2); }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; margin: 10px 0 2px; font-size: 13px; color: var(--ink-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  svg text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .axis text { fill: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .rowlabel { fill: var(--ink-2); font-size: 13px; }
+  .rowlabel.strong { fill: var(--ink); font-weight: 600; }
+  .grid line { stroke: var(--grid); stroke-width: 1; }
+  .zero { stroke: var(--baseline); stroke-width: 1; }
+  .ci { stroke-width: 2; stroke-linecap: round; }
+  .dot { stroke: var(--surface); stroke-width: 2; }
+  .directlabel { fill: var(--ink); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .hit { fill: transparent; cursor: default; outline: none; }
+  .hit:hover, .hit:focus { fill: var(--wash); }
+  details { margin: 6px 0 4px; }
+  summary { cursor: pointer; font-size: 13px; color: var(--ink-2); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 10px 0; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  th { font-weight: 600; color: var(--ink-2); font-size: 13px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.key td { font-weight: 600; }
+
+  .tooltip {
+    position: fixed; pointer-events: none; z-index: 10; display: none;
+    background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 13px; box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    max-width: 320px;
+  }
+  .tooltip .v { font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums; }
+  .tooltip .k { display: inline-block; width: 12px; height: 2px; vertical-align: middle; margin-right: 6px; }
+  .tooltip .l { color: var(--ink-2); }
+
+  ol.pistes > li { margin-bottom: 14px; }
+  .tag { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--ink-2); margin-left: 6px; }
+  .closed li { color: var(--ink-2); }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <h1>Lab7 : sortir l'IA Expert du plateau</h1>
+  <p>Rapport du 26 octobre 2026 · lab7, ouvert depuis lab6 (réseau c130 de lab3) · calculs sur vast.ai · détails complets dans <code>lab7/journal.md</code> et <code>lab7/lab.md</code></p>
+</header>
+
+<section class="kpis" aria-label="En bref">
+  <div class="tile hero">
+    <div class="label">Le gain trouvé : fins simulées à la décision, contre c130 à n = 400</div>
+    <div class="value">+5,4 points</div>
+    <div class="note">c130 avec 100 simulations et fins simulées, confirmé sur 920 donnes neuves (intervalle à 95 % : ± 1,5), positif à toutes les tailles de table, +7,7 à 5 joueurs.</div>
+  </div>
+  <div class="tile">
+    <div class="label">Avec 400 simulations et fins simulées</div>
+    <div class="value">+8,9</div>
+    <div class="note">± 2,3 sur 400 donnes : le calcul paie de nouveau</div>
+  </div>
+  <div class="tile">
+    <div class="label">Moteur CUDA</div>
+    <div class="value">×2</div>
+    <div class="note">un tampon lu à travers le PCIe, corrigé ; mêmes résultats</div>
+  </div>
+  <div class="tile">
+    <div class="label">Recettes d'apprentissage qui ont fait progresser c130</div>
+    <div class="value">0 sur 4</div>
+    <div class="note">en 10 pas chacune : le gain reste à la décision</div>
+  </div>
+  <div class="tile">
+    <div class="label">Dépensé sur vast.ai</div>
+    <div class="value">16,3 $</div>
+    <div class="note">dont ~4,7 $ perdus (machines oubliées allumées, une panne) ; 6,70 $ restants</div>
+  </div>
+</section>
+
+<h2>1. Le point de départ</h2>
+<p>Le labo plafonnait : lab3 ne progressait plus (c130 contre c110 : +0,7 ± 1,4), et à réseau fixé, plus de recherche ne servait à rien (8 fois plus de simulations : +2,0 ± 2,3 dans lab4 ; 16 fois plus : +1,8 ± 2,2 dans lab6). La relecture des six journaux et du code a donné cinq constats :</p>
+<ol>
+  <li><strong>La recherche ne voit pas la réponse des adversaires.</strong> Elle optimise la valeur du réseau en fin de tour ; à 4 et 5 joueurs, moins de 4 % des simulations atteignent le prochain tour du joueur, même à 8 fois le budget. Plus de simulations raffinent le tour en cours sans corriger les erreurs de la valeur.</li>
+  <li><strong>Lab1 avait mesuré le remède, et lab2 l'avait retiré sans mesure.</strong> Ses « fins simulées », le réseau jouant pour tous les joueurs, valaient +11,7 points parmi les Expert, contre +0,7 pour la valeur seule à 800 simulations.</li>
+  <li><strong>Le choix du peuple n'est cherché qu'à un coup.</strong> La carte qui arrive au marché, différente dans chaque monde tiré, fragmentait l'arbre juste après chaque choix.</li>
+  <li><strong>L'Expert du jeu ne reçoit pas l'histoire des joueurs</strong> (120 entrées du réseau à zéro), alors que les arènes la lui donnent.</li>
+  <li><strong>Les parties d'entraînement sont jouées avec du bruit</strong> à chaque coup, 7 coups sur 8 avec seulement 50 simulations : la valeur apprend un jeu plus approximatif que celui qu'elle juge.</li>
+</ol>
+
+<h2>2. Ce que lab7 a construit</h2>
+<ul>
+  <li><strong>Options de recherche</strong>, toutes désactivées par défaut (la recherche est alors celle de lab6 au bit près, vérifié par test) : <code>roll</code> (fins simulées jusqu'au début du prochain tour du joueur), <code>mix</code> (mélange avec la valeur du réseau), <code>market=late</code>, <code>crn</code> (mondes communs), <code>win</code>, <code>explore</code> et <code>history=0</code> (diagnostics).</li>
+  <li><strong>Selfplay et apprentissage</strong> : <code>--noisy-rounds</code> (bruit seulement aux premières manches), <code>--luck</code> (part du hasard retranchée de la cible de la valeur, sans biais, à la manière d'AIVAT), <code>train.py --luck --value-mix</code>, et une boucle <code>lab7/loop.sh</code> pour les machines vast.ai.</li>
+  <li><strong>Outils</strong> : <code>lab7 bench-gpu</code> (débit du moteur seul) et le chronométrage des étapes d'un calcul CUDA (<code>LAB7_CUDA_PHASES=1</code>), qui ont trouvé le défaut du moteur.</li>
+  <li><strong>Vérifications</strong> : 13 tests, dont l'identité avec lab6, l'arrêt des fins simulées au bon tour, les recherches groupées identiques aux recherches seules (le chemin du GPU), des parties entières avec toutes les options, et la correction de chance de somme nulle sans changer les parties. Clippy sans avertissement.</li>
+  <li><strong><code>labtools/vast.sh</code></strong> : les bibliothèques CUDA installées sont désormais celles de CUDA 13.0 ; les plus récentes produisaient du code refusé par le pilote des machines.</li>
+</ul>
+
+<h2>3. À réseau fixé : les arènes (phase 1)</h2>
+<p>Chaque joueur testé affronte des c130 à 400 simulations, de 2 à 5 joueurs, chaque donne jouée à toutes les places. Le score est l'écart des victoires à la part attendue (1/n), en points, moyenne des quatre tailles ; la barre est l'intervalle à 95 %.</p>
+
+<figure class="chart" id="fig-phase1">
+  <figcaption>
+    <div class="title">Le seul gain net vient des fins simulées, et il grandit avec le calcul</div>
+    <div class="sub">Score contre c130 à n = 400, points (intervalle à 95 %). Les recherches ordinaires plus longues viennent de lab4 et lab6.</div>
+  </figcaption>
+  <div class="legend" aria-hidden="true">
+    <span><i style="background: var(--accent)"></i>avec fins simulées</span>
+    <span><i style="background: var(--deemph)"></i>autres essais</span>
+  </div>
+  <svg id="svg-phase1" role="img" aria-labelledby="fig-phase1"></svg>
+  <details><summary>Voir le tableau</summary><div id="tab-phase1"></div></details>
+</figure>
+
+<ul>
+  <li><strong>Confirmation</strong> sur 920 donnes neuves : <strong>+5,4 ± 1,5</strong> (2 joueurs +3,6 ; 3 joueurs +4,4 ; 4 joueurs +5,9 ; 5 joueurs +7,7). Le gain grandit avec le nombre de joueurs, là où la recherche ne voyait jamais le tour suivant.</li>
+  <li>Le mélange avec la valeur du réseau (<code>mix=0.5</code>) et les mondes communs (<code>crn</code>) n'y changent rien de mesurable.</li>
+  <li>Le marché branché aux seuls choix de peuple (+0,3 ± 1,5) et l'Expert sans histoire (−0,6 ± 1,5) : rien de mesurable.</li>
+  <li><strong>Le bruit du selfplay</strong> : c130 à 50 simulations avec le bruit des parties d'entraînement fait −10,7 ± 2,0 ; sans bruit, −4,9 ± 2,0. Le bruit seul coûte <strong>5,8 ± 2,6 points</strong> aux coups de ces parties.</li>
+</ul>
+<p class="small">Coût mesuré sur un cœur de mini : une recherche à n = 400 prend 0,12 s ; à n = 100 avec fins simulées, 1,5 s (~25 évaluations du réseau par fin simulée). Sur l'arène GPU, par décision : 0,85 s à n = 400, 3,4 s à n = 50 avec fins, 6,9 s à n = 100, 24 s à n = 400.</p>
+
+<h2>4. Le moteur CUDA, deux fois plus rapide</h2>
+<p>Le chronométrage des étapes a montré que la moyenne des voisines prenait 53 % du temps d'un calcul : elle lisait, à chaque région, le décalage de sa position dans un tampon de la mémoire de l'hôte, donc à travers le PCIe (~90 000 lectures par calcul). Ce tampon de 16 Ko est maintenant copié dans la mémoire du GPU au début du calcul ; les sorties sont inchangées (écart au processeur : victoire 0,0004).</p>
+
+<figure class="chart" id="fig-cuda">
+  <figcaption>
+    <div class="title">Débit du réseau sur GPU, avant et après le correctif</div>
+    <div class="sub">RTX 4090, c130, positions évaluées par seconde selon la taille des lots (<code>lab7 bench-gpu</code>, deux lots en vol)</div>
+  </figcaption>
+  <div class="legend" aria-hidden="true">
+    <span><i style="background: var(--before)"></i>avant</span>
+    <span><i style="background: var(--after)"></i>après</span>
+  </div>
+  <svg id="svg-cuda" role="img" aria-labelledby="fig-cuda"></svg>
+  <details><summary>Voir le tableau</summary><div id="tab-cuda"></div></details>
+</figure>
+<p class="small">Par position : 4,72 µs avant, 2,35 µs après (dont moyenne des voisines 845 → 133 µs par calcul). Le reste est réparti sur une dizaine d'étapes de 4 à 11 % chacune. En selfplay, un cycle de 25 000 parties passe de 22 à 16 min sur une RTX 5080 (le processeur devient aussi un frein).</p>
+
+<h2>5. L'apprentissage (phase 2)</h2>
+<p>Quatre bras en parallèle, une machine chacun, depuis c130 et une fenêtre neuve : 25 000 parties par pas (12 500 pour le professeur), 10 pas d'apprentissage (11 pour le professeur), un duel contre c130 à chaque pas, puis une mesure finale du dernier réseau contre c130 à n = 400 sur 920 donnes, les mêmes pour les quatre bras.</p>
+
+<figure class="chart" id="fig-phase2">
+  <figcaption>
+    <div class="title">Aucune recette n'a fait progresser c130 en 10 pas</div>
+    <div class="sub">Dernier réseau de chaque bras contre c130, les deux à n = 400 sans fins simulées, 920 donnes (intervalle à 95 %)</div>
+  </figcaption>
+  <svg id="svg-phase2" role="img" aria-labelledby="fig-phase2"></svg>
+  <details><summary>Voir le tableau</summary><div id="tab-phase2"></div></details>
+</figure>
+
+<table>
+  <thead><tr><th>Bras</th><th>Recette</th><th class="num">Duels des pas (n = 200)</th><th class="num">Face au témoin</th></tr></thead>
+  <tbody>
+    <tr><td>T0, témoin</td><td>recette de lab3</td><td class="num">−4,3 à −0,6</td><td class="num"></td></tr>
+    <tr><td>T1, sans bruit</td><td>bruit de Gumbel à la première manche seulement</td><td class="num">−5,0 à −0,2</td><td class="num">−1,6 ± 2,0</td></tr>
+    <tr><td>T2, sans bruit ni hasard</td><td>T1, plus la part du hasard retranchée de la cible de la valeur</td><td class="num">−4,2 à +1,9</td><td class="num">−0,2 ± 2,0</td></tr>
+    <tr><td>T3, professeur</td><td>coups enregistrés cherchés avec fins simulées (n = 100) ; cible de valeur mêlée à 50 % à leur valeur</td><td class="num">−2,9 à +0,5</td><td class="num">−1,2 ± 2,0</td></tr>
+  </tbody>
+</table>
+<p><strong>Lecture.</strong> Corriger le bruit des parties, retirer le hasard de la cible, ou apprendre d'un professeur nettement plus fort à la décision ne déplace pas le réseau, du moins à cette échelle (10 pas ; 125 000 parties de professeur). Le réseau, tel qu'il est construit, ne retient pas ce que les fins simulées calculent : la réponse explicite des adversaires. Le gain des fins simulées se paie donc en calcul à chaque coup.</p>
+
+<h2>6. Coûts et incidents</h2>
+<table>
+  <thead><tr><th>Machine</th><th>Rôle</th><th class="num">Durée</th><th class="num">Coût</th><th class="num">Dont inoccupée</th></tr></thead>
+  <tbody>
+    <tr><td>RTX 5080 bridée, Pays-Bas, 0,42 $/h</td><td>arènes de la phase 1</td><td class="num">8 h 23</td><td class="num">3,53 $</td><td class="num">~1,38 $</td></tr>
+    <tr><td>RTX 5080, France, 0,31 $/h</td><td>T0</td><td class="num">7 h 44</td><td class="num">2,42 $</td><td class="num">~0,93 $</td></tr>
+    <tr><td>RTX 4080 SUPER, Allemagne, 0,32 $/h</td><td>T1</td><td class="num">7 h 35</td><td class="num">2,45 $</td><td class="num">~1,16 $</td></tr>
+    <tr><td>RTX 3090, Pays-Bas, 0,45 $/h</td><td>T2</td><td class="num">7 h 35</td><td class="num">3,41 $</td><td class="num">~0,71 $</td></tr>
+    <tr><td>RTX 4090, Nebraska, 0,52 $/h</td><td>T3, bancs du moteur</td><td class="num">7 h 58</td><td class="num">4,17 $</td><td class="num">~0,48 $</td></tr>
+    <tr><td>deux locations refusées par <code>up</code></td><td>CUDA trop récent ; GPU occupé au repos</td><td class="num">~5 min</td><td class="num">~0,05 $</td><td class="num"></td></tr>
+  </tbody>
+</table>
+<p class="small">Crédit : 22,97 $ au départ, 6,70 $ restants (frais de disque compris).</p>
+<h3>Les deux incidents, et ce qui a changé</h3>
+<ul>
+  <li><strong>Duels en panne (~0,9 $).</strong> La boucle exportait 32 parties par fil pour tout son calcul ; l'arène des duels, qui partage l'anneau du GPU entre deux réseaux, n'avait pas la place et s'est arrêtée au premier duel. Les quatre boucles sont restées 7 à 55 min à l'arrêt. Corrigé : 32 parties par fil pour le selfplay seulement, et l'arène refuse d'entrée un réglage qui ne tient pas.</li>
+  <li><strong>Machines oubliées (~3,8 $).</strong> Quatre machines ont fini leur calcul entre 4 h 42 et 6 h 31 UTC et sont restées allumées jusqu'à 8 h, faute d'une attente programmée sur la fin des boucles. Désormais, chaque machine qui calcule a une commande qui attend la fin, rapatrie les résultats et la détruit (fait pour T3).</li>
+</ul>
+
+<h2>7. Les pistes</h2>
+<ol class="pistes">
+  <li><strong>Mettre les fins simulées dans l'Expert du jeu.</strong> <span class="tag">gain sûr : +3 à +9 points</span><br>
+    C'est le seul gain démontré : +2,9 à n = 50, +5,4 à n = 100 (confirmé), +8,9 à n = 400. Le prix est le temps de réflexion sur mini : une recherche à n = 100 avec fins simulées prend ~1,5 s sur un cœur, contre 0,12 s aujourd'hui. À faire : <code>lab7-expert --options roll=1,mix=0.5</code>, une option par Expert dans <code>src/shared/experts.ts</code> et son passage dans <code>src/server/expert.ts</code>. Touche le serveur du jeu : à décider avant tout déploiement.</li>
+  <li><strong>Rendre les fins simulées moins chères.</strong> <span class="tag">ingénierie, sans crédit</span><br>
+    Les fins d'un même tour de recherche sont indépendantes : les répartir sur les cœurs de mini (viser ~0,4 s par recherche). Poser les jetons d'un redéploiement par le placement automatique du noyau pendant les fins (~40 % de leurs évaluations). Ne faire des fins que pour les grandes décisions (choix de peuple, déclin, conquêtes), et la recherche ordinaire pour les jetons.</li>
+  <li><strong>Faire apprendre au réseau la réponse des adversaires.</strong> <span class="tag">recherche, incertain</span><br>
+    Les quatre bras montrent que la boucle actuelle ne transmet pas ce gain. Pistes, de la moins chère à la plus chère :
+    <ul>
+      <li>une tête de valeur auxiliaire qui apprend la valeur <em>au début de mon prochain tour</em> calculée par les fins simulées, une cible locale et peu bruitée ;</li>
+      <li>la valeur apprise entièrement des recherches à fins simulées (<code>VALUE_MIX=1</code>) ;</li>
+      <li>une architecture qui représente explicitement les joueurs et les combos comme des entités (attention entre joueurs), pour que la réponse des adversaires soit représentable ;</li>
+      <li>des parties jouées entièrement avec fins simulées (seule variante non testée ; 15 à 20 fois le coût du selfplay) ;</li>
+      <li>des boucles plus longues (20 pas et plus) avec un professeur plus fort (n = 400 avec fins simulées).</li>
+    </ul></li>
+  <li><strong>Le moteur CUDA, suite.</strong> <span class="tag">~10 à 20 %</span><br>
+    Fusionner le résiduel et la mise en commun des régions, accumuler le second produit directement dans le flux résiduel, lire les entrées autrement qu'à travers le PCIe. À plus long terme, réparer le shader Vulkan bf16, faux sur les cartes NVIDIA.</li>
+  <li><strong>Petites choses.</strong> <span class="tag">rapides</span><br>
+    Transmettre l'histoire des joueurs à l'Expert du jeu (A0 : au plus 1 à 2 points, à 5 joueurs surtout) ; le poids 0,75 de la victoire dans la valeur (lab4 : +1,3 ± 1,0, jamais passé en production) ; commiter lab7 (rien n'est encore commité).</li>
+</ol>
+<h3>Fermé par lab7</h3>
+<ul class="closed">
+  <li>Plus de recherche ordinaire (8×, 16×) : quasi rien. Brancher le marché aux seuls choix de peuple : rien.</li>
+  <li>Selfplay sans bruit, cible de valeur sans hasard, professeur à n = 100 avec fins simulées : rien en 10 pas.</li>
+  <li>Variantes des fins simulées : le mélange 0,5 et les mondes communs n'apportent rien de plus.</li>
+</ul>
+
+<h2>Annexe</h2>
+<p class="small">Graines : arènes 71001 (sans histoire), 71002 (fins simulées et variantes), 71003 (marché), 71004 (bruit), 72002 (confirmation), 72101 (mesures finales de la phase 2). Binaires : <code>7dd1d98dfa98</code> (premières arènes), <code>74311ae103b7</code> (moteur corrigé), <code>d359df711107</code> (garde-fou de l'arène). Résultats individuels (<code>*.tsv</code>), réseaux et journaux des boucles dans <code>lab7/runs/</code> sur mini (hors Git). Score : <code>labtools/score.py</code>, intervalles à 95 % par donne.</p>
+
+</main>
+<div class="tooltip" id="tooltip" role="status" aria-live="polite"></div>
+
+<script>
+"use strict";
+const fmt = (x, d = 1) => (x > 0 ? "+" : x < 0 ? "−" : "") + Math.abs(x).toLocaleString("fr-FR", { minimumFractionDigits: d, maximumFractionDigits: d });
+const num = (x) => x.toLocaleString("fr-FR");
+const NS = "http://www.w3.org/2000/svg";
+const tip = document.getElementById("tooltip");
+
+function el(name, attrs, parent) {
+  const e = document.createElementNS(NS, name);
+  for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+function showTip(target, lines, color) {
+  tip.replaceChildren();
+  lines.forEach((line, i) => {
+    const row = document.createElement("div");
+    if (i === 0) {
+      if (color) { const k = document.createElement("span"); k.className = "k"; k.style.background = color; row.appendChild(k); }
+      const v = document.createElement("span"); v.className = "v"; v.textContent = line; row.appendChild(v);
+    } else {
+      row.className = "l"; row.textContent = line;
+    }
+    tip.appendChild(row);
+  });
+  tip.style.display = "block";
+  const r = target.getBoundingClientRect();
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = r.left + r.width / 2 - w / 2, y = r.top - h - 8;
+  if (y < 4) y = r.bottom + 8;
+  x = Math.max(4, Math.min(x, window.innerWidth - w - 4));
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+function hideTip() { tip.style.display = "none"; }
+
+// Un graphique en forêt : une ligne par essai, le point au score, la barre à l'intervalle.
+function forest(svg, rows, o) {
+  const W = 940, labelW = o.labelW || 330, right = 70, rowH = 30, top = 8, axisH = 34;
+  const H = top + rows.length * rowH + axisH;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const x0 = labelW, x1 = W - right;
+  const sx = (v) => x0 + (v - o.min) / (o.max - o.min) * (x1 - x0);
+  const grid = el("g", { class: "grid" }, svg);
+  const axis = el("g", { class: "axis" }, svg);
+  for (let v = o.min; v <= o.max + 1e-9; v += o.step) {
+    el("line", { x1: sx(v), x2: sx(v), y1: top, y2: top + rows.length * rowH }, grid);
+    const t = el("text", { x: sx(v), y: top + rows.length * rowH + 20, "text-anchor": "middle" }, axis);
+    t.textContent = v === 0 ? "0" : fmt(v, 0);
+  }
+  el("line", { class: "zero", x1: sx(0), x2: sx(0), y1: top, y2: top + rows.length * rowH }, svg);
+  rows.forEach((r, i) => {
+    const y = top + i * rowH + rowH / 2;
+    const color = r.group === "accent" ? "var(--accent)" : "var(--deemph)";
+    const lab = el("text", { class: "rowlabel" + (r.strong ? " strong" : ""), x: labelW - 14, y: y + 4, "text-anchor": "end" }, svg);
+    lab.textContent = r.label;
+    const hit = el("rect", { class: "hit", x: 0, y: y - rowH / 2, width: W, height: rowH, tabindex: 0, rx: 4 }, svg);
+    if (r.ci != null) {
+      el("line", { class: "ci", x1: sx(r.value - r.ci), x2: sx(r.value + r.ci), y1: y, y2: y, stroke: color }, svg);
+    }
+    el("circle", { class: "dot", cx: sx(r.value), cy: y, r: 5, fill: color }, svg);
+    if (r.show) {
+      const t = el("text", { class: "directlabel", x: sx(r.value + (r.ci || 0)) + 8, y: y + 4 }, svg);
+      t.textContent = fmt(r.value) + (r.ci != null ? " ± " + num(r.ci) : "");
+    }
+    const lines = [fmt(r.value) + (r.ci != null ? " ± " + num(r.ci) + " points" : " points"), r.label];
+    if (r.note) lines.push(r.note);
+    const on = () => showTip(hit, lines, color);
+    hit.addEventListener("pointerenter", on); hit.addEventListener("focus", on);
+    hit.addEventListener("pointerleave", hideTip); hit.addEventListener("blur", hideTip);
+  });
+}
+
+function table(host, head, body) {
+  const t = document.createElement("table");
+  const thead = t.createTHead().insertRow();
+  head.forEach(([h, isNum]) => { const th = document.createElement("th"); th.textContent = h; if (isNum) th.className = "num"; thead.appendChild(th); });
+  const tb = t.createTBody();
+  body.forEach((cells) => {
+    const tr = tb.insertRow();
+    cells.forEach(([c, isNum]) => { const td = tr.insertCell(); td.textContent = c; if (isNum) td.className = "num"; });
+  });
+  host.appendChild(t);
+}
+
+// Phase 1 : contre c130 à n = 400.
+const phase1 = [
+  { label: "Recherche ordinaire, 8× (lab4)", value: 2.0, ci: 2.3, group: "other", note: "n = 3 200, 400 donnes" },
+  { label: "Recherche ordinaire, 16× (lab6)", value: 1.8, ci: 2.2, group: "other", note: "n = 6 400, 400 donnes" },
+  { label: "Marché aux seuls choix (A2)", value: 0.3, ci: 1.5, group: "other", note: "n = 400, market=late, 920 donnes" },
+  { label: "Sans histoire, comme le jeu (A0)", value: -0.6, ci: 1.5, group: "other", note: "n = 400, history=0, 920 donnes" },
+  { label: "Fins simulées, n = 50", value: 2.9, ci: 2.2, group: "accent", note: "mix = 0,5, 400 donnes ; 3,4 s par décision" },
+  { label: "Fins simulées, n = 100 (A1)", value: 5.2, ci: 2.4, group: "accent", note: "400 donnes ; 9,1 s par décision (ancien moteur)" },
+  { label: "… et mélange 0,5", value: 5.7, ci: 2.4, group: "accent", note: "mêmes donnes que A1" },
+  { label: "… et mondes communs", value: 4.5, ci: 2.3, group: "accent", note: "mêmes donnes que A1" },
+  { label: "Fins simulées, n = 100, confirmation", value: 5.4, ci: 1.5, group: "accent", strong: true, show: true, note: "920 donnes neuves ; 2 j. +3,6, 3 j. +4,4, 4 j. +5,9, 5 j. +7,7" },
+  { label: "Fins sur deux tours, n = 100", value: 7.0, ci: 2.3, group: "accent", note: "roll = 2 ; 14 s par décision" },
+  { label: "Fins simulées, n = 400", value: 8.9, ci: 2.3, group: "accent", strong: true, show: true, note: "400 donnes ; 24 s par décision" },
+];
+forest(document.getElementById("svg-phase1"), phase1, { min: -4, max: 12, step: 2 });
+table(document.getElementById("tab-phase1"), [["Essai"], ["Score (points)", true], ["± (95 %)", true], ["Précisions"]],
+  phase1.map((r) => [[r.label], [fmt(r.value), true], [num(r.ci), true], [r.note || ""]])
+    .concat([
+      [["Bruit du selfplay : n = 50 avec bruit (A3)"], [fmt(-10.7), true], [num(2.0), true], ["les coups des parties d'entraînement"]],
+      [["n = 50 sans bruit (A3)"], [fmt(-4.9), true], [num(2.0), true], ["différence appariée : −5,8 ± 2,6"]],
+    ]));
+
+// Phase 2 : mesure finale de chaque bras.
+const phase2 = [
+  { label: "T0, témoin", value: -0.5, ci: 1.4, group: "accent", note: "c013, recette de lab3" },
+  { label: "T1, sans bruit", value: -2.1, ci: 1.4, group: "accent", note: "c013 ; face à T0 : −1,6 ± 2,0" },
+  { label: "T2, sans bruit ni hasard", value: -0.7, ci: 1.4, group: "accent", note: "c013 ; face à T0 : −0,2 ± 2,0" },
+  { label: "T3, professeur à fins simulées", value: -1.7, ci: 1.4, group: "accent", note: "c014 ; face à T0 : −1,2 ± 2,0" },
+];
+forest(document.getElementById("svg-phase2"), phase2, { min: -6, max: 6, step: 2, labelW: 330 });
+table(document.getElementById("tab-phase2"), [["Bras"], ["Score (points)", true], ["± (95 %)", true], ["Précisions"]],
+  phase2.map((r) => [[r.label], [fmt(r.value), true], [num(r.ci), true], [r.note]]));
+
+// Moteur CUDA : avant et après, par taille de lot.
+const cuda = [
+  { lot: 64, before: 97674, after: 147201 },
+  { lot: 256, before: 214441, after: 419195 },
+  { lot: 512, before: 262468, after: 574814 },
+  { lot: 1024, before: 287711, after: 655174, show: true },
+  { lot: 2048, before: 265336, after: 533949 },
+];
+(function dumbbell(svg, rows) {
+  const W = 940, labelW = 160, right = 90, rowH = 34, top = 8, axisH = 34, max = 700000, step = 100000;
+  const H = top + rows.length * rowH + axisH;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const x0 = labelW, x1 = W - right;
+  const sx = (v) => x0 + v / max * (x1 - x0);
+  const grid = el("g", { class: "grid" }, svg), axis = el("g", { class: "axis" }, svg);
+  for (let v = 0; v <= max; v += step) {
+    el("line", { x1: sx(v), x2: sx(v), y1: top, y2: top + rows.length * rowH }, grid);
+    const t = el("text", { x: sx(v), y: top + rows.length * rowH + 20, "text-anchor": "middle" }, axis);
+    t.textContent = v === 0 ? "0" : num(v / 1000) + " k";
+  }
+  el("line", { class: "zero", x1: sx(0), x2: sx(0), y1: top, y2: top + rows.length * rowH }, svg);
+  rows.forEach((r, i) => {
+    const y = top + i * rowH + rowH / 2;
+    const lab = el("text", { class: "rowlabel", x: labelW - 14, y: y + 4, "text-anchor": "end" }, svg);
+    lab.textContent = "lots de " + num(r.lot);
+    const hit = el("rect", { class: "hit", x: 0, y: y - rowH / 2, width: W, height: rowH, tabindex: 0, rx: 4 }, svg);
+    el("line", { x1: sx(r.before), x2: sx(r.after), y1: y, y2: y, stroke: "var(--baseline)", "stroke-width": 2 }, svg);
+    el("circle", { class: "dot", cx: sx(r.before), cy: y, r: 5, fill: "var(--before)" }, svg);
+    el("circle", { class: "dot", cx: sx(r.after), cy: y, r: 5, fill: "var(--after)" }, svg);
+    if (r.show) {
+      const t = el("text", { class: "directlabel", x: sx(r.after) + 10, y: y + 4 }, svg);
+      t.textContent = "×" + (r.after / r.before).toLocaleString("fr-FR", { maximumFractionDigits: 1 });
+    }
+    const lines = [num(r.after) + " positions/s après", "lots de " + num(r.lot) + " ; avant : " + num(r.before) + " (×" + (r.after / r.before).toLocaleString("fr-FR", { maximumFractionDigits: 2 }) + ")"];
+    const on = () => showTip(hit, lines, "var(--after)");
+    hit.addEventListener("pointerenter", on); hit.addEventListener("focus", on);
+    hit.addEventListener("pointerleave", hideTip); hit.addEventListener("blur", hideTip);
+  });
+})(document.getElementById("svg-cuda"), cuda);
+table(document.getElementById("tab-cuda"), [["Taille des lots", true], ["Avant (positions/s)", true], ["Après (positions/s)", true], ["Facteur", true]],
+  cuda.map((r) => [[num(r.lot), true], [num(r.before), true], [num(r.after), true], ["×" + (r.after / r.before).toLocaleString("fr-FR", { maximumFractionDigits: 2 }), true]]));
+</script>
+</body>
+</html>

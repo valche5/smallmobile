@@ -1,7 +1,8 @@
 # Labo 6 : la marge de c130 face à une recherche beaucoup plus longue
 
 Ouvert le 25 octobre 2026 à la demande de l'utilisateur, depuis **lab5** au commit `bc6b820`
-(copie sans `probe`). Plan : [lab.md](lab.md).
+(copie sans `probe`). Plan : [lab.md](lab.md). **Figé le 26 octobre 2026** : la suite, les pistes de
+sortie du plateau (fins simulées, marché, histoire, bruit), se fait dans `lab7/journal.md`.
 
 ## Base
 

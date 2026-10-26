@@ -1,0 +1,32 @@
+[package]
+name = "smallmobile-lab7"
+version = "0.1.0"
+edition = "2024"
+description = "Laboratoire 7 : les hypothèses de sortie du plateau de c130 (fins simulées, marché, histoire, bruit), depuis lab6 (journal.md)."
+publish = false
+
+[[bin]]
+name = "lab7"
+path = "src/bin/lab.rs"
+
+[features]
+# Vulkan inclus dans les compilations ordinaires ; --no-default-features pour un programme CPU seul.
+default = ["vulkan", "cuda"]
+# Le réseau sur GPU pour la génération des parties (`lab7 selfplay --device vulkan`) ;
+# shaders compilés par glslc (build.rs).
+vulkan = ["dep:ash"]
+# Le réseau sur GPU NVIDIA par CUDA (`--device cuda`) : pilote, cuBLAS et NVRTC chargés à
+# l'exécution, rien à installer pour compiler.
+cuda = ["vulkan", "dep:cudarc"]
+
+[dependencies]
+smallmobile-kernel = { path = "../kernel" }
+smallmobile-brain7 = { path = "brain" }
+# l'Expert de lab2, adversaire témoin de l'arène (`lab2:net=…`)
+smallmobile-brain2 = { path = "../lab2/brain" }
+ash = { version = "0.38", optional = true }
+cudarc = { version = "0.19.10", optional = true, default-features = false, features = ["std", "driver", "cublas", "nvrtc", "dynamic-loading", "cuda-13000"] }
+
+[dev-dependencies]
+# la recherche de lab6, témoin des tests : sans option, celle de lab7 doit lui être identique
+smallmobile-brain6 = { path = "../lab6/brain" }

@@ -28,7 +28,8 @@ Labos :
 | `lab3` | Spécialisation puis reprise généraliste, c130 en 128×7 (`lab3/journal.md`) | Figé le 24 octobre 2026 ; Expert `lab3/c130` du jeu |
 | `lab4` | Budget, largeur, horizon et cibles de valeur depuis c130 ; essais sans progrès net de l'apprentissage | Figé le 25 octobre 2026 ; résultats dans `lab4/journal.md` |
 | `lab5` | Coups manqués par c130 : alternatives évaluées jusqu'à la fin, sélection et confirmation indépendantes ; reprise directe de lab3 | Figé le 25 octobre 2026 ; **résultats invalides** : calculés en Vulkan bf16 sur NVIDIA, qui calcule faux (erratum de `lab5/journal.md`) |
-| `lab6` | La marge de c130 face à une recherche beaucoup plus longue (arène 16× et 64× les simulations) ; essai CUDA | Ouvert le 25 octobre 2026 ; plan `lab6/lab.md` |
+| `lab6` | La marge de c130 face à une recherche beaucoup plus longue (arène 16× et 64× les simulations) ; moteur CUDA | Figé le 26 octobre 2026 : 16× = +1,8 ± 2,2, indécis (`lab6/journal.md`) |
+| `lab7` | Les pistes de sortie du plateau : fins simulées, marché branché aux choix de peuple, histoire vide de l'Expert du jeu, bruit du selfplay ; quatre boucles d'apprentissage ; moteur CUDA ×2 | Ouvert le 26 octobre 2026 : fins simulées +5,4 ± 1,5 (n = 100, confirmé), +8,9 ± 2,3 (n = 400) ; apprentissage : rien en 10 pas ; rapport `lab7/rapport.html` |
 
 Outils communs (ce dossier) :
 
