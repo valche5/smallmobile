@@ -13,7 +13,6 @@ use smallmobile_lab7::agent::Agent;
 use crate::know::Knowledge;
 use crate::moves::{self, Move};
 use crate::net::Net;
-use crate::plan::{Writer, pick};
 use crate::rand::Rng;
 use crate::search;
 use crate::tokens::distances;
@@ -22,6 +21,51 @@ pub struct Plan {
     pub net: Arc<Net>,
     pub label: String,
     pub t: f32,
+    pending: Pending,
+}
+
+/// Les suites de plans gardées entre deux décisions du jeu : un plan couvre souvent plusieurs décisions
+/// du jeu (les conquêtes une à une) ; le décodeur l'écrit d'un trait depuis son début, comme à
+/// l'apprentissage, et la suite reprend sous l'empreinte de la position où elle commence.
+#[derive(Default)]
+struct Pending(Mutex<HashMap<u64, Vec<Move>>>);
+
+impl Pending {
+    /// La décision du jeu en `g` : la suite gardée pour cette position, sinon le plan `fresh`, jouée
+    /// jusqu'au bout de la décision ; le reste est gardé.
+    fn act(&self, net: &Net, g: &Game, k: &Knowledge, fresh: impl FnOnce() -> Vec<Move>) -> Vec<Action> {
+        let cached = self.0.lock().expect("plans gardés").remove(&position_key(g, k));
+        if cached.is_some() {
+            RESUMED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        let mut plan = cached.unwrap_or_else(fresh).into_iter();
+        let (actions, played) = moves::decision(g, k, |w, kw| {
+            plan.next().unwrap_or_else(|| {
+                // le plan est fini avant la décision du jeu : le plus probable du décodeur
+                SHORT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                crate::plan::write(net, w, kw, &distances(w.map), 0.0, &mut Rng::new(0)).0[0]
+            })
+        })
+        .expect("coup du plan");
+        if std::env::var_os("LAB8_TRACE").is_some() {
+            let (mut w, mut kw) = (*g, *k);
+            let mut line = format!("manche {} joueur {} :", g.state.round, g.state.actor().unwrap_or(9));
+            for mv in &played {
+                line += &format!(" {}", moves::describe(&w, mv));
+                kw.play(&mut w, mv).expect("coup joué");
+            }
+            eprintln!("{line}");
+        }
+        let rest: Vec<Move> = plan.collect();
+        if !rest.is_empty() {
+            let (mut w, mut kw) = (*g, *k);
+            for mv in &played {
+                kw.play(&mut w, mv).expect("coup joué");
+            }
+            self.0.lock().expect("plans gardés").insert(position_key(&w, &kw), rest);
+        }
+        actions
+    }
 }
 
 impl Plan {
@@ -38,7 +82,7 @@ impl Plan {
         }
         let path = net?;
         let loaded = Net::load(Path::new(&path)).unwrap_or_else(|e| panic!("{path} : {e}"));
-        Some(Plan { net: Arc::new(loaded), label: path, t })
+        Some(Plan { net: Arc::new(loaded), label: path, t, pending: Pending::default() })
     }
 }
 
@@ -47,23 +91,10 @@ impl Agent for Plan {
         format!("plan({}, t={})", self.label, self.t)
     }
 
-    /// Une décision du jeu (un coup, ou toute une fin de tour, une défense), écrite par le décodeur
-    /// depuis une lecture de la position au début de la décision.
+    /// Une décision du jeu (un coup, ou toute une fin de tour, une défense) : la suite du plan en cours,
+    /// ou un plan neuf écrit d'un trait par le décodeur.
     fn act(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Vec<Action> {
-        let dist = distances(g.map);
-        let mut writer: Option<Writer> = None;
-        let choose = |w: &Game, kw: &Knowledge| {
-            let legal = moves::legal(w, kw);
-            if legal.len() == 1 {
-                return legal[0].mv;
-            }
-            let wr = writer.get_or_insert_with(|| Writer::new(&self.net, w, kw, &dist));
-            let logits = wr.logits(w, kw, &legal);
-            let c = legal[pick(&logits, self.t, rng)];
-            wr.played(c.key);
-            c.mv
-        };
-        moves::decision(g, k, choose).expect("coup du décodeur").0
+        self.pending.act(&self.net, g, k, || crate::plan::write(&self.net, g, k, &distances(g.map), self.t, rng).0)
     }
 }
 
@@ -74,7 +105,7 @@ pub struct Plans {
     pub net: Arc<Net>,
     pub label: String,
     pub cfg: search::Config,
-    pending: Mutex<HashMap<u64, Vec<Move>>>,
+    pending: Pending,
     /// Le moteur GPU (`gpu=1` : encodeur et décodeur ; `gpu=enc` : l'encodeur seul, le décodeur sur
     /// le processeur), partagé par les fils de l'arène.
     #[cfg(feature = "vulkan")]
@@ -130,7 +161,7 @@ impl Plans {
             net: Arc::new(loaded),
             label,
             cfg,
-            pending: Mutex::default(),
+            pending: Pending::default(),
             #[cfg(feature = "vulkan")]
             gpu,
         })
@@ -143,40 +174,17 @@ impl Agent for Plans {
     }
 
     fn act(&self, g: &Game, k: &Knowledge, rng: &mut Rng) -> Vec<Action> {
-        let cached = self.pending.lock().expect("plans gardés").remove(&position_key(g, k));
-        if cached.is_some() {
-            RESUMED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-        let mut plan = cached
-            .unwrap_or_else(|| {
-                #[cfg(feature = "vulkan")]
-                match &self.gpu {
-                    Some((gpu, true)) => return search::search(gpu, &self.cfg, g, k, rng).plan,
-                    Some((gpu, false)) => {
-                        let engine = crate::vulkan::GpuEncoder(&gpu.0, &self.net);
-                        return search::search(&engine, &self.cfg, g, k, rng).plan;
-                    }
-                    None => {}
+        self.pending.act(&self.net, g, k, || {
+            #[cfg(feature = "vulkan")]
+            match &self.gpu {
+                Some((gpu, true)) => return search::search(gpu, &self.cfg, g, k, rng).plan,
+                Some((gpu, false)) => {
+                    let engine = crate::vulkan::GpuEncoder(&gpu.0, &self.net);
+                    return search::search(&engine, &self.cfg, g, k, rng).plan;
                 }
-                search::search(&search::Cpu(&self.net), &self.cfg, g, k, rng).plan
-            })
-            .into_iter();
-        let (actions, played) = moves::decision(g, k, |w, kw| {
-            plan.next().unwrap_or_else(|| {
-                // le plan est fini avant la décision du jeu : le plus probable du décodeur
-                SHORT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                crate::plan::write(&self.net, w, kw, &distances(w.map), 0.0, &mut Rng::new(0)).0[0]
-            })
-        })
-        .expect("coup de la recherche");
-        let rest: Vec<Move> = plan.collect();
-        if !rest.is_empty() {
-            let (mut w, mut kw) = (*g, *k);
-            for mv in &played {
-                kw.play(&mut w, mv).expect("coup joué");
+                None => {}
             }
-            self.pending.lock().expect("plans gardés").insert(position_key(&w, &kw), rest);
-        }
-        actions
+            search::search(&search::Cpu(&self.net), &self.cfg, g, k, rng).plan
+        })
     }
 }
