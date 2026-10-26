@@ -405,6 +405,37 @@ fn check_gpu_cmd(opts: &HashMap<String, String>) {
          attention croisée {kv:.4}, logits du premier pas {logits:.4} (logits jusqu'à {scale:.2})",
         positions.len()
     );
+    // le décodeur sur le GPU (places et caches), deux pas par position, face au processeur
+    use smallmobile_lab8::search::Engine;
+    let engine = smallmobile_lab8::vulkan::Gpu(std::sync::Arc::new(smallmobile_lab8::vulkan::Shared::new(gpu)));
+    let read = engine.read(positions.clone());
+    let key = (smallmobile_lab8::moves::GLOBAL_KEYS + 8 * 64) as u16;
+    let mut caches: Vec<smallmobile_lab8::vulkan::GpuCache> = positions.iter().map(|_| Default::default()).collect();
+    let mut steps_gpu = Vec::new();
+    for prev in [None, Some(key)] {
+        let mut items: Vec<_> = read.iter().zip(caches.iter_mut()).map(|((m, _, _), c)| (m, c, prev, dy)).collect();
+        steps_gpu.push(engine.steps(&mut items));
+    }
+    let (mut first, mut second, mut vals) = (0f32, 0f32, 0f32);
+    for (i, (e, dist)) in positions.iter().enumerate() {
+        let c = net.encode(e, dist);
+        for (a, b) in c.value.win.iter().zip(read[i].1.win.iter()) {
+            vals = vals.max((a - b).abs());
+        }
+        let mut cache = Cache::default();
+        let l1 = net.step(&c, &mut cache, None, &dy);
+        let l2 = net.step(&c, &mut cache, Some(key), &dy);
+        for (worst, (lc, lg)) in [(&mut first, (&l1, &steps_gpu[0][i])), (&mut second, (&l2, &steps_gpu[1][i]))] {
+            for (a, b) in lc.iter().zip(lg.iter()) {
+                if *a > -1e8 {
+                    *worst = worst.max((a - b).abs());
+                }
+            }
+        }
+    }
+    println!(
+        "décodeur sur le GPU : écarts maximaux des victoires {vals:.4}, logits du 1er pas {first:.4}, du 2e {second:.4}"
+    );
 }
 
 #[cfg(feature = "vulkan")]

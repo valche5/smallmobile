@@ -175,7 +175,7 @@ pub struct Value {
 }
 
 impl Value {
-    fn from_heads(players: usize, v: &[f32]) -> Value {
+    pub fn from_heads(players: usize, v: &[f32]) -> Value {
         let mut out = Value::default();
         let top = v[..players].iter().copied().fold(f32::MIN, f32::max);
         let mut sum = 0.0;

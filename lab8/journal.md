@@ -161,6 +161,20 @@ Ajouts de la nuit :
 
 Pas encore : le halving.
 
+### Le décodeur sur le GPU
+
+Lectures gardées dans la mémoire du GPU (6 144 places : sortie de l'encodeur des régions, `dec_reg`,
+clés et valeurs de l'attention croisée, en bf16 ; `store.comp`), caches des voies (3 072, clés et
+valeurs de l'attention causale, 128 pas au plus par plan), pas du décodeur en lots (`dec_in`,
+`dec_self`, `dec_cross`, `dec_out`, et `gemm`, `layernorm`) : seuls les 608 logits reviennent à
+l'hôte. La recherche est générique sur son moteur (`search::Engine`) : `Cpu`, `vulkan::Gpu` (tout sur le
+GPU, `gpu=1`), `vulkan::GpuEncoder` (l'encodeur sur le GPU, le décodeur sur le processeur,
+`gpu=enc`). `check-gpu` : logits du décodeur sur le GPU à 0,03 près de ceux du processeur (deux pas).
+
+Arène de contrôle (k = 16, m = 4, pendant la phase 1) : `gpu=1` 2 023 ms par décision, `gpu=enc`
+588 ms. Une recherche fait ~40 allers-retours successifs vers le GPU (lectures et pas de toutes ses
+voies), et chacun coûte ~16 ms tant que la phase 1 occupe le GPU : à remesurer GPU libre.
+
 ### L'encodeur sur GPU (`src/vulkan.rs`, `shaders/`), phase 3 commencée
 
 Le transformer ne tient pas dans la mémoire partagée d'un groupe (61 Ko d'activations par position) :

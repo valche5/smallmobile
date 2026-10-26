@@ -75,16 +75,10 @@ pub struct Plans {
     pub label: String,
     pub cfg: search::Config,
     pending: Mutex<HashMap<u64, Vec<Move>>>,
-    /// L'encodeur sur GPU (`gpu=1`), partagé par les fils de l'arène.
+    /// Le moteur GPU (`gpu=1` : encodeur et décodeur ; `gpu=enc` : l'encodeur seul, le décodeur sur
+    /// le processeur), partagé par les fils de l'arène.
     #[cfg(feature = "vulkan")]
-    gpu: Option<Arc<crate::vulkan::Shared>>,
-}
-
-#[cfg(feature = "vulkan")]
-impl search::Reader for crate::vulkan::Shared {
-    fn read(&self, items: Vec<(crate::encode::Encoded, Vec<u8>)>) -> Vec<crate::net::Memory> {
-        self.encode(items)
-    }
+    gpu: Option<(crate::vulkan::Gpu, bool)>,
 }
 
 /// Décisions du jeu où le plan choisi était fini trop tôt (jamais attendu : compté pour les tests), et
@@ -105,23 +99,30 @@ fn position_key(g: &Game, k: &Knowledge) -> u64 {
 impl Plans {
     pub fn named(name: &str) -> Option<Plans> {
         let opts = name.strip_prefix("plans:")?;
-        let (mut net, mut rest, mut gpu) = (None, Vec::new(), false);
+        let (mut net, mut rest, mut gpu, mut decoder) = (None, Vec::new(), false, true);
         for part in opts.split(',') {
             match part.split_once('=')? {
                 ("net", path) => net = Some(path.to_string()),
-                ("gpu", v) => gpu = v == "1",
+                ("gpu", "1") => gpu = true,
+                ("gpu", "enc") => (gpu, decoder) = (true, false),
+                ("gpu", _) => return None,
                 _ => rest.push(part),
             }
         }
         let cfg = search::Config::parse(&rest.join(","))?;
+        if gpu {
+            rest.push(if decoder { "gpu=1" } else { "gpu=enc" });
+        }
         let path = net?;
         let loaded = Net::load(Path::new(&path)).unwrap_or_else(|e| panic!("{path} : {e}"));
         #[cfg(feature = "vulkan")]
         let gpu = gpu.then(|| {
             let encoder = crate::vulkan::Encoder::new(Path::new(&path), 1024).unwrap_or_else(|e| panic!("GPU : {e}"));
             eprintln!("encodeur de lab8 : {}", encoder.describe());
-            Arc::new(crate::vulkan::Shared::new(encoder))
+            (crate::vulkan::Gpu(Arc::new(crate::vulkan::Shared::new(encoder))), decoder)
         });
+        #[cfg(not(feature = "vulkan"))]
+        let _ = decoder;
         #[cfg(not(feature = "vulkan"))]
         assert!(!gpu, "gpu=1 : compilé sans Vulkan");
         let label = format!("{path}{}{}", if rest.is_empty() { "" } else { ", " }, rest.join(","));
@@ -146,15 +147,20 @@ impl Agent for Plans {
         if cached.is_some() {
             RESUMED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-        #[cfg(feature = "vulkan")]
-        let reader: &dyn search::Reader = match &self.gpu {
-            Some(gpu) => gpu.as_ref(),
-            None => self.net.as_ref(),
-        };
-        #[cfg(not(feature = "vulkan"))]
-        let reader: &dyn search::Reader = self.net.as_ref();
-        let mut plan =
-            cached.unwrap_or_else(|| search::search(&self.net, reader, &self.cfg, g, k, rng).plan).into_iter();
+        let mut plan = cached
+            .unwrap_or_else(|| {
+                #[cfg(feature = "vulkan")]
+                match &self.gpu {
+                    Some((gpu, true)) => return search::search(gpu, &self.cfg, g, k, rng).plan,
+                    Some((gpu, false)) => {
+                        let engine = crate::vulkan::GpuEncoder(&gpu.0, &self.net);
+                        return search::search(&engine, &self.cfg, g, k, rng).plan;
+                    }
+                    None => {}
+                }
+                search::search(&search::Cpu(&self.net), &self.cfg, g, k, rng).plan
+            })
+            .into_iter();
         let (actions, played) = moves::decision(g, k, |w, kw| {
             plan.next().unwrap_or_else(|| {
                 // le plan est fini avant la décision du jeu : le plus probable du décodeur

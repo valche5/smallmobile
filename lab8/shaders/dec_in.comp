@@ -1,0 +1,36 @@
+#version 450
+// L'entrée d'un pas du décodeur pour chaque voie : coup précédent (départ, coup global, ou sorte +
+// `dec_reg` de la région), + nombre de coups déjà joués sur cette région ; et les entrées du pas mises
+// à l'échelle, complétées à 32, pour le produit par `dec_dyn` qui s'ajoute ensuite (`gemm`, résiduel).
+#include "common.glsl"
+#include "slots.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant) uniform Params {
+    uint x_off, dyn_off, d, start, glob, kind, count, dyn_scale, per16;
+} p;
+
+void main() {
+    uint lane = gl_WorkGroupID.x;
+    uint base = lane * LANE_WORDS;
+    uint slot = lanes[base + L_SLOT];
+    uint prev = lanes[base + L_PREV];
+    uint count = min(lanes[base + L_COUNT], 15u);
+    for (uint c = gl_LocalInvocationID.x; c < p.d; c += 256u) {
+        float v;
+        if (prev == 65535u) {
+            v = w[p.start + c];
+        } else if (prev < 32u) {
+            v = w[p.glob + prev * p.d + c];
+        } else {
+            uint k = (prev - 32u) / 64u, r = (prev - 32u) % 64u;
+            v = w[p.kind + k * p.d + c] + float(slot16[slot * p.per16 + R * p.d + r * p.d + c]);
+        }
+        act[p.x_off + lane * p.d + c] = v + w[p.count + count * p.d + c];
+    }
+    if (gl_LocalInvocationID.x < 32u) {
+        uint i = gl_LocalInvocationID.x;
+        act[p.dyn_off + lane * 32u + i] = i < 20u ? float(lanes[base + L_DYN + i]) * w[p.dyn_scale + i] : 0.0;
+    }
+}

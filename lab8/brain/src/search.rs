@@ -14,7 +14,8 @@
 //! 5. le candidat de meilleure valeur moyenne sur les mondes.
 //!
 //! Toutes les fins simulées avancent ensemble (`run`) : à chaque tour, les positions à lire sont lues
-//! d'un coup, puis les pas du décodeur sont faits d'un coup ; le moteur GPU les groupera en lots.
+//! d'un coup, puis les pas du décodeur sont faits d'un coup, par le moteur (`Engine` : le processeur,
+//! `Cpu`, ou un moteur GPU qui garde lectures et caches dans sa mémoire).
 
 use std::rc::Rc;
 
@@ -28,6 +29,7 @@ use crate::net::{Cache, Memory, Net, StepIn, Value};
 use crate::outcome::Outcome;
 use crate::plan::{Start, pick};
 use crate::rand::{Rng, mix};
+use crate::tokens::DYN;
 use crate::tokens::{distances, dynamics};
 
 /// Le temps des recherches (ns) : lectures des positions, pas du décodeur, le reste (règles, coups) ;
@@ -143,12 +145,12 @@ fn blend(win: &[f32; MAX_PLAYERS], finals: &[f32; MAX_PLAYERS], n: usize, w: f32
     v
 }
 
-/// La valeur lue par le réseau en `g` (joueurs réels).
-fn judged(cfg: &Config, g: &Game, mem: &Memory) -> [f32; MAX_PLAYERS] {
+/// La valeur lue par le réseau en `g` (joueurs réels), d'après ses deux têtes (finale, au prochain tour).
+fn judged(cfg: &Config, g: &Game, value: &Value, next: &Value) -> [f32; MAX_PLAYERS] {
     let s = &g.state;
     let n = s.player_count();
     let me = s.actor().expect("un joueur doit agir");
-    let v: &Value = if cfg.head == Head::Next { &mem.next } else { &mem.value };
+    let v: &Value = if cfg.head == Head::Next { next } else { value };
     let (mut win, mut finals) = ([0.0; MAX_PLAYERS], [0.0; MAX_PLAYERS]);
     for r in 0..n {
         let q = (me + r) % n;
@@ -177,12 +179,18 @@ enum Need {
     Done,
 }
 
+/// Un plan en cours d'écriture : son début, la lecture de sa position, le décodeur, le coup précédent.
+type OpenPlan<E> = (Start, Rc<<E as Engine>::Mem>, <E as Engine>::Cache, Option<Key>);
+
+/// Un pas à faire (`Engine::steps`) : la lecture, le cache, le coup précédent, les entrées du pas.
+pub type StepItem<'a, M, C> = (&'a M, &'a mut C, Option<Key>, [u8; DYN]);
+
 /// Une partie qui avance plan après plan : une fin simulée, ou l'écriture d'un candidat.
-struct Lane<'m> {
+struct Lane<'m, E: Engine> {
     w: Game<'m>,
     k: Knowledge,
     /// Le plan en cours : son début, la lecture de sa position, le décodeur.
-    plan: Option<(Start, Rc<Memory>, Cache, Option<Key>)>,
+    plan: Option<OpenPlan<E>>,
     /// Coups imposés à jouer d'abord (le candidat), puis le décodeur.
     forced: std::vec::IntoIter<Move>,
     /// Décisions imposées au décodeur (leurs clés) : il les lit sans les choisir (modifications
@@ -244,7 +252,7 @@ fn outcomes(g: &Game, k: &Knowledge, plan: &[Move]) -> Vec<(DieOutcome, f32)> {
     }
 }
 
-impl<'m> Lane<'m> {
+impl<'m, E: Engine> Lane<'m, E> {
     /// Joue les coups imposés et forcés jusqu'à ce qu'il faille lire ou décider.
     fn advance(&mut self, cfg: &Config) -> Need {
         loop {
@@ -314,26 +322,52 @@ impl<'m> Lane<'m> {
     }
 }
 
-/// Qui lit les positions (l'encodeur) : le processeur (`Net`), ou un moteur GPU qui lit tout un lot
-/// d'un coup. Le décodeur reste sur le processeur (`Net::step`).
-pub trait Reader: Sync {
-    fn read(&self, items: Vec<(Encoded, Vec<u8>)>) -> Vec<Memory>;
+/// Le réseau qui lit et décode pour la recherche : le processeur (`Cpu`), ou un moteur GPU.
+pub trait Engine: Sync {
+    /// Une lecture de position (sortie de l'encodeur), et ce que le décodeur garde d'un pas au suivant.
+    type Mem;
+    type Cache: Default;
+    /// Les lectures des positions (encodage, distances de la carte), d'un coup, avec leurs deux
+    /// valeurs (finale, au prochain tour du joueur qui agit).
+    fn read(&self, items: Vec<(Encoded, Vec<u8>)>) -> Vec<(Self::Mem, Value, Value)>;
+    /// Un pas du décodeur pour chaque voie (lecture, cache, coup précédent, entrées du pas), d'un coup :
+    /// les logits des `KEYS` coups.
+    fn steps(&self, items: &mut [StepItem<'_, Self::Mem, Self::Cache>]) -> Vec<Vec<f32>>;
 }
 
-impl Reader for Net {
-    fn read(&self, items: Vec<(Encoded, Vec<u8>)>) -> Vec<Memory> {
-        items.iter().map(|(e, d)| self.encode(e, d)).collect()
+/// Le réseau sur le processeur.
+pub struct Cpu<'a>(pub &'a Net);
+
+impl Engine for Cpu<'_> {
+    type Mem = Memory;
+    type Cache = Cache;
+
+    fn read(&self, items: Vec<(Encoded, Vec<u8>)>) -> Vec<(Memory, Value, Value)> {
+        items
+            .iter()
+            .map(|(e, d)| {
+                let m = self.0.encode(e, d);
+                let (v, n) = (m.value, m.next);
+                (m, v, n)
+            })
+            .collect()
+    }
+
+    fn steps(&self, items: &mut [StepItem<'_, Memory, Cache>]) -> Vec<Vec<f32>> {
+        let mut batch: Vec<StepIn> =
+            items.iter_mut().map(|(mem, cache, prev, dy)| StepIn { mem, cache, prev: *prev, dy: *dy }).collect();
+        self.0.step_batch(&mut batch)
     }
 }
 
 /// Les lectures des positions `games`, d'un coup.
-fn read_all(reader: &dyn Reader, games: &[(&Game, &Knowledge)], dist: &[u8]) -> Vec<Memory> {
-    reader.read(games.iter().map(|(g, k)| (encode(g, k), dist.to_vec())).collect())
+fn read_all<E: Engine>(engine: &E, games: &[(&Game, &Knowledge)], dist: &[u8]) -> Vec<(E::Mem, Value, Value)> {
+    engine.read(games.iter().map(|(g, k)| (encode(g, k), dist.to_vec())).collect())
 }
 
 /// Fait avancer toutes les voies jusqu'au bout. Les candidats (`horizon` absent) s'arrêtent à la fin
 /// de leur premier plan ; les fins simulées, à leur horizon. `count` : lectures et pas demandés.
-fn run(net: &Net, reader: &dyn Reader, cfg: &Config, lanes: &mut [Lane], dist: &[u8], count: &mut (usize, usize)) {
+fn run<E: Engine>(engine: &E, cfg: &Config, lanes: &mut [Lane<E>], dist: &[u8], count: &mut (usize, usize)) {
     loop {
         let t0 = std::time::Instant::now();
         let needs: Vec<Need> = lanes.iter_mut().map(|l| l.advance(cfg)).collect();
@@ -344,36 +378,36 @@ fn run(net: &Net, reader: &dyn Reader, cfg: &Config, lanes: &mut [Lane], dist: &
         // les lectures
         let reading: Vec<usize> = (0..lanes.len()).filter(|&i| matches!(needs[i], Need::Encode)).collect();
         let t0 = std::time::Instant::now();
-        let read = read_all(reader, &reading.iter().map(|&i| (&lanes[i].w, &lanes[i].k)).collect::<Vec<_>>(), dist);
+        let read = read_all(engine, &reading.iter().map(|&i| (&lanes[i].w, &lanes[i].k)).collect::<Vec<_>>(), dist);
         spent(T_READ, t0);
         TIMES[N_READS].fetch_add(read.len() as u64, std::sync::atomic::Ordering::Relaxed);
         count.0 += read.len();
-        for (&i, mem) in reading.iter().zip(read) {
+        for (&i, (mem, v, n)) in reading.iter().zip(read) {
             let lane = &mut lanes[i];
-            let value = judged(cfg, &lane.w, &mem);
+            let value = judged(cfg, &lane.w, &v, &n);
             if lane.first.is_none() {
                 lane.first = Some(value);
             }
             if lane.horizon.is_some_and(|h| turn_index(&lane.w) >= h || lane.decisions >= MAX_DECISIONS) {
                 lane.end = Some(value);
             } else {
-                lane.plan = Some((Start::of(&lane.w), Rc::new(mem), Cache::default(), None));
+                lane.plan = Some((Start::of(&lane.w), Rc::new(mem), E::Cache::default(), None));
             }
         }
         // les pas du décodeur, tous ensemble
         let stepping: Vec<usize> = (0..lanes.len()).filter(|&i| matches!(needs[i], Need::Step(_))).collect();
         let t0 = std::time::Instant::now();
         let logits = {
-            let mut items: Vec<StepIn> = Vec::with_capacity(stepping.len());
+            let mut items = Vec::with_capacity(stepping.len());
             for (i, lane) in lanes.iter_mut().enumerate() {
                 if !matches!(needs[i], Need::Step(_)) {
                     continue;
                 }
                 let dy = dynamics(&lane.w, &lane.k);
                 let (_, mem, cache, prev) = lane.plan.as_mut().expect("plan en cours");
-                items.push(StepIn { mem, cache, prev: *prev, dy });
+                items.push((&**mem, cache, *prev, dy));
             }
-            net.step_batch(&mut items)
+            engine.steps(&mut items)
         };
         spent(T_STEP, t0);
         TIMES[N_STEPS].fetch_add(logits.len() as u64, std::sync::atomic::Ordering::Relaxed);
@@ -396,7 +430,7 @@ fn run(net: &Net, reader: &dyn Reader, cfg: &Config, lanes: &mut [Lane], dist: &
 }
 
 /// Une voie neuve depuis `g` (ou un monde de `g`).
-fn lane<'m>(w: &Game<'m>, k: &Knowledge) -> Lane<'m> {
+fn lane<'m, E: Engine>(w: &Game<'m>, k: &Knowledge) -> Lane<'m, E> {
     Lane {
         w: *w,
         k: *k,
@@ -419,31 +453,30 @@ fn lane<'m>(w: &Game<'m>, k: &Knowledge) -> Lane<'m> {
 /// Écrit des plans depuis `g` avec le décodeur, d'une seule lecture de la racine (`root`) : un par
 /// (préfixe de décisions imposées, température).
 #[allow(clippy::too_many_arguments)]
-fn write_plans(
-    net: &Net,
-    reader: &dyn Reader,
+fn write_plans<E: Engine>(
+    engine: &E,
     cfg: &Config,
     g: &Game,
     k: &Knowledge,
-    root: &Rc<Memory>,
+    root: &Rc<E::Mem>,
     tries: Vec<(Vec<Key>, f32)>,
     rng: &mut Rng,
     dist: &[u8],
     count: &mut (usize, usize),
 ) -> Vec<Vec<Move>> {
-    let mut lanes: Vec<Lane> = tries
+    let mut lanes: Vec<Lane<E>> = tries
         .into_iter()
         .enumerate()
         .map(|(i, (prefix, t))| {
-            let mut l = lane(g, k);
+            let mut l = lane::<E>(g, k);
             l.prefix = prefix.into_iter();
             l.t = t;
             l.rng = Rng::new(mix(rng.next_u64(), i as u64));
-            l.plan = Some((Start::of(g), root.clone(), Cache::default(), None));
+            l.plan = Some((Start::of(g), root.clone(), E::Cache::default(), None));
             l
         })
         .collect();
-    run(net, reader, cfg, &mut lanes, dist, count);
+    run(engine, cfg, &mut lanes, dist, count);
     lanes.into_iter().map(|l| l.played).collect()
 }
 
@@ -464,9 +497,8 @@ fn decisions(g: &Game, k: &Knowledge, plan: &[Move]) -> Vec<Key> {
 /// La valeur moyenne de chaque candidat pour le joueur `me`, dans les mondes `worlds`, chaque
 /// candidat fini par un dé joué à chacune de ses issues.
 #[allow(clippy::too_many_arguments)]
-fn evaluate(
-    net: &Net,
-    reader: &dyn Reader,
+fn evaluate<E: Engine>(
+    engine: &E,
     cfg: &Config,
     g: &Game,
     k: &Knowledge,
@@ -477,14 +509,14 @@ fn evaluate(
 ) -> Vec<f32> {
     let me = g.state.actor().expect("un joueur doit agir");
     let h = horizon(g);
-    let mut lanes: Vec<Lane> = Vec::new();
+    let mut lanes: Vec<Lane<E>> = Vec::new();
     for w in worlds {
         for (c, plan) in candidates.iter().enumerate() {
             let dice = outcomes(g, k, plan);
             let branches: Vec<(Option<DieOutcome>, f32)> =
                 if dice.is_empty() { vec![(None, 1.0)] } else { dice.iter().map(|&(o, p)| (Some(o), p)).collect() };
             for (die, weight) in branches {
-                let mut l = lane(w, k);
+                let mut l = lane::<E>(w, k);
                 l.forced = plan.clone().into_iter();
                 l.horizon = Some(h);
                 l.die = die;
@@ -494,7 +526,7 @@ fn evaluate(
             }
         }
     }
-    run(net, reader, cfg, &mut lanes, dist, count);
+    run(engine, cfg, &mut lanes, dist, count);
     let mut scores = vec![0.0f32; candidates.len()];
     for l in &lanes {
         let end = l.end.expect("fin simulée finie");
@@ -504,25 +536,24 @@ fn evaluate(
     scores
 }
 
-/// Une recherche depuis `g`, où le joueur qui agit a une décision. `reader` lit les positions (`net`
-/// lui-même, ou un moteur GPU) ; `net` décode.
-pub fn search(net: &Net, reader: &dyn Reader, cfg: &Config, g: &Game, k: &Knowledge, rng: &mut Rng) -> Searched {
+/// Une recherche depuis `g`, où le joueur qui agit a une décision, avec le moteur `engine`.
+pub fn search<E: Engine>(engine: &E, cfg: &Config, g: &Game, k: &Knowledge, rng: &mut Rng) -> Searched {
     let dist = distances(g.map);
     let mut count = (0, 0);
     // une seule lecture de la racine pour tous les candidats
-    let root = Rc::new(read_all(reader, &[(g, k)], &dist).pop().expect("lecture"));
+    let root = Rc::new(read_all(engine, &[(g, k)], &dist).pop().expect("lecture").0);
     count.0 += 1;
     // 1. les candidats : le plus probable, puis des tirages, sans doublon
     let tries = (0..3 * cfg.candidates).map(|i| (Vec::new(), if i == 0 { 0.0 } else { cfg.temperature })).collect();
     let mut candidates: Vec<Vec<Move>> = Vec::new();
-    for plan in write_plans(net, reader, cfg, g, k, &root, tries, rng, &dist, &mut count) {
+    for plan in write_plans(engine, cfg, g, k, &root, tries, rng, &dist, &mut count) {
         if candidates.len() < cfg.candidates && !candidates.contains(&plan) {
             candidates.push(plan);
         }
     }
     // 2-4. chaque candidat dans chaque monde, avec sa fin simulée
     let worlds: Vec<Game> = (0..cfg.worlds).map(|_| determinize(g, k, rng)).collect();
-    let mut scores = evaluate(net, reader, cfg, g, k, &worlds, &candidates, &dist, &mut count);
+    let mut scores = evaluate(engine, cfg, g, k, &worlds, &candidates, &dist, &mut count);
     // modifications locales du meilleur, évaluées dans les mêmes mondes
     if cfg.mods > 0 {
         let best = (0..candidates.len())
@@ -532,12 +563,12 @@ pub fn search(net: &Net, reader: &dyn Reader, cfg: &Config, g: &Game, k: &Knowle
         let tries: Vec<(Vec<Key>, f32)> =
             (0..3 * cfg.mods).map(|_| (keys[..rng.below(keys.len())].to_vec(), cfg.temperature)).collect();
         let mut fresh = Vec::new();
-        for plan in write_plans(net, reader, cfg, g, k, &root, tries, rng, &dist, &mut count) {
+        for plan in write_plans(engine, cfg, g, k, &root, tries, rng, &dist, &mut count) {
             if fresh.len() < cfg.mods && !candidates.contains(&plan) && !fresh.contains(&plan) {
                 fresh.push(plan);
             }
         }
-        scores.extend(evaluate(net, reader, cfg, g, k, &worlds, &fresh, &dist, &mut count));
+        scores.extend(evaluate(engine, cfg, g, k, &worlds, &fresh, &dist, &mut count));
         candidates.extend(fresh);
     }
     let n = candidates.len();

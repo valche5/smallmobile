@@ -1,0 +1,39 @@
+#version 450
+// L'attention du décodeur aux jetons de l'encodeur : un groupe par (voie, tête), sur les clés et
+// valeurs de la place de la voie (couche `layer`), jetons présents seulement.
+#include "common.glsl"
+#include "slots.glsl"
+
+layout(local_size_x = 32) in;
+
+layout(push_constant) uniform Params {
+    uint q_off, out_off, d, heads, layer, per16;
+} p;
+
+const uint DH = 32u;
+shared float sc[TOKENS];
+
+void main() {
+    uint lane = gl_WorkGroupID.x, head = gl_WorkGroupID.y;
+    uint c = gl_LocalInvocationID.x;
+    uint slot = lanes[lane * LANE_WORDS + L_SLOT];
+    uint kb = slot * p.per16 + 2u * R * p.d + (2u * p.layer) * TOKENS * p.d;
+    uint vb = kb + TOKENS * p.d;
+    float q = act[p.q_off + lane * p.d + head * DH + c];
+    float scale = inversesqrt(float(DH));
+    for (uint j = 0u; j < TOKENS; j++) {
+        float s = subgroupAdd(q * float(slot16[kb + j * p.d + head * DH + c]));
+        if (c == 0u) sc[j] = slot_info[slot * INFO + 1u + j] != 0u ? s * scale : -1e30;
+    }
+    barrier();
+    float top = -1e30;
+    for (uint j = 0u; j < TOKENS; j++) top = max(top, sc[j]);
+    float sum = 0.0, out_ = 0.0;
+    for (uint j = 0u; j < TOKENS; j++) {
+        if (sc[j] <= -1e29) continue;
+        float e = exp(sc[j] - top);
+        sum += e;
+        out_ += e * float(slot16[vb + j * p.d + head * DH + c]);
+    }
+    act[p.out_off + lane * p.d + head * DH + c] = out_ / sum;
+}
