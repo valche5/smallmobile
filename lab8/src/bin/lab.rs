@@ -4,11 +4,14 @@
 //!     [--seed S] [--threads N] [--device vulkan] [--raw true]   (parties d'imitation découpées en plans,
 //!     `record` ; `--raw` : aussi les entrées pleines, pour vérifier la forme compacte)
 //! lab8 arena --hero A --field B [--players 2,3,4,5] [--deals N] [--seed S] [--out F] [--device vulkan]
-//!     (l'arène de lab7 ; joueurs de lab7, et `plan:net=…[,t=…]` : le décodeur de lab8 sans recherche)
+//!     (l'arène de lab7 ; joueurs de lab7, `plan:net=…[,t=…]` : le décodeur de lab8 sans recherche,
+//!     `plans:net=…[,k=16,m=4,…]` : la recherche sur des plans, `search::Config`)
 //! lab8 fixture --out DIR [--games N] [--seed S] [--every K]   (un plan sur K de parties au hasard, pour
 //!     comparer le réseau Rust à PyTorch : `lab8/py/check.py`)
 //! lab8 check-net --net poids.bin --fixture DIR   (le réseau Rust face aux sorties de PyTorch)
 //! lab8 speed --net poids.bin [--positions N] [--seed S]   (encodeur et pas du décodeur, un cœur)
+//! lab8 check-gpu --net poids.bin [--positions N]   (l'encodeur sur GPU face au processeur)
+//! lab8 bench-gpu --net poids.bin [--seconds S]   (débit de l'encodeur sur GPU selon la taille des lots)
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -19,7 +22,7 @@ use smallmobile_lab7::agent::{self, Agent};
 use smallmobile_lab7::arena::{self, Config, Lineup};
 use smallmobile_lab7::gpu::{Device, Gpu};
 use smallmobile_lab7::table::Table;
-use smallmobile_lab8::agent::Plan;
+use smallmobile_lab8::agent::{Plan, Plans};
 use smallmobile_lab8::encode::{GLOBAL, NODE, REGIONS, encode};
 use smallmobile_lab8::know::Knowledge;
 use smallmobile_lab8::moves;
@@ -39,6 +42,10 @@ fn main() {
         "fixture" => fixture_cmd(&opts),
         "check-net" => check_net_cmd(&opts),
         "speed" => speed_cmd(&opts),
+        #[cfg(feature = "vulkan")]
+        "check-gpu" => check_gpu_cmd(&opts),
+        #[cfg(feature = "vulkan")]
+        "bench-gpu" => bench_gpu_cmd(&opts),
         _ => usage(),
     }
 }
@@ -84,6 +91,9 @@ fn device(opts: &HashMap<String, String>) -> Option<Device> {
 fn agent_named(name: &str) -> Box<dyn Agent> {
     if name.starts_with("plan:") {
         return Box::new(Plan::named(name).unwrap_or_else(|| usage()));
+    }
+    if name.starts_with("plans:") {
+        return Box::new(Plans::named(name).unwrap_or_else(|| usage()));
     }
     agent::by_name(name).unwrap_or_else(|| {
         eprintln!("joueur inconnu : {name}");
@@ -300,4 +310,118 @@ fn speed_cmd(opts: &HashMap<String, String>) {
         1e3 * encodes / n_enc as f64,
         1e3 * steps / n_steps as f64
     );
+}
+
+/// Des positions de parties au hasard (où le joueur qui agit décide), avec les distances de leur carte.
+fn random_positions(count: usize, seed: u64) -> Vec<(smallmobile_lab8::encode::Encoded, Vec<u8>)> {
+    let mut rng = Rng::new(seed);
+    let mut out = Vec::new();
+    let mut i = 0;
+    while out.len() < count {
+        let n = 2 + i % 4;
+        let table = Table::new(n, mix(seed, i as u64) % 1_000_000_007);
+        let dist = distances(&table.map);
+        let mut g = table.game(i as u32);
+        let mut k = Knowledge::default();
+        while g.state.phase != Phase::GameOver && out.len() < count {
+            let legal = moves::legal(&g, &k);
+            if legal.len() > 1 && rng.below(6) == 0 {
+                out.push((encode(&g, &k), dist.clone()));
+            }
+            let c = legal[rng.below(legal.len())];
+            k.play(&mut g, &c.mv).expect("coup possible");
+        }
+        i += 1;
+    }
+    out
+}
+
+#[cfg(feature = "vulkan")]
+fn check_gpu_cmd(opts: &HashMap<String, String>) {
+    use smallmobile_lab8::net::Cache;
+    let path = PathBuf::from(opts.get("net").unwrap_or_else(|| usage()));
+    let net = Net::load(&path).expect("poids");
+    let gpu = smallmobile_lab8::vulkan::Encoder::new(&path, 256).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1)
+    });
+    eprintln!("{}", gpu.describe());
+    let positions = random_positions(get(opts, "positions", 200), 3);
+    let items: Vec<(&smallmobile_lab8::encode::Encoded, &[u8])> = positions.iter().map(|(e, d)| (e, &d[..])).collect();
+    let got = gpu.encode(&items).expect("GPU");
+    let (mut heads, mut x, mut reg, mut kv, mut logits, mut scale) = (0f32, 0f32, 0f32, 0f32, 0f32, 0f32);
+    let d = net.d;
+    let dy = [0u8; smallmobile_lab8::tokens::DYN];
+    for ((e, dist), g) in positions.iter().zip(&got) {
+        let c = net.encode(e, dist);
+        for (a, b) in c.heads.iter().zip(&g.heads) {
+            heads = heads.max((a - b).abs());
+        }
+        for r in 0..e.regions {
+            let (cx, cr) = c.region(r, d);
+            let (gx, gr) = g.region(r, d);
+            x = x.max(cx.iter().zip(gx).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max));
+            reg = reg.max(cr.iter().zip(gr).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max));
+        }
+        for l in 0..2 {
+            let (ck, cv) = c.cross(l);
+            let (gk, gv) = g.cross(l);
+            let valid = smallmobile_lab8::tokens::valid(e);
+            for t in (0..TOKENS_).filter(|&t| valid[t]) {
+                for (a, b) in
+                    ck[t * d..][..d].iter().zip(&gk[t * d..][..d]).chain(cv[t * d..][..d].iter().zip(&gv[t * d..][..d]))
+                {
+                    kv = kv.max((a - b).abs());
+                }
+            }
+        }
+        let (mut c1, mut c2) = (Cache::default(), Cache::default());
+        let lc = net.step(&c, &mut c1, None, &dy);
+        let lg = net.step(g, &mut c2, None, &dy);
+        for (a, b) in lc.iter().zip(&lg) {
+            if *a > -1e8 {
+                logits = logits.max((a - b).abs());
+                scale = scale.max(a.abs());
+            }
+        }
+    }
+    println!(
+        "{} positions : écarts maximaux têtes {heads:.4}, sorties des régions {x:.4}, dec_reg {reg:.4}, \
+         attention croisée {kv:.4}, logits du premier pas {logits:.4} (logits jusqu'à {scale:.2})",
+        positions.len()
+    );
+}
+
+#[cfg(feature = "vulkan")]
+const TOKENS_: usize = smallmobile_lab8::tokens::TOKENS;
+
+#[cfg(feature = "vulkan")]
+fn bench_gpu_cmd(opts: &HashMap<String, String>) {
+    let path = PathBuf::from(opts.get("net").unwrap_or_else(|| usage()));
+    let seconds: f64 = get(opts, "seconds", 3.0);
+    let gpu = smallmobile_lab8::vulkan::Encoder::new(&path, 1024).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1)
+    });
+    eprintln!("{}", gpu.describe());
+    let positions = random_positions(1024, 5);
+    for count in [16usize, 64, 256, 1024] {
+        let items: Vec<(&smallmobile_lab8::encode::Encoded, &[u8])> =
+            positions[..count].iter().map(|(e, d)| (e, &d[..])).collect();
+        gpu.encode(&items).expect("GPU");
+        let start = Instant::now();
+        let mut done = 0;
+        while start.elapsed().as_secs_f64() < seconds {
+            done += gpu.encode(&items).expect("GPU").len();
+        }
+        let secs = start.elapsed().as_secs_f64();
+        println!(
+            "lots de {count:5} : {:8.0} positions/s ({:.2} ms par lot)",
+            done as f64 / secs,
+            1e3 * secs * count as f64 / done as f64
+        );
+    }
+    if let Some(p) = gpu.profile() {
+        println!("kernels : {p}");
+    }
 }

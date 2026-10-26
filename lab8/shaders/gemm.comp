@@ -1,0 +1,108 @@
+#version 450
+// C = act(A · Wᵀ + b) (+ C si résiduel), A en f32 arrondie en bf16, W en bf16 rangée en tuiles 16 × 16
+// (`vulkan.rs`, `Weights::lin`), sommes en f32 sur les matrices coopératives. Un groupe (8 sous-groupes)
+// : 128 lignes × 128 colonnes, K par pas de 32, A et W passent par la mémoire partagée ; chaque
+// sous-groupe : 32 lignes × 64 colonnes (2 × 4 tuiles). Les lignes de A et de C peuvent sauter : la
+// ligne m est (m / group) × gstride + m % group (les régions d'une position, par exemple).
+#extension GL_KHR_cooperative_matrix : require
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant) uniform Params {
+    uint rows, n, k;
+    uint a_off, a_stride, a_group, a_gstride;
+    uint c_off, c_stride, c_group, c_gstride;
+    uint w_off, bias_off;
+    // 0 rien, 1 gelu, 2 relu ; + 4 : ajouté à C (résiduel)
+    uint mode;
+} p;
+
+#define ACC coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>
+#define MATA coopmat<bfloat16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA>
+#define MATB coopmat<bfloat16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB>
+#define ROW gl_CooperativeMatrixLayoutRowMajor
+#define COL gl_CooperativeMatrixLayoutColumnMajor
+
+const uint BM = 128u, BN = 128u, BK = 32u;
+const uint S = BK + 8u; // pas des lignes (A) et des colonnes (W) dans la mémoire partagée
+shared bfloat16_t as_[BM * S];
+shared bfloat16_t bs_[BN * S];
+shared float cs[8u * 256u];
+
+uint arow(uint m) { return (m / p.a_group) * p.a_gstride + m % p.a_group; }
+uint crow(uint m) { return (m / p.c_group) * p.c_gstride + m % p.c_group; }
+
+void main() {
+    uint t = gl_LocalInvocationID.x;
+    uint sg = gl_SubgroupID;
+    uint lane = gl_SubgroupInvocationID;
+    uint m0 = gl_WorkGroupID.x * BM;
+    uint n0 = gl_WorkGroupID.y * BN;
+    uint kt_count = p.k / 16u;
+    uint ntiles = p.n / 16u;
+    uint sr = sg / 2u, sc = sg % 2u;
+    ACC acc[2][4];
+    for (uint i = 0u; i < 2u; i++)
+        for (uint j = 0u; j < 4u; j++) acc[i][j] = ACC(0.0);
+    // ce que charge chaque fil : 16 nombres d'une ligne de A, une colonne d'une tuile de W
+    uint ar = t / 2u, ac = (t % 2u) * 16u;
+    uint m = m0 + ar;
+    bool a_ok = m < p.rows;
+    uint a_base = p.a_off + (a_ok ? arow(m) : 0u) * p.a_stride;
+    uint ti = t / 16u, nn = t % 16u;
+    uint ct = ti / 2u, kh = ti % 2u;
+    bool b_col = n0 / 16u + ct < ntiles;
+    for (uint k0 = 0u; k0 < p.k; k0 += BK) {
+        bool k_ok = k0 / 16u + kh < kt_count;
+        for (uint e = 0u; e < 16u; e++) {
+            uint kk = k0 + ac + e;
+            float v = (a_ok && kk < p.k) ? act[a_base + kk] : 0.0;
+            as_[ar * S + ac + e] = bfloat16_t(v);
+        }
+        uint src = p.w_off + ((n0 / 16u + ct) * kt_count + k0 / 16u + kh) * 256u + nn * 16u;
+        for (uint e = 0u; e < 16u; e++) {
+            bs_[(ct * 16u + nn) * S + kh * 16u + e] = (b_col && k_ok) ? wb[src + e] : bfloat16_t(0.0);
+        }
+        barrier();
+        for (uint kk = 0u; kk < BK; kk += 16u) {
+            MATA a[2];
+            for (uint i = 0u; i < 2u; i++) coopMatLoad(a[i], as_, (sr * 32u + i * 16u) * S + kk, S, ROW);
+            for (uint j = 0u; j < 4u; j++) {
+                MATB b;
+                coopMatLoad(b, bs_, (sc * 64u + j * 16u) * S + kk, S, COL);
+                for (uint i = 0u; i < 2u; i++) acc[i][j] = coopMatMulAdd(a[i], b, acc[i][j]);
+            }
+        }
+        barrier();
+    }
+    uint act_mode = p.mode & 3u;
+    bool residual = (p.mode & 4u) != 0u;
+    for (uint i = 0u; i < 2u; i++) {
+        for (uint j = 0u; j < 4u; j++) {
+            uint col0 = n0 + sc * 64u + j * 16u;
+            if (col0 / 16u >= ntiles) continue;
+            coopMatStore(acc[i][j], cs, sg * 256u, 16u, ROW);
+            subgroupMemoryBarrierShared();
+            subgroupBarrier();
+            for (uint e = 0u; e < 8u; e++) {
+                uint idx = lane + 32u * e;
+                uint r = idx / 16u, c = idx % 16u;
+                uint mm = m0 + sr * 32u + i * 16u + r;
+                if (mm < p.rows) {
+                    uint col = col0 + c;
+                    float v = cs[sg * 256u + idx] + w[p.bias_off + col];
+                    if (act_mode == 1u) {
+                        v = 0.5 * v * (1.0 + tanh(0.7978846 * (v + 0.044715 * v * v * v)));
+                    } else if (act_mode == 2u) {
+                        v = max(v, 0.0);
+                    }
+                    uint at = p.c_off + crow(mm) * p.c_stride + col;
+                    if (residual) act[at] += v; else act[at] = v;
+                }
+            }
+            subgroupMemoryBarrierShared();
+            subgroupBarrier();
+        }
+    }
+}

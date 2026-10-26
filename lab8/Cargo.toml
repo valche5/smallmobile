@@ -10,9 +10,10 @@ name = "lab8"
 path = "src/bin/lab.rs"
 
 [features]
-# Vulkan pour c130 (parties d'imitation, adversaire des arènes) ; --no-default-features : processeur seul.
+# Vulkan : c130 (parties d'imitation, adversaire des arènes) et l'encodeur de lab8 (`src/vulkan.rs`,
+# shaders compilés par glslc, build.rs) ; --no-default-features : processeur seul.
 default = ["vulkan"]
-vulkan = ["smallmobile-lab7/vulkan"]
+vulkan = ["smallmobile-lab7/vulkan", "dep:ash"]
 
 [dependencies]
 smallmobile-kernel = { path = "../kernel" }
@@ -20,3 +21,4 @@ smallmobile-brain8 = { path = "brain" }
 smallmobile-brain7 = { path = "../lab7/brain" }
 # c130 et son moteur GPU, l'arène, les joueurs : ceux de lab7 (figé), tels quels
 smallmobile-lab7 = { path = "../lab7", default-features = false }
+ash = { version = "0.38", optional = true }

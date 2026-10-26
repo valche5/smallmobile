@@ -118,5 +118,53 @@ demanderait de copier et réécrire la recherche de c130 dans lab8, pour une gé
 fois (≈ 2 h). Non fait : l'effort d'optimisation va au moteur du transformer et à la recherche sur
 plans, qui servent à chaque coup. 16 parties par fil reste le réglage par défaut.
 
+## Nuit du 26 au 27 octobre (en autonomie)
+
+Phase 1 lancée à 22 h 50 : `lab8 record --games 100000 --out lab8/data/c130 --seed 81000000
+--device vulkan` (journal `lab8/data/c130.log`), 16,5 parties par seconde.
+
+### L'apprentissage long (`train.py`)
+
+Moyenne glissante des poids (EMA 0,9996 tous les 4 lots, mesurée et écrite à chaque validation),
+reprise après interruption (`--state`), chaque validation écrite à part (`x-012000.bin`) pour choisir
+la meilleure après coup, validation détaillée par phase et par nombre de joueurs, avec à côté c130
+seul (`c130_pol`, `c130_acc`, `c130_val`), sur 50 000 plans mis de côté.
+
+### La recherche sur des plans, version 1 (`brain/src/search.rs`)
+
+Comme prévu par `lab.md` : candidats tirés du décodeur depuis une seule lecture de la racine (le plus
+probable, puis des tirages à la température `t`, sans doublon), `m` mondes communs à tous les
+candidats, fin simulée par plans (le plan le plus probable de chaque joueur jusqu'au prochain tour du
+joueur de la racine), valeur mêlée à la première lecture après le candidat (`mix`), meilleure moyenne.
+Toutes les voies avancent ensemble : à chaque tour, leurs lectures partent d'un coup au lecteur
+(`search::Reader` : le processeur, ou le GPU). Le joueur des arènes (`plans:net=…,k=…,m=…[,gpu=1]`)
+garde la suite du plan choisi entre deux décisions du jeu. Test : des parties entières de 2 à 5 joueurs
+sans plan trop court, suites reprises.
+
+Pas encore : le dé de renfort à ses deux issues pondérées (pour l'instant tiré dans chaque monde),
+les modifications locales de candidats, le halving.
+
+### L'encodeur sur GPU (`src/vulkan.rs`, `shaders/`), phase 3 commencée
+
+Le transformer ne tient pas dans la mémoire partagée d'un groupe (61 Ko d'activations par position) :
+des kernels successifs sur des lots de positions, `gemm` (bf16 sur les matrices coopératives,
+128 × 128 par groupe, A et W par la mémoire partagée, biais, gelu ou relu et résiduel au passage),
+`embed`, `fixup`, `layernorm`, `attention` (relations calculées sur place), `pool`, `pack`. Le décodeur
+reste sur le processeur : le GPU rend, par position, la sortie de l'encodeur des régions, `dec_reg` et
+les clés et valeurs de l'attention croisée (172 ko en bf16) et les 20 têtes. Les fils de l'arène
+partagent un seul lot (`vulkan::Shared`).
+
+- `lab8 check-gpu`, réseau 256 × 6 initialisé comme PyTorch (sorties au hasard, σ 0,05) : écarts
+  maximaux sur 200 positions : têtes 0,008, sorties des régions 0,031, logits du premier pas 0,023
+  (logits jusqu'à 2,7) : l'arrondi bf16. Avec un réseau aux poids démesurés (σ 0,2 partout) les écarts
+  montent (logits 0,74 pour 12) : activations énormes, même arrondi relatif.
+- Débit mesuré pendant la phase 1, qui occupe le GPU : ~4 200 positions/s quelle que soit la taille
+  des lots ; `LAB8_GPU_PROFILE=1` : `gemm` 73 %, `pack` 15 %, `attention` 8 %. Le premier `gemm`
+  (64 × 64, W lue en mémoire globale à chaque pas de 16) prenait 1,7 fois plus. À remesurer GPU
+  libre.
+- Arène de contrôle (réseau au hasard) : `plans:…,gpu=1,k=8,m=2` contre `plan:` (le décodeur seul),
+  3 joueurs, 6 donnes : 18 victoires sur 18 (la fin simulée joue les vraies règles), 284 ms par
+  décision.
+
 Reste, pour les phases suivantes : la recherche sur plans et la recherche coup par coup du nouveau
 réseau (phases 4 et 5), le moteur GPU du transformer (phase 3).

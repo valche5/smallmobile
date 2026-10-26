@@ -6,7 +6,7 @@ use std::path::Path;
 use smallmobile_lab7::agent::{self, Agent};
 use smallmobile_lab7::arena::play_game;
 use smallmobile_lab7::table::Table;
-use smallmobile_lab8::agent::Plan;
+use smallmobile_lab8::agent::{Plan, Plans};
 use smallmobile_lab8::encode::{GLOBAL, NODE};
 use smallmobile_lab8::record::{self, EXTENSIONS, GLOBAL_MASK, LEGAL, MAP_COLS, PROBABILITY, SEG, STEP, half};
 
@@ -26,6 +26,23 @@ fn the_decoder_plays_whole_games() {
             assert_eq!(played.outcome.players, n);
         }
     }
+}
+
+/// La recherche sur des plans (réseau au hasard, 4 candidats, 2 mondes) finit ses parties.
+#[test]
+fn the_plan_search_plays_whole_games() {
+    let plans = Plans::named(&format!("plans:net={},k=4,m=2", fixture_net())).unwrap();
+    let field = Plan::named(&format!("plan:net={},t=1", fixture_net())).unwrap();
+    for n in 2..=5 {
+        let table = Table::new(n, 5000 + n as u64);
+        let mut seats: Vec<&dyn Agent> = vec![&field; n];
+        seats[0] = &plans;
+        let played = play_game(&table, n as u32, &seats, 11);
+        assert_eq!(played.outcome.players, n);
+    }
+    use std::sync::atomic::Ordering::Relaxed;
+    assert_eq!(smallmobile_lab8::agent::SHORT.load(Relaxed), 0, "plans trop courts");
+    assert!(smallmobile_lab8::agent::RESUMED.load(Relaxed) > 20, "suites de plans reprises");
 }
 
 fn read(path: &Path, ext: &str) -> Vec<u8> {

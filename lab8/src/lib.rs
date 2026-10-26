@@ -5,6 +5,8 @@
 pub mod agent;
 pub mod fixture;
 pub mod record;
+#[cfg(feature = "vulkan")]
+pub mod vulkan;
 
-pub use smallmobile_brain8::{encode, know, moves, net, plan, rand, tokens};
+pub use smallmobile_brain8::{encode, know, moves, net, plan, rand, search, tokens};
 pub use smallmobile_lab7 as lab7;

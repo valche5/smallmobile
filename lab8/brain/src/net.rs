@@ -196,6 +196,43 @@ pub struct Memory {
     pub heads: [f32; 20],
 }
 
+impl Memory {
+    /// Une lecture faite ailleurs (moteur GPU) : sorties de l'encodeur pour les régions (`regions` × d),
+    /// `dec_reg` des régions, clés et valeurs de l'attention croisée de chaque couche du décodeur
+    /// (`TOKENS` × d chacune), et les 20 têtes.
+    pub fn from_parts(
+        e: &Encoded,
+        d: usize,
+        x_regions: Vec<f32>,
+        reg: Vec<f32>,
+        cross: Vec<(Vec<f32>, Vec<f32>)>,
+        heads: [f32; 20],
+    ) -> Memory {
+        let mut x = x_regions;
+        x.resize(TOKENS * d, 0.0);
+        Memory {
+            players: e.players,
+            regions: e.regions,
+            valid: tokens::valid(e),
+            x,
+            cross,
+            reg,
+            value: Value::from_heads(e.players, &heads[..10]),
+            next: Value::from_heads(e.players, &heads[10..]),
+            heads,
+        }
+    }
+
+    /// Les têtes, la sortie de l'encodeur d'une région, et `dec_reg` d'une région (comparaisons).
+    pub fn region(&self, r: usize, d: usize) -> (&[f32], &[f32]) {
+        (&self.x[r * d..][..d], &self.reg[r * d..][..d])
+    }
+
+    pub fn cross(&self, layer: usize) -> (&[f32], &[f32]) {
+        (&self.cross[layer].0, &self.cross[layer].1)
+    }
+}
+
 /// Ce que le décodeur garde d'un pas au suivant, pendant un plan.
 #[derive(Default)]
 pub struct Cache {
@@ -244,9 +281,10 @@ fn softmax(v: &mut [f32]) {
 }
 
 /// Les poids d'un fichier SMNN1 : nom → (forme, valeurs).
-type Tensors = HashMap<String, (Vec<usize>, Vec<f32>)>;
+pub type Tensors = HashMap<String, (Vec<usize>, Vec<f32>)>;
 
-fn read_tensors(bytes: &[u8]) -> io::Result<Tensors> {
+/// Les tenseurs d'un fichier SMNN1 (pour les moteurs GPU).
+pub fn read_tensors(bytes: &[u8]) -> io::Result<Tensors> {
     let bad = |m: &str| io::Error::new(io::ErrorKind::InvalidData, m.to_string());
     let mut at = 0;
     let mut take = |n: usize| -> io::Result<&[u8]> {

@@ -7,12 +7,14 @@
 //!
 //! - `tokens` : les jetons de l'encodeur, les relations entre jetons, les entrées d'un pas du décodeur ;
 //! - `net` : le réseau (référence sur processeur, la même que `lab8/py/model.py`) ;
-//! - `plan` : le découpage d'une partie en plans, et l'écriture d'un plan par le décodeur.
+//! - `plan` : le découpage d'une partie en plans, et l'écriture d'un plan par le décodeur ;
+//! - `search` : la recherche sur des plans (candidats, mondes, fins simulées par plans).
 //!
 //! Rien ici ne dépend du système (fichiers, fils).
 
 pub mod net;
 pub mod plan;
+pub mod search;
 pub mod tokens;
 
 pub use smallmobile_brain7::{encode, know, moves, outcome, rand};

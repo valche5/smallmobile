@@ -8,12 +8,19 @@ La validation compare au réseau du joueur imité (c130), sur les mêmes plans :
 sa valeur au début de chaque plan sont enregistrées avec les parties.
 
     python train.py --data D1,D2 --out ../nets/x.bin [--init y.bin | --size 256,6,8,2] --steps N
+        [--state x.pt]      reprise : l'état complet, écrit à chaque validation, repris s'il existe
     python train.py --data D --size 256,6,8,2 --bench 50      débit seul
+
+Le réseau mesuré et écrit est la moyenne glissante des poids (EMA), mise à jour tous les EMA_EVERY lots.
 """
 
 import argparse
+import copy
 import math
+import os
+import sys
 import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -30,7 +37,10 @@ WARMUP = 500
 GAIN_WEIGHT = 0.25
 OWN_WEIGHT = 0.5
 # plans de validation mesurés (les premiers des parties mises de côté)
-VAL_PLANS = 20000
+VAL_PLANS = 50000
+# moyenne glissante des poids : demi-vie ~ 3 500 lots
+EMA = 0.9996
+EMA_EVERY = 4
 WORKERS = 4
 AHEAD = 8
 PHASES = ("choix", "conquête", "redéploiement", "défense", "fin")
@@ -92,31 +102,27 @@ def batches(data, idx, size, rng=None):
 
 
 def validate(net, data, idx, device):
-    """Moyennes par plan sur `idx` : le réseau, c130 ; et la précision par phase."""
+    """Moyennes par plan sur `idx` pour le réseau et pour c130 seul : en tout, par phase, par nombre de
+    joueurs."""
     net.eval()
-    sums, base, n = {}, {}, 0
-    by_phase = np.zeros((len(PHASES), 2))
+    rows = []
     with torch.no_grad():
         for b in batches(data, idx, 512):
             t = to_device(b, device)
             with torch.autocast(device, dtype=torch.bfloat16):
                 m = losses(net, t)
-            c = baseline(t)
-            for k, v in m.items():
-                sums[k] = sums.get(k, 0.0) + v.float().sum().item()
-            for k, v in c.items():
-                base[k] = base.get(k, 0.0) + v.float().sum().item()
-            ph = t["phase"].cpu().numpy()
-            for p in range(len(PHASES)):
-                sel = ph == p
-                by_phase[p] += [m["acc"].float().cpu().numpy()[sel].sum(), sel.sum()]
-            n += len(b["players"])
+            c = {f"c130_{k}": v for k, v in baseline(t).items()}
+            rows.append({k: v.float().cpu().numpy() for k, v in (m | c).items()} | {"phase": b["phase"], "players": b["players"]})
     net.train()
-    return {k: v / n for k, v in sums.items()}, {k: v / n for k, v in base.items()}, by_phase
+    cols = {k: np.concatenate([r[k] for r in rows]) for k in rows[0]}
+    mean = lambda sel: {k: v[sel].mean() for k, v in cols.items() if k not in ("phase", "players")}
+    by_phase = {PHASES[p]: mean(cols["phase"] == p) for p in range(len(PHASES)) if (cols["phase"] == p).any()}
+    by_players = {n: mean(cols["players"] == n) for n in range(2, 6) if (cols["players"] == n).any()}
+    return mean(slice(None)), by_phase, by_players
 
 
 def show(m):
-    return " ".join(f"{k} {v:.1%}" if k == "acc" else f"{k} {v:.4f}" for k, v in m.items())
+    return " ".join(f"{k} {v:.1%}" if k.endswith("acc") else f"{k} {v:.4f}" for k, v in m.items())
 
 
 def main():
@@ -131,6 +137,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--val-every", type=int, default=2000)
     ap.add_argument("--bench", type=int, help="mesurer le débit sur ce nombre de lots, puis s'arrêter")
+    ap.add_argument("--state", help="état complet pour reprendre (écrit à chaque validation)")
     a = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -151,9 +158,28 @@ def main():
     lr = lambda i: min(1.0, (i + 1) / WARMUP) * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * min(1.0, i / steps))))
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr)
     order = rng.choice(train_idx, size=steps * a.batch, replace=len(train_idx) < steps * a.batch)
+    params = list(net.parameters())
+    ema = [p.detach().clone() for p in params]
+    first = 0
+    if a.state and Path(a.state).exists():
+        st = torch.load(a.state, map_location=device)
+        net.load_state_dict(st["net"])
+        opt.load_state_dict(st["opt"])
+        sched.load_state_dict(st["sched"])
+        ema = st["ema"]
+        first = st["step"]
+        print(f"reprise au lot {first}", flush=True)
+    averaged = copy.deepcopy(net)
+
+    def publish():
+        with torch.no_grad():
+            for p, e in zip(averaged.parameters(), ema):
+                p.copy_(e)
+        return averaged
+
     net.train()
     sums, count, seen, t0 = {}, 0, 0, time.time()
-    for i, b in enumerate(batches(data, order, a.batch)):
+    for i, b in enumerate(batches(data, order[first * a.batch :], a.batch), start=first):
         if a.bench and i == 5:
             torch.cuda.synchronize() if device == "cuda" else None
             t0, seen = time.time(), 0
@@ -166,6 +192,9 @@ def main():
         torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
         opt.step()
         sched.step()
+        if i % EMA_EVERY == EMA_EVERY - 1:
+            with torch.no_grad():
+                torch._foreach_lerp_(ema, params, 1 - EMA**EMA_EVERY)
         for k, v in m.items():
             sums[k] = sums.get(k, 0.0) + v.detach().float().mean()
         count += 1
@@ -176,13 +205,21 @@ def main():
             sums, count = {}, 0
             print(f"lot {i + 1}/{steps} : {show(avg)} ; {seen / secs:.0f} plans/s", flush=True)
         if not a.bench and ((i + 1) % a.val_every == 0 or i + 1 == steps):
-            ours, c130, by_phase = validate(net, data, val_idx, device)
-            print(f"  validation : {show(ours)}")
-            print(f"  c130 seul  : {show(c130)}")
-            print("  précision par phase : " + ", ".join(
-                f"{PHASES[p]} {by_phase[p, 0] / by_phase[p, 1]:.1%}" for p in range(len(PHASES)) if by_phase[p, 1]), flush=True)
+            start = time.time()
+            ours, by_phase, by_players = validate(publish(), data, val_idx, device)
+            print(f"  validation ({time.time() - start:.0f} s, moyenne des poids) : {show(ours)}")
+            for name, part in list(by_phase.items()) + [(f"{n} j.", v) for n, v in by_players.items()]:
+                print(f"    {name} : {show(part)}")
+            sys.stdout.flush()
             if a.out:
-                export(net, a.out)
+                # le dernier sous `out`, et chaque validation à côté (`x-012000.bin`) : le meilleur se
+                # choisit après coup
+                export(averaged, a.out)
+                export(averaged, str(Path(a.out).with_suffix("")) + f"-{i + 1:06d}.bin")
+            if a.state:
+                tmp = Path(a.state + ".tmp")
+                torch.save({"net": net.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(), "ema": ema, "step": i + 1}, tmp)
+                os.replace(tmp, a.state)
     if a.bench:
         torch.cuda.synchronize() if device == "cuda" else None
         print(f"débit : {seen / (time.time() - t0):.0f} plans/s ({a.batch} par lot)")

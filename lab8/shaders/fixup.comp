@@ -1,0 +1,25 @@
+#version 450
+// Après les produits des entrées (écrits à leur place dans X) : les positions des joueurs et des cartes
+// du marché, et des zéros pour les jetons absents.
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant) uniform Params {
+    uint x_off, d, player_pos, market_pos;
+} p;
+
+void main() {
+    uint pos = gl_WorkGroupID.x;
+    for (uint idx = gl_LocalInvocationID.x; idx < TOKENS * p.d; idx += 256u) {
+        uint tok = idx / p.d, c = idx % p.d;
+        uint at = p.x_off + (pos * TOKENS + tok) * p.d + c;
+        if (!token_valid(pos, tok)) {
+            act[at] = 0.0;
+        } else if (tok >= T_PLAYER && tok < T_MARKET) {
+            act[at] += w[p.player_pos + (tok - T_PLAYER) * p.d + c];
+        } else if (tok >= T_MARKET && tok < T_GAME) {
+            act[at] += w[p.market_pos + (tok - T_MARKET) * p.d + c];
+        }
+    }
+}

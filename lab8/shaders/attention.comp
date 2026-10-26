@@ -1,0 +1,85 @@
+#version 450
+// L'attention de l'encodeur : un groupe par (position, tête), un fil par jeton qui regarde. Scores
+// q·k / √dh + biais de la relation (tokens::relations, calculée ici d'après les distances et les
+// occupants des régions) ; les jetons absents ne sont pas regardés. qkv : lignes [q | k | v].
+#include "common.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(push_constant) uniform Params {
+    uint qkv_off, out_off, d, heads, rel; // rel : la table RELATIONS × têtes de la couche, dans w
+} p;
+
+const uint DH = 32u;
+shared float ks[TOKENS * DH];
+shared float vs[TOKENS * DH];
+shared uint owner[R]; // 0 : aucun ; 1 + joueur relatif ; + 8 si le peuple est en déclin
+shared uint valid[TOKENS];
+
+uint relation(uint pos, uint i, uint j, uint regions) {
+    if (i < regions && j < regions) return 1u + byte_at(pos, IN_DIST + i * R + j);
+    if (i < regions && j >= T_PLAYER && j < T_MARKET) {
+        uint o = owner[i];
+        if ((o & 7u) == j - T_PLAYER + 1u) return (o & 8u) != 0u ? 7u : 6u;
+        return 0u;
+    }
+    if (j < regions && i >= T_PLAYER && i < T_MARKET) {
+        uint o = owner[j];
+        if ((o & 7u) == i - T_PLAYER + 1u) return (o & 8u) != 0u ? 9u : 8u;
+        return 0u;
+    }
+    return 0u;
+}
+
+void main() {
+    uint pos = gl_WorkGroupID.x, head = gl_WorkGroupID.y;
+    uint t = gl_LocalInvocationID.x;
+    uint regions = regions_of(pos);
+    uint row0 = pos * TOKENS;
+    uint d3 = 3u * p.d;
+    for (uint idx = t; idx < TOKENS * DH; idx += 64u) {
+        uint j = idx / DH, c = idx % DH;
+        ks[idx] = act[p.qkv_off + (row0 + j) * d3 + p.d + head * DH + c];
+        vs[idx] = act[p.qkv_off + (row0 + j) * d3 + 2u * p.d + head * DH + c];
+    }
+    if (t < R) {
+        uint o = 0u;
+        if (t < regions) {
+            for (uint r = 0u; r < 5u; r++) {
+                if (byte_at(pos, IN_NODE + t * NODE + 17u + r) != 0u) o = r + 1u;
+            }
+            if (o != 0u && byte_at(pos, IN_NODE + t * NODE + 23u) != 0u) o += 8u;
+        }
+        owner[t] = o;
+    }
+    if (t < TOKENS) valid[t] = token_valid(pos, t) ? 1u : 0u;
+    barrier();
+    if (t >= TOKENS) return;
+    float out_[DH];
+    for (uint c = 0u; c < DH; c++) out_[c] = 0.0;
+    uint at = p.out_off + (row0 + t) * p.d + head * DH;
+    if (valid[t] == 0u) {
+        for (uint c = 0u; c < DH; c++) act[at + c] = 0.0;
+        return;
+    }
+    float q[DH];
+    for (uint c = 0u; c < DH; c++) q[c] = act[p.qkv_off + (row0 + t) * d3 + head * DH + c];
+    float scale = inversesqrt(float(DH));
+    float top = -1e30, sum = 0.0;
+    for (uint j = 0u; j < TOKENS; j++) {
+        if (valid[j] == 0u) continue;
+        float s = 0.0;
+        for (uint c = 0u; c < DH; c++) s += q[c] * ks[j * DH + c];
+        s = s * scale + w[p.rel + relation(pos, t, j, regions) * p.heads + head];
+        if (s > top) {
+            float f = exp(top - s);
+            sum *= f;
+            for (uint c = 0u; c < DH; c++) out_[c] *= f;
+            top = s;
+        }
+        float e = exp(s - top);
+        sum += e;
+        for (uint c = 0u; c < DH; c++) out_[c] += e * vs[j * DH + c];
+    }
+    for (uint c = 0u; c < DH; c++) act[at + c] = out_[c] / sum;
+}

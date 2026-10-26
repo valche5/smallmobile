@@ -1,0 +1,20 @@
+#version 450
+// [jeton de la partie, moyenne des régions] de chaque position : l'entrée des têtes de valeur.
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant) uniform Params {
+    uint x_off, out_off, d;
+} p;
+
+void main() {
+    uint pos = gl_WorkGroupID.x;
+    uint regions = regions_of(pos);
+    for (uint c = gl_LocalInvocationID.x; c < p.d; c += 256u) {
+        float s = 0.0;
+        for (uint i = 0u; i < regions; i++) s += act[p.x_off + (pos * TOKENS + i) * p.d + c];
+        act[p.out_off + pos * 2u * p.d + c] = act[p.x_off + (pos * TOKENS + T_GAME) * p.d + c];
+        act[p.out_off + pos * 2u * p.d + p.d + c] = s / float(regions);
+    }
+}
