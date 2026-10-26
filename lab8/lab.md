@@ -133,8 +133,9 @@ glslc. PyTorch 2.14.1+rocm7.14 voit la carte (`lab3/py/.venv`).
   0,66 million).
 - Arène c130 contre c130, n = 400, 80 donnes de 2 à 5 joueurs (280 parties : chaque donne est
   rejouée à toutes les places) : 21,3 s, 100 ms par décision en moyenne (p95 336 ms).
-- Parties d'imitation (`lab8 record`, phase 0) : 15 parties par seconde, 80 plans par partie,
-  335 ko par partie. 100 000 parties : ≈ 2 h et 33 Go.
+- Parties d'imitation (`lab8 record`, phase 0) : 15 parties par seconde, 80 plans par partie ;
+  forme compacte, 1,1 ko par plan (88 ko par partie). 100 000 parties : ≈ 2 h et 8,8 Go, lus
+  entiers en mémoire à l'apprentissage.
 - Transformer de départ (256 × 6, 8 têtes, décodeur de 2 couches : 7,9 millions de paramètres) :
   apprentissage à 2 350 plans par seconde sur la carte (bf16, lots de 256, sans optimisation), soit
   ≈ 1 h par passe sur 8 millions de plans ; sur un cœur, en f32, 19,5 ms par lecture de position et

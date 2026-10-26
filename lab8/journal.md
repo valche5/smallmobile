@@ -75,5 +75,25 @@ cœur (perte 0,13 à l'apprentissage, 3,6 à la validation), la politique attein
 les parties mises de côté (c130 seul : 60 %). Rien à en conclure, sinon que la chaîne marche : la
 phase 2 se fera sur les 100 000 parties.
 
+### Forme compacte des parties d'imitation (26 octobre)
+
+Demande de l'utilisateur, d'après les labos précédents : les données doivent tenir en mémoire à
+l'apprentissage (31 Go). Le premier format faisait 4,4 ko par plan, 33 Go pour 100 000 parties. Sur
+400 parties : les entrées des régions faisaient 66 % du total (87 % d'octets nuls, et les colonnes de
+la carte répétées à chaque plan), celles de la partie 19 % (85 % de nuls), les voisines 7 %
+(identiques pour toute la partie).
+
+Forme compacte (`record.rs`, en tête) : la carte une fois par partie (15 colonnes des régions,
+voisines) ; des autres entrées, un masque de bits et les seuls octets non nuls ; les 30 valeurs en
+f16. Sur les mêmes 400 parties (graine 81000000) : 35,2 Mo au lieu de 141,8 (× 4,0), 1 097 octets
+par plan ; 100 000 parties ≈ 8,8 Go. Le plus gros : les masques des régions (27 %), les coups
+possibles (15 %).
+
+Vérifications : le test `imitation_games_split_into_plans` relit la forme compacte en Rust et la
+compare aux entrées pleines (`lab8 record --raw true`), octet par octet ; `python data.py DIR` fait de
+même pour la lecture Python (32 101 plans identiques) ; `half_rounds_to_nearest` vérifie la
+conversion en f16. Décodage d'un lot de 256 plans : 5,2 ms sur un fil (le GPU en apprend un en
+~100 ms) ; apprentissage `--bench 80` : 2 546 plans par seconde, comme avant.
+
 Reste, pour les phases suivantes : la recherche sur plans et la recherche coup par coup du nouveau
 réseau (phases 4 et 5), le moteur GPU du transformer (phase 3).

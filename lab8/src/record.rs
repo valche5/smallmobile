@@ -12,17 +12,28 @@
 //!   décision du prochain tour du joueur, et pièces gagnées d'ici là (le résultat final si la partie
 //!   finit avant) ; propriétaires des régions au début de ce prochain tour.
 //!
-//! Fichiers d'un fil, à côté les uns des autres (`r{graine}-{fil}`), lus par `lab8/py/data.py` :
+//! Fichiers d'un fil, à côté les uns des autres (`r{graine}-{fil}`), lus par `lab8/py/data.py`. Forme
+//! compacte, pour que toutes les parties tiennent en mémoire à l'apprentissage : la carte une fois
+//! par partie ; des entrées de la position, seuls les octets non nuls, repérés par des masques de
+//! bits (bit j de l'octet j / 8 en j % 8, comme `numpy.unpackbits(bitorder="little")`).
 //!
 //! ```text
-//! .seg    par plan, SEG octets : players, regions (u8), steps (u16), phase (u8), 3 octets nuls,
-//!         puis f32 × 5 : win, gain, here, next_win, next_gain, prior_win (la valeur du réseau seul)
-//! .node   par plan : regions × NODE (u8)          .glob   par plan : GLOBAL (u8)
-//! .adj    par plan : regions × u64 (voisines)     .owner  par plan : regions × u8
-//! .step   par décision, STEP octets : key (u16), coups possibles (u16), dyn (u8 × DYN), 2 octets nuls
+//! .games  par partie, une ligne : donne, graine de carte, graine, joueurs, plans
+//! .map    par partie : regions × MAP_COLS (u8) : les colonnes de la carte (`encode` 0 à 14)
+//! .adj    par partie : regions × u64 (voisines)
+//! .seg    par plan, SEG octets : partie (u32, rang dans le fichier), steps, node_nz, glob_nz (u16),
+//!         players, regions, phase (u8), 3 octets nuls ; puis f16 × 5 : win, gain, here, next_win,
+//!         next_gain, prior_win (la valeur du réseau seul)
+//! .nmask  par plan : regions × u64 : les colonnes non nulles des régions hors carte (bit j : colonne
+//!         MAP_COLS + j)                         .nval   par plan : leurs node_nz valeurs (u8)
+//! .gmask  par plan : GLOBAL_MASK octets : les entrées non nulles de la partie
+//!                                               .gval   par plan : leurs glob_nz valeurs (u8)
+//! .owner  par plan : regions × u8
+//! .step   par décision, STEP octets : key (u16), coups possibles (u16), dyn (u8 × DYN)
 //! .legal  par coup possible : key (u16), probabilité de la recherche et a priori du réseau seul,
 //!         × PROBABILITY (u16, u16)
-//! .games  par partie, une ligne : donne, graine de carte, graine, joueurs, plans
+//! .raw    (vérifications seulement, `Config::raw`) par plan : regions × NODE puis GLOBAL (u8), et
+//!         les 30 valeurs en f32
 //! ```
 
 use std::fs::File;
@@ -52,9 +63,41 @@ use crate::tokens::{DYN, dynamics};
 
 /// Une probabilité de la politique est enregistrée multipliée par ce nombre.
 pub const PROBABILITY: f32 = 60_000.0;
-pub const SEG: usize = 8 + 30 * 4;
+pub const SEG: usize = 16 + 30 * 2;
 pub const LEGAL: usize = 6;
-pub const STEP: usize = 4 + DYN + 2;
+pub const STEP: usize = 4 + DYN;
+/// Colonnes des régions qui ne dépendent que de la carte (terrain à nombre de voisines).
+pub const MAP_COLS: usize = 15;
+pub const GLOBAL_MASK: usize = GLOBAL.div_ceil(8);
+const _: () = assert!(NODE - MAP_COLS <= 64);
+
+/// Un f32 en f16 (arrondi au plus proche, pair en cas d'égalité ; sous-normaux compris).
+pub fn half(x: f32) -> u16 {
+    let bits = x.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exp = ((bits >> 23) & 0xff) as i32;
+    let man = bits & 0x7f_ffff;
+    if exp == 0xff {
+        return sign | 0x7c00 | if man != 0 { 0x200 } else { 0 };
+    }
+    let e = exp - 127 + 15;
+    if e >= 0x1f {
+        return sign | 0x7c00;
+    }
+    // la mantisse avec son 1 implicite, et le nombre de bits à retirer
+    let (m, shift) = if e <= 0 { (man | 0x80_0000, (14 - e) as u32) } else { (man, 13) };
+    if shift > 24 {
+        return sign;
+    }
+    let half_bit = 1u32 << (shift - 1);
+    let mut r = m >> shift;
+    let rest = m & ((1 << shift) - 1);
+    if rest > half_bit || (rest == half_bit && r & 1 == 1) {
+        r += 1;
+    }
+    // un report déborde proprement sur l'exposant
+    sign | if e <= 0 { r as u16 } else { (((e as u32) << 10) + r) as u16 }
+}
 
 /// Une décision d'un plan.
 struct Step {
@@ -193,85 +236,110 @@ async fn play(table: &Table, seed: u32, az: &Az, rng: &mut Rng, oracle: &impl Or
 
 /// Les fichiers d'un fil (`r{graine}-{fil}.*`).
 pub struct Files {
-    seg: BufWriter<File>,
-    node: BufWriter<File>,
-    glob: BufWriter<File>,
-    adj: BufWriter<File>,
-    owner: BufWriter<File>,
-    step: BufWriter<File>,
-    legal: BufWriter<File>,
-    games: BufWriter<File>,
+    out: Vec<BufWriter<File>>,
+    raw: Option<BufWriter<File>>,
+    /// Parties déjà écrites.
+    games: u32,
 }
 
+/// L'ordre des fichiers dans `Files::out`.
+pub const EXTENSIONS: [&str; 11] =
+    [".games", ".map", ".adj", ".seg", ".nmask", ".nval", ".gmask", ".gval", ".owner", ".step", ".legal"];
+const GAMES: usize = 0;
+const MAP: usize = 1;
+const ADJ: usize = 2;
+const SEGS: usize = 3;
+const NMASK: usize = 4;
+const NVAL: usize = 5;
+const GMASK: usize = 6;
+const GVAL: usize = 7;
+const OWNER: usize = 8;
+const STEPS: usize = 9;
+const LEGALS: usize = 10;
+
 impl Files {
-    pub fn create(prefix: &Path) -> std::io::Result<Files> {
+    pub fn create(prefix: &Path, raw: bool) -> std::io::Result<Files> {
         let open = |ext: &str| -> std::io::Result<BufWriter<File>> {
             let mut name = prefix.as_os_str().to_owned();
             name.push(ext);
             Ok(BufWriter::new(File::create(name)?))
         };
-        Ok(Files {
-            seg: open(".seg")?,
-            node: open(".node")?,
-            glob: open(".glob")?,
-            adj: open(".adj")?,
-            owner: open(".owner")?,
-            step: open(".step")?,
-            legal: open(".legal")?,
-            games: open(".games")?,
-        })
+        let out = EXTENSIONS.iter().map(|e| open(e)).collect::<std::io::Result<_>>()?;
+        Ok(Files { out, raw: if raw { Some(open(".raw")?) } else { None }, games: 0 })
     }
 
     fn write(&mut self, game: &Game_, segments: &[Segment]) -> std::io::Result<()> {
+        let o = &mut self.out;
+        if let Some(first) = segments.first() {
+            for row in first.node.chunks(NODE) {
+                o[MAP].write_all(&row[..MAP_COLS])?;
+            }
+            for a in &first.adj {
+                o[ADJ].write_all(&a.to_le_bytes())?;
+            }
+        }
         for p in segments {
-            let mut b = Vec::with_capacity(SEG);
-            b.push(p.players as u8);
-            b.push(p.regions as u8);
-            b.extend_from_slice(&(p.steps.len() as u16).to_le_bytes());
-            b.push(p.phase.index() as u8);
-            b.extend_from_slice(&[0; 3]);
-            let (next_win, next_gain) = p.next.expect("valeur au prochain tour");
-            for v in [&p.win, &p.gain, &p.here, &next_win, &next_gain, &p.prior] {
-                for x in v {
-                    b.extend_from_slice(&x.to_le_bytes());
+            let (mut nmask, mut nval) = (Vec::with_capacity(8 * p.regions), Vec::new());
+            for (row, first) in p.node.chunks(NODE).zip(segments[0].node.chunks(NODE)) {
+                assert_eq!(row[..MAP_COLS], first[..MAP_COLS], "colonnes de la carte");
+                let mut mask = 0u64;
+                for (j, &x) in row[MAP_COLS..].iter().enumerate() {
+                    if x != 0 {
+                        mask |= 1 << j;
+                        nval.push(x);
+                    }
+                }
+                nmask.extend_from_slice(&mask.to_le_bytes());
+            }
+            let (mut gmask, mut gval) = ([0u8; GLOBAL_MASK], Vec::new());
+            for (j, &x) in p.global.iter().enumerate() {
+                if x != 0 {
+                    gmask[j / 8] |= 1 << (j % 8);
+                    gval.push(x);
                 }
             }
-            debug_assert_eq!(b.len(), SEG);
-            self.seg.write_all(&b)?;
-            debug_assert_eq!(p.node.len(), p.regions * NODE);
-            self.node.write_all(&p.node)?;
-            debug_assert_eq!(p.global.len(), GLOBAL);
-            self.glob.write_all(&p.global)?;
-            for a in &p.adj {
-                self.adj.write_all(&a.to_le_bytes())?;
+            let (next_win, next_gain) = p.next.expect("valeur au prochain tour");
+            let values = [&p.win, &p.gain, &p.here, &next_win, &next_gain, &p.prior];
+            let mut b = Vec::with_capacity(SEG);
+            b.extend_from_slice(&self.games.to_le_bytes());
+            for count in [p.steps.len(), nval.len(), gval.len()] {
+                b.extend_from_slice(&(count as u16).to_le_bytes());
             }
-            self.owner.write_all(&p.owners.expect("propriétaires")[..p.regions])?;
+            b.extend_from_slice(&[p.players as u8, p.regions as u8, p.phase.index() as u8, 0, 0, 0]);
+            for x in values.iter().flat_map(|v| v.iter()) {
+                b.extend_from_slice(&half(*x).to_le_bytes());
+            }
+            debug_assert_eq!(b.len(), SEG);
+            o[SEGS].write_all(&b)?;
+            o[NMASK].write_all(&nmask)?;
+            o[NVAL].write_all(&nval)?;
+            o[GMASK].write_all(&gmask)?;
+            o[GVAL].write_all(&gval)?;
+            o[OWNER].write_all(&p.owners.expect("propriétaires")[..p.regions])?;
             for s in &p.steps {
-                self.step.write_all(&s.key.to_le_bytes())?;
-                self.step.write_all(&(s.legal.len() as u16).to_le_bytes())?;
-                self.step.write_all(&s.dy)?;
-                self.step.write_all(&[0; 2])?;
+                o[STEPS].write_all(&s.key.to_le_bytes())?;
+                o[STEPS].write_all(&(s.legal.len() as u16).to_le_bytes())?;
+                o[STEPS].write_all(&s.dy)?;
                 for (key, p, prior) in &s.legal {
-                    self.legal.write_all(&key.to_le_bytes())?;
-                    self.legal.write_all(&p.to_le_bytes())?;
-                    self.legal.write_all(&prior.to_le_bytes())?;
+                    o[LEGALS].write_all(&key.to_le_bytes())?;
+                    o[LEGALS].write_all(&p.to_le_bytes())?;
+                    o[LEGALS].write_all(&prior.to_le_bytes())?;
+                }
+            }
+            if let Some(raw) = &mut self.raw {
+                raw.write_all(&p.node)?;
+                raw.write_all(&p.global)?;
+                for x in values.iter().flat_map(|v| v.iter()) {
+                    raw.write_all(&x.to_le_bytes())?;
                 }
             }
         }
-        writeln!(self.games, "{} {} {} {} {}", game.deal, game.map_seed, game.seed, game.players, segments.len())
+        self.games += 1;
+        writeln!(o[GAMES], "{} {} {} {} {}", game.deal, game.map_seed, game.seed, game.players, segments.len())
     }
 
     pub fn flush(&mut self) -> std::io::Result<()> {
-        for f in [
-            &mut self.seg,
-            &mut self.node,
-            &mut self.glob,
-            &mut self.adj,
-            &mut self.owner,
-            &mut self.step,
-            &mut self.legal,
-            &mut self.games,
-        ] {
+        for f in self.out.iter_mut().chain(self.raw.as_mut()) {
             f.flush()?;
         }
         Ok(())
@@ -291,6 +359,8 @@ pub struct Config {
     pub games: usize,
     pub threads: usize,
     pub seed: u64,
+    /// Écrire aussi les entrées pleines (`.raw`), pour vérifier la forme compacte.
+    pub raw: bool,
 }
 
 /// La partie `i` (donne, carte et hasard tirés de `cfg.seed` et `i`), découpée en plans.
@@ -350,7 +420,7 @@ pub fn run(cfg: &Config, az: &Az, dir: &Path, gpu: Option<&Gpu>) -> std::io::Res
             let (next, finished, planned) = (&next, &finished, &planned);
             let lane = (!lanes.is_empty()).then(|| lanes.remove(0));
             handles.push(scope.spawn(move || -> std::io::Result<()> {
-                let mut files = Files::create(&dir.join(format!("r{:x}-{t:02}", cfg.seed)))?;
+                let mut files = Files::create(&dir.join(format!("r{:x}-{t:02}", cfg.seed)), cfg.raw)?;
                 let mut done = |g: Game_, segments: Vec<Segment>| -> std::io::Result<()> {
                     files.write(&g, &segments)?;
                     let count = finished.fetch_add(1, Ordering::Relaxed) + 1;

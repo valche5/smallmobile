@@ -7,7 +7,8 @@ use smallmobile_lab7::agent::{self, Agent};
 use smallmobile_lab7::arena::play_game;
 use smallmobile_lab7::table::Table;
 use smallmobile_lab8::agent::Plan;
-use smallmobile_lab8::record::{self, LEGAL, PROBABILITY, SEG, STEP};
+use smallmobile_lab8::encode::{GLOBAL, NODE};
+use smallmobile_lab8::record::{self, EXTENSIONS, GLOBAL_MASK, LEGAL, MAP_COLS, PROBABILITY, SEG, STEP, half};
 
 fn fixture_net() -> String {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/net.bin").to_string_lossy().into_owned()
@@ -33,46 +34,104 @@ fn read(path: &Path, ext: &str) -> Vec<u8> {
     std::fs::read(name).unwrap()
 }
 
-fn f32s(b: &[u8]) -> Vec<f32> {
-    b.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
+fn u16_at(b: &[u8], at: usize) -> u16 {
+    u16::from_le_bytes([b[at], b[at + 1]])
 }
 
-/// Les parties d'imitation (c130 à n = 8) : chaque décision a ses coups possibles, le coup joué en est,
-/// la politique fait 1 ; les parts de victoire font 1 ; les tailles des fichiers se suivent.
+/// Un f16 en f32 (pour vérifier `record::half`).
+fn unhalf(h: u16) -> f32 {
+    let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let (e, m) = ((h >> 10) & 0x1f, (h & 0x3ff) as f32);
+    sign * match e {
+        0 => m * 2f32.powi(-24),
+        0x1f => f32::INFINITY,
+        _ => (1.0 + m / 1024.0) * 2f32.powi(e as i32 - 15),
+    }
+}
+
+#[test]
+fn half_rounds_to_nearest() {
+    for x in [0.0f32, 1.0, -2.5, 0.1, 1e-3, 3e-5, 1e-7, 65504.0, 0.333_333, 87.0, 1.0 - 1e-4] {
+        let h = unhalf(half(x));
+        let ulp = (x.abs() * 2f32.powi(-11)).max(2f32.powi(-25));
+        assert!((h - x).abs() <= ulp, "{x} → {h}");
+    }
+    // l'égalité va au pair, et le report passe à l'exposant suivant
+    assert_eq!(half(1.0 + 2f32.powi(-11)), 0x3c00);
+    assert_eq!(half(2.0 - 2f32.powi(-12)), 0x4000);
+}
+
+/// Les parties d'imitation (c130 à n = 8) : la forme compacte redonne exactement les entrées pleines ;
+/// chaque décision a ses coups possibles, le coup joué en est, la politique et l'a priori font 1 ; les
+/// parts de victoire font 1 ; les tailles des fichiers se suivent.
 #[test]
 fn imitation_games_split_into_plans() {
     let c130 = Path::new(env!("CARGO_MANIFEST_DIR")).join("../lab7/nets/c130.bin");
     let player = agent::by_name(&format!("az:net={},n=8", c130.display())).unwrap();
     let dir = std::env::temp_dir().join(format!("lab8-record-{}", std::process::id()));
-    let cfg = record::Config { players: vec![2, 5], games: 2, threads: 1, seed: 3 };
+    let cfg = record::Config { players: vec![2, 5], games: 2, threads: 1, seed: 3, raw: true };
     record::run(&cfg, player.az().unwrap(), &dir, None).unwrap();
     let prefix = dir.join("r3-00");
-    let (seg, step, legal) = (read(&prefix, ".seg"), read(&prefix, ".step"), read(&prefix, ".legal"));
-    let (node, glob, adj, owner) =
-        (read(&prefix, ".node"), read(&prefix, ".glob"), read(&prefix, ".adj"), read(&prefix, ".owner"));
-    let games = String::from_utf8(read(&prefix, ".games")).unwrap();
+    let f: Vec<Vec<u8>> = EXTENSIONS.iter().map(|e| read(&prefix, e)).collect();
+    let [games, map, adj, seg, nmask, nval, gmask, gval, owner, step, legal] = &f[..] else { panic!() };
+    let raw = read(&prefix, ".raw");
+    let games = String::from_utf8(games.clone()).unwrap();
     assert_eq!(seg.len() % SEG, 0);
     let plans = seg.len() / SEG;
     assert_eq!(games.lines().map(|l| l.split(' ').nth(4).unwrap().parse::<usize>().unwrap()).sum::<usize>(), plans);
-    let (mut regions, mut steps, mut at) = (0, 0, 0);
-    for p in seg.chunks(SEG) {
-        let (n, r, s) = (p[0] as usize, p[1] as usize, u16::from_le_bytes([p[2], p[3]]) as usize);
+    let (mut regions, mut steps, mut at, mut nv, mut gv, mut r_at) = (0, 0, 0, 0, 0, 0);
+    let (mut game, mut map_at) = (u32::MAX, 0);
+    let mut game_regions = 0;
+    for (i, p) in seg.chunks(SEG).enumerate() {
+        let g = u32::from_le_bytes(p[..4].try_into().unwrap());
+        let (s, n_nz, g_nz) = (u16_at(p, 4) as usize, u16_at(p, 6) as usize, u16_at(p, 8) as usize);
+        let (n, r) = (p[10] as usize, p[11] as usize);
         assert!(s >= 1 && r >= 1);
-        let v = f32s(&p[8..]);
-        for (i, what) in ["win", "here", "next_win", "prior_win"].iter().enumerate() {
-            let at = [0, 10, 15, 25][i];
-            let sum: f32 = v[at..at + n].iter().sum();
-            assert!((sum - 1.0).abs() < 1e-3, "{what} : {sum}");
+        if g != game {
+            map_at += game_regions;
+            game = g;
+            game_regions = r;
+        }
+        assert_eq!(r, game_regions, "même carte pour toute la partie");
+        // la forme compacte redonne les entrées pleines
+        let plan_raw = &raw[r_at..r_at + r * NODE + GLOBAL + 30 * 4];
+        r_at += plan_raw.len();
+        let mut vals = nval[nv..nv + n_nz].iter();
+        for row in 0..r {
+            let full = &plan_raw[row * NODE..(row + 1) * NODE];
+            assert_eq!(&map[(map_at + row) * MAP_COLS..(map_at + row + 1) * MAP_COLS], &full[..MAP_COLS]);
+            let mask = u64::from_le_bytes(nmask[(regions + row) * 8..(regions + row + 1) * 8].try_into().unwrap());
+            for (j, &x) in full[MAP_COLS..].iter().enumerate() {
+                assert_eq!(if mask >> j & 1 == 1 { *vals.next().unwrap() } else { 0 }, x, "plan {i}, région {row}");
+            }
+        }
+        assert!(vals.next().is_none());
+        nv += n_nz;
+        let mut vals = gval[gv..gv + g_nz].iter();
+        for (j, &x) in plan_raw[r * NODE..r * NODE + GLOBAL].iter().enumerate() {
+            let on = gmask[i * GLOBAL_MASK + j / 8] >> (j % 8) & 1 == 1;
+            assert_eq!(if on { *vals.next().unwrap() } else { 0 }, x, "plan {i}, entrée {j} de la partie");
+        }
+        assert!(vals.next().is_none());
+        gv += g_nz;
+        let full: Vec<f32> =
+            plan_raw[r * NODE + GLOBAL..].as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
+        let v: Vec<f32> = (0..30).map(|k| unhalf(u16_at(p, 16 + 2 * k))).collect();
+        for (k, (&a, &b)) in v.iter().zip(&full).enumerate() {
+            assert_eq!(u16_at(p, 16 + 2 * k), half(b));
+            assert!((a - b).abs() <= b.abs() * 1e-3 + 1e-4, "valeur {k} : {a} pour {b}");
+        }
+        for (what, from) in [("win", 0), ("here", 10), ("next_win", 15), ("prior_win", 25)] {
+            let sum: f32 = v[from..from + n].iter().sum();
+            assert!((sum - 1.0).abs() < 5e-3, "{what} : {sum}");
         }
         regions += r;
         for st in step[steps * STEP..(steps + s) * STEP].chunks(STEP) {
-            let key = u16::from_le_bytes([st[0], st[1]]);
-            let count = u16::from_le_bytes([st[2], st[3]]) as usize;
+            let (key, count) = (u16_at(st, 0), u16_at(st, 2) as usize);
             assert!(count >= 2, "une décision a plusieurs coups possibles");
-            let word = |c: &[u8], i: usize| u16::from_le_bytes([c[2 * i], c[2 * i + 1]]);
             let moves: Vec<(u16, u16, u16)> = legal[at * LEGAL..(at + count) * LEGAL]
                 .chunks(LEGAL)
-                .map(|c| (word(c, 0), word(c, 1), word(c, 2)))
+                .map(|c| (u16_at(c, 0), u16_at(c, 2), u16_at(c, 4)))
                 .collect();
             assert!(moves.iter().any(|m| m.0 == key), "le coup joué est possible");
             for (what, total) in [
@@ -85,11 +144,14 @@ fn imitation_games_split_into_plans() {
         }
         steps += s;
     }
+    assert_eq!(r_at, raw.len());
+    assert_eq!((nv, gv), (nval.len(), gval.len()));
+    assert_eq!(nmask.len(), regions * 8);
+    assert_eq!(gmask.len(), plans * GLOBAL_MASK);
+    assert_eq!(map.len(), (map_at + game_regions) * MAP_COLS);
+    assert_eq!(adj.len(), (map_at + game_regions) * 8);
     assert_eq!(step.len(), steps * STEP);
     assert_eq!(legal.len(), at * LEGAL);
-    assert_eq!(node.len(), regions * 77);
-    assert_eq!(glob.len(), plans * 820);
-    assert_eq!(adj.len(), regions * 8);
     assert_eq!(owner.len(), regions);
     assert!(plans > 50, "{plans} plans");
     std::fs::remove_dir_all(&dir).unwrap();

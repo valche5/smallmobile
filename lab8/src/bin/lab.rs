@@ -1,7 +1,8 @@
 //! Le programme du labo 8.
 //!
 //! lab8 record --games N --out DIR [--agent az:net=lab7/nets/c130.bin,n=400] [--players 2,3,4,5]
-//!     [--seed S] [--threads N] [--device vulkan]   (parties d'imitation découpées en plans, `record`)
+//!     [--seed S] [--threads N] [--device vulkan] [--raw true]   (parties d'imitation découpées en plans,
+//!     `record` ; `--raw` : aussi les entrées pleines, pour vérifier la forme compacte)
 //! lab8 arena --hero A --field B [--players 2,3,4,5] [--deals N] [--seed S] [--out F] [--device vulkan]
 //!     (l'arène de lab7 ; joueurs de lab7, et `plan:net=…[,t=…]` : le décodeur de lab8 sans recherche)
 //! lab8 fixture --out DIR [--games N] [--seed S] [--every K]   (un plan sur K de parties au hasard, pour
@@ -122,6 +123,7 @@ fn record_cmd(opts: &HashMap<String, String>) {
         games: get(opts, "games", 100),
         threads: get(opts, "threads", threads()),
         seed: get(opts, "seed", 81_000_000),
+        raw: get(opts, "raw", false),
     };
     let dir = PathBuf::from(opts.get("out").unwrap_or_else(|| usage()));
     let gpu = start_gpu(device(opts), &[net_path(spec)]);
