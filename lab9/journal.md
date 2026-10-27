@@ -59,3 +59,28 @@ en bits dans la mémoire partagée) ; le bloc : `layernorm`, `neighbours`, `gemm
 | lab8, TTTTTT 256 × 6 (même mesure) | 0,008 | 0,031 | — | — | 0,023 | — |
 
 Mêmes écarts que le moteur de lab8 (l'arrondi bf16). Vitesse : à mesurer GPU libre.
+
+## Phase 2 : h1, RRTRRT 256 × 6 (27 octobre)
+
+150 000 lots en ~1 h 15 (9 200 plans/s ; i2 : 4 h 15 à l'époque, 7 870 plans/s aujourd'hui).
+Validation (mêmes plans qu'i2) :
+
+| Lots | h1 politique | h1 valeur | i2 politique | i2 valeur |
+| --- | --- | --- | --- | --- |
+| 10 000 | 1,284 | 1,090 | 1,341 | 1,088 |
+| 25 000 | 1,218 | 1,047 | 1,238 | 1,051 |
+| 50 000 | 1,186 | 1,031 | 1,195 | 1,034 |
+| 75 000 | 1,171 | 1,024 | 1,177 | 1,025 |
+| 100 000 | **1,162** | **1,019** | 1,166 | 1,019 |
+| 150 000 | **1,154** | **1,014** | — | — |
+
+- **h1 est meilleur qu'i2 à chaque validation**, des deux têtes, surtout au début (le local appris
+  d'emblée par les blocs R) ; au lot 100 000, l'écart n'est plus que de 0,004 en politique. h1 au lot
+  ~85 000 vaut i2 au lot 100 000, avec 0,77 fois les paramètres et ~0,55 fois le calcul.
+- Meilleur réseau (`best.py`) : le dernier, lot 150 000 ; critère de la phase 2 atteint en tout et à
+  chaque taille (politique 1,154 contre 1,179 pour c130 ; valeur 1,014 contre 1,032 ; précision
+  58,3 % contre 60,6 %).
+- **Parité des politiques seules** (`plan:net=lab9/runs/h1/h1-150000.bin` contre c130 à n = 1, 920
+  donnes, graine 82001, `runs/h1/parity-150000.tsv`) : **+1,9 ± 1,5 points** (2 j. +3,4, 3 j. +1,0,
+  4 j. +0,2, 5 j. +3,1) ; apparié avec i2 : +1,5 ± 2,0 (indécis), avec s1 : +6,0 ± 2,0. 9,6 ms par
+  décision (i2 : 20,8), processeur partagé avec l'apprentissage de h2.
