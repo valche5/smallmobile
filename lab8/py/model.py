@@ -118,7 +118,9 @@ class Attn(nn.Module):
         q = self.q(x).view(B, Tq, h, d // h).transpose(1, 2)
         k = self.k(mem).view(B, Tk, h, d // h).transpose(1, 2)
         v = self.v(mem).view(B, Tk, h, d // h).transpose(1, 2)
-        out = F.scaled_dot_product_attention(q, k, v, attn_mask=bias)
+        # le biais au type de q (bf16 à l'apprentissage) : sinon PyTorch prend le chemin lent (`math`)
+        # au lieu de l'attention efficace (1,6 ms au lieu de 2,6 par couche, avant et arrière)
+        out = F.scaled_dot_product_attention(q, k, v, attn_mask=bias.to(q.dtype))
         return self.o(out.transpose(1, 2).reshape(B, Tq, d))
 
 
@@ -214,11 +216,14 @@ class Net(nn.Module):
         # par lot prenait 62 % du temps de l'apprentissage. Un produit par position (`bmm`) : le
         # gradient de la table en est un aussi, au lieu d'un seul produit de 10 × 48 sur 921 600
         # termes, très lent. En f32 : les mêmes valeurs qu'une lecture.
+        # Calculé transposé, (B, L·H, T·T) : la dernière dimension de chaque biais reste contiguë, ce
+        # que demande l'attention efficace (sinon PyTorch prend le chemin lent, `math`).
         with torch.autocast(dev.type, enabled=False):
-            table = torch.cat([layer.rel.weight for layer in self.layers], 1)  # (R, L·H)
+            table = torch.cat([layer.rel.weight for layer in self.layers], 1).t()  # (L·H, R)
             onehot = F.one_hot(rel, RELATIONS).float().view(B, -1, RELATIONS)  # (B, T·T, R)
-            biases = torch.bmm(onehot, table.expand(B, *table.shape))  # (B, T·T, L·H)
-        biases = biases.view(*rel.shape, len(self.layers), -1).permute(3, 0, 4, 1, 2)  # (L, B, H, T, T)
+            biases = torch.bmm(table.expand(B, *table.shape), onehot.transpose(1, 2))  # (B, L·H, T·T)
+        T = rel.shape[1]
+        biases = biases.view(B, len(self.layers), -1, T, T).transpose(0, 1)  # (L, B, H, T, T)
         for layer, rel_bias in zip(self.layers, biases):
             bias = rel_bias + key_mask  # (B, H, T, T)
             a = layer.ln1(x)
