@@ -268,6 +268,25 @@ politique 1,179, valeur 1,032, précision 60,6 %) :
 5 j. +0,2) ; 22,7 ms par décision (p95 62,5 ms, décodeur sur le processeur), 206 s. Dans ±2 points :
 le transformer joue aussi bien que le réseau de c130, sans recherche ni l'un ni l'autre.
 
+## Phase 5 : la recherche sur plans contre c130 (27 octobre, protocole)
+
+920 donnes, graine 82002, c130 à n = 400 (processeur pour lab8, GPU pour lab7 ; mêmes donnes) :
+
+| Joueur | Score | 2 j. | 3 j. | 4 j. | 5 j. | Temps par décision |
+| --- | --- | --- | --- | --- | --- | --- |
+| `plans:net=i1-060000,gpu=1` (k = 16, m = 4) | **+0,4 ± 1,5** | +2,4 | −3,4 | +1,2 | +1,3 | 131 ms (p95 516 ms) |
+| lab7, `az:c130,n=400,roll=1,mix=0.5` | **+9,7 ± 1,5** | +6,8 | +8,8 | +13,2 | +9,9 | 5 104 ms (p95 20 106 ms) |
+
+- Différence appariée lab8 − lab7 : **−9,3 ± 2,2 points** (2 j. −4,5, 3 j. −12,2, 4 j. −12,0, 5 j.
+  −8,6). Critère de la phase 5 non atteint.
+- À temps très inégal : lab7 pense 39 fois plus longtemps. La recherche sur plans à 131 ms rejoint
+  c130 à n = 400 (lui-même nettement au-dessus de sa politique seule, à parité avec la nôtre) : ce
+  que la recherche ajoute vaut à peu près 400 simulations de c130.
+- Temps de la recherche (tous fils) : lectures 8 543 s (39,6 millions de positions), pas du décodeur
+  11 210 s (129 millions), règles 164 s. Durée 4 231 s (c130 sur le processeur en compte la plus
+  grande part).
+- Fichiers : `lab8/runs/i1/phase5-060000.tsv`, `lab8/runs/i1/phase5-lab7.tsv`.
+
 Contrôles en cours de route (le décodeur seul contre le coup préféré du réseau de c130, `plan:` contre
 `az:…,n=1`, graine 9, hors protocole) :
 - lot 5 000, 40 donnes : −26,4 points. Trace d'une partie (`LAB8_TRACE=1`) : déclin un tour sur deux,
