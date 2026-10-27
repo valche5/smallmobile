@@ -230,9 +230,9 @@ Mesures GPU libre, aussitôt après :
 - Puis la phase 5 : `plans:net=…` contre c130 à n = 400 (sur le processeur, pour ne pas partager le
   GPU), 920 donnes, graine 82002.
 
-## Phase 2 : en cours (nuit du 27 octobre)
+## Phase 2 : l'apprentissage (nuit du 27 octobre)
 
-Lancée à 0 h 30 (`lab8/runs/i1`, 2 500 plans/s, ~4 h). Validations (plans mis de côté ; c130 seul :
+De 0 h 30 à 4 h 05 (`lab8/runs/i1`, 2 500 plans/s). Validations (plans mis de côté ; c130 seul :
 politique 1,179, valeur 1,032, précision 60,6 %) :
 
 | Lots | Politique | Valeur | Précision |
@@ -241,6 +241,32 @@ politique 1,179, valeur 1,032, précision 60,6 %) :
 | 10 000 | 1,328 | 1,071 | 50,8 % |
 | 15 000 | 1,270 | 1,054 | 53,8 % |
 | 20 000 | 1,240 | 1,045 | 55,1 % |
+| 30 000 | 1,211 | 1,035 | 56,3 % |
+| 40 000 | 1,195 | 1,030 | 56,9 % |
+| 50 000 | 1,186 | **1,027** | 57,2 % |
+| 60 000 | 1,180 | 1,029 | 57,5 % |
+| 70 000 | 1,178 | 1,039 | 57,5 % |
+| 85 000 | **1,176** | 1,077 | 57,5 % |
+| 100 000 | 1,176 | 1,132 | 57,5 % |
+| 125 000 | 1,177 | 1,234 | 57,3 % |
+
+- **La valeur apprend par cœur** à partir du lot 50 000 (1,027, puis 1,234 au dernier lot) : 100 000
+  parties ne donnent que 100 000 vainqueurs, répétés sur ~80 plans chacune et vus 4 fois. La
+  politique, elle, progresse jusqu'au lot 85 000 et passe sous celle de c130 dès le lot 70 000 (son
+  entropie croisée est meilleure, sa précision moins bonne : 57,5 % contre 60,6 %).
+- Meilleur réseau selon la règle fixée (`best.py`, somme pol + val) : **lot 60 000**. Critère de la
+  phase 2 manqué de peu : politique 1,1803 contre 1,1788 (en tout, 2, 4 et 5 j.) ; valeur meilleure
+  qu'à c130 en tout, à 2, 3 et 5 j., moins bonne à 4 j. (1,215 contre 1,203). Aucun lot ne réunit
+  les deux : la valeur est au mieux quand la politique n'a pas fini.
+- Remèdes possibles (non faits) : plus de parties, moins de poids pour la valeur, ou la valeur
+  apprise sur une partie seulement des plans de chaque partie (AlphaGo : une position par partie).
+
+## Parité des politiques seules (27 octobre, protocole)
+
+`plan:net=lab8/runs/i1/i1-060000.bin` contre `az:net=lab7/nets/c130.bin,n=1`, 920 donnes, graine
+82001 (`lab8/runs/i1/parity-060000.tsv`) : **−0,1 ± 1,5 point** (2 j. −0,7, 3 j. −0,9, 4 j. +1,0,
+5 j. +0,2) ; 22,7 ms par décision (p95 62,5 ms, décodeur sur le processeur), 206 s. Dans ±2 points :
+le transformer joue aussi bien que le réseau de c130, sans recherche ni l'un ni l'autre.
 
 Contrôles en cours de route (le décodeur seul contre le coup préféré du réseau de c130, `plan:` contre
 `az:…,n=1`, graine 9, hors protocole) :
@@ -254,6 +280,11 @@ Contrôles en cours de route (le décodeur seul contre le coup préféré du ré
 - lot 20 000, 80 donnes : −8,6 points (2 j. 35,0 %, 3 j. 25,8 %, 4 j. 16,9 %, 5 j. 13,0 %).
 - La recherche sur plans (GPU) contre c130 à n = 400 sur le processeur : la chaîne complète tourne
   (2 donnes de contrôle, 167 ms par décision pendant l'apprentissage).
+- lot 50 000, 200 donnes : **+0,6 point** (2 j. 50,0 %, 3 j. 32,7 %, 4 j. 25,5 %, 5 j. 21,8 %).
+- La recherche sur plans au lot 50 000 (`gpu=1,k=16,m=4`) contre c130 à n = 400, 80 donnes :
+  **−2,2 ± 4,3 points** (2 j. +0,0, 3 j. −3,3, 4 j. −9,4, 5 j. +4,0), 449 ms par décision (GPU
+  partagé avec l'apprentissage). Note : `labtools/score.py` donne tous les rôles par défaut ; le
+  joueur étudié est `--role 0`.
 
 Reste, pour les phases suivantes : la recherche sur plans et la recherche coup par coup du nouveau
 réseau (phases 4 et 5), le moteur GPU du transformer (phase 3).
