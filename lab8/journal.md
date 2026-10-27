@@ -287,6 +287,22 @@ le transformer joue aussi bien que le réseau de c130, sans recherche ni l'un ni
   grande part).
 - Fichiers : `lab8/runs/i1/phase5-060000.tsv`, `lab8/runs/i1/phase5-lab7.tsv`.
 
+### Plus de calcul pour la recherche sur plans (hors protocole)
+
+Les 200 premières donnes de la graine 82002 (50 par taille), appariées avec les arènes ci-dessus. Les
+places et caches du GPU ont dû être agrandis (16 384 et 12 288 : 6 Go) ; moins de fils pour qu'ils
+suffisent.
+
+| Recherche | Contre c130 | Contre k = 16, m = 4 | Contre lab7 | Temps par décision |
+| --- | --- | --- | --- | --- |
+| k = 32, m = 16, 12 fils | +4,2 ± 3,6 | +2,8 ± 4,5 | −2,7 ± 4,7 | 743 ms (p95 2,8 s) |
+| k = 32, m = 32, 8 fils | +4,6 ± 3,2 | (contre m = 16 : +0,5 ± 4,3) | −2,2 ± 4,2 | 1 159 ms (p95 4,4 s) |
+
+La recherche profite du calcul : à 0,7 s par décision, l'écart avec lab7 (5,1 s) n'est plus décidé.
+Doubler les mondes au-delà de 16 n'apporte plus rien de visible : la recherche plafonne à un tour
+(candidats, puis le plan le plus probable de chacun) ; ce qui reste à gagner est plutôt dans la
+valeur (apprise par cœur) et dans les candidats.
+
 Contrôles en cours de route (le décodeur seul contre le coup préféré du réseau de c130, `plan:` contre
 `az:…,n=1`, graine 9, hors protocole) :
 - lot 5 000, 40 donnes : −26,4 points. Trace d'une partie (`LAB8_TRACE=1`) : déclin un tour sur deux,
