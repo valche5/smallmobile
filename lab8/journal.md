@@ -403,3 +403,55 @@ Pistes, dans l'ordre :
 3. La recherche : plus de candidats, modifications locales du meilleur plan (`mods`), et un second
    tour de profondeur, plutôt que plus de mondes.
 4. Le `gemm` du GPU (×5 à gagner sur les lectures), puis la phase 6 (selfplay).
+
+## Optimisation du transformer (27 octobre, après-midi)
+
+Demandé : accélérer l'apprentissage et le jeu du nouveau réseau, en regardant les bibliothèques HIP
+d'AMD. Mesures d'abord, GPU libre, réseau i2-100000.
+
+### Ce que coûte une lecture, et où en est le moteur Vulkan
+
+- Calcul par position lue : c130 ~46 MFLOP (48 régions × 7 couches de 128, deux produits par couche),
+  le transformer ~620 MFLOP (60 jetons × 6 couches de 256, plus les clés et valeurs du décodeur) :
+  **13 fois plus**, par la taille choisie.
+- Moteur Vulkan, chemin de la recherche (`bench-gpu --slots true`, sorties gardées sur le GPU) : 22 800
+  positions/s en lots de 64, **31 700 en lots de 256**, 22 800 en lots de 1 024 (`gemm` 72-76 %,
+  `attention` 12-15 %, `layernorm` 6-7 %). Les 6 000 positions/s notées plus haut comptaient la copie
+  des 172 ko de sorties de chaque position vers le processeur (`encode`), que la recherche ne fait pas.
+  Soit ~20 TFLOPS utiles, contre ~34 pour c130 (745 000 positions/s × 46 MFLOP) : 1,7 fois moins
+  efficace, pas 9.
+- hipBLASLt (par `torch.matmul`, bf16) sur nos formes, lots de 256 positions (15 360 lignes) : 28 à 47
+  TFLOPS selon le produit, ~37 en moyenne sur une couche ; notre `gemm` en fait ~27. L'encodeur
+  entier en PyTorch : 12 900 positions/s (lots de 256), 29 500 compilé (`torch.compile`) ; 16 300 et
+  37 900 en lots de 1 024. **Un moteur HIP gagnerait au plus ~1,3 fois** : non fait.
+- Dans une arène (`plans:…,gpu=1`, k = 16, m = 4, 20 donnes contre c130 à n = 1, `LAB8_GPU_PROFILE=1`,
+  le profil sépare maintenant lectures et pas du décodeur) : GPU occupé 92 % du temps ; lectures 74 %
+  (25 600 positions/s ; `gemm` 24 s sur 32,5), pas du décodeur 26 % (248 000 pas/s) ; 253 lectures et
+  853 pas par décision. La recherche est bornée par le calcul de l'encodeur.
+
+### L'apprentissage : 2 550 → 7 400 plans/s
+
+`torch.profiler` sur un lot (256 plans) : le calcul seul prenait 97,9 ms, la préparation des lots
+(5,8 ms par fil, 4 fils) et l'envoi (16 ms) se recouvrent avec lui.
+
+| Changement | Calcul d'un lot | Boucle réelle (`--bench 300`) |
+| --- | --- | --- |
+| Départ | 97,9 ms | 2 550 plans/s |
+| Biais des relations par un produit avec le one-hot (`bmm` par position) au lieu de `nn.Embedding` : le gradient d'une table de 10 lignes lue 921 600 fois par lot prenait **62 %** du GPU | 42,5 ms | 5 600 plans/s |
+| Attention efficace au lieu du chemin `math` : biais au type des activations (bf16) et dernière dimension contiguë (biais calculés transposés) | 33,8 ms | **7 400 plans/s** |
+
+Sorties identiques au bit près en f32 (`check.py` sur `tests/fixtures`, test Rust `net`). Un
+apprentissage comme i2 (150 000 lots) passe de 4 h 15 à ~1 h 30.
+
+Essayé, abandonné : `torch.compile`. Le réseau entier, ou l'encodeur seul dans la vraie boucle, fait
+une faute mémoire du GPU dans un produit bf16 avec biais de hipBLASLt (ROCm 7.14), au bout de quelques
+dizaines à centaines de lots ; le décodeur seul compilé est plus lent (formes variables). Reste dans
+un lot : produits ~30 %, conversions bf16 15 %, attention arrière 11 %, normalisations 9 % ; aller
+plus loin demande de fusionner des kernels.
+
+### Ce qu'il reste
+
+- Le levier du jeu est le calcul de l'encodeur : un réseau plus petit (128 × 4 : ~6 fois moins de
+  calcul par position) appris sur les mêmes 200 000 parties, s'il garde la parité ; maintenant ~1 h
+  d'apprentissage.
+- Le `gemm` Vulkan au niveau de hipBLASLt : ~1,2 fois sur la recherche entière.

@@ -91,7 +91,8 @@ fn vk_err(what: &str) -> impl Fn(vk::Result) -> String + '_ {
 }
 
 /// Durée cumulée (ns) et nombre d'appels de chaque sorte de kernel (`LAB8_GPU_PROFILE`).
-type KernelTimes = [(f64, u64); 12];
+/// Temps et nombre de passages de chaque kernel : les 12 des lectures, puis les 12 des pas du décodeur.
+type KernelTimes = [(f64, u64); 24];
 
 /// Des positions à lire : encodage et distances de la carte.
 type Items = Vec<(Encoded, Vec<u8>)>;
@@ -599,7 +600,7 @@ impl Encoder {
                         None,
                     )
                     .map_err(vk_err("horodatages"))?;
-                e.profile = Some((pool, period, Mutex::new([(0.0, 0); 12])));
+                e.profile = Some((pool, period, Mutex::new([(0.0, 0); 24])));
             }
             Ok(e)
         }
@@ -948,7 +949,7 @@ impl Encoder {
             self.record(b, false)?;
             self.submit_and_wait()?;
             let t1 = std::time::Instant::now();
-            self.collect_profile()?;
+            self.collect_profile(false)?;
             let d = self.weights.d;
             let mut out = Vec::with_capacity(b);
             for (i, (e, _)) in items.iter().enumerate() {
@@ -1003,7 +1004,8 @@ impl Encoder {
     }
 
     /// Ajoute les horodatages du dernier calcul aux durées par kernel (`LAB8_GPU_PROFILE`).
-    unsafe fn collect_profile(&self) -> Result<(), String> {
+    /// `steps` : le travail mesuré était des pas du décodeur (sinon des lectures).
+    unsafe fn collect_profile(&self, steps: bool) -> Result<(), String> {
         let Some((pool, period, totals)) = &self.profile else { return Ok(()) };
         let marks = self.marks.lock().expect("horodatages");
         let mut stamps = vec![0u64; marks.len() + 1];
@@ -1020,6 +1022,7 @@ impl Encoder {
         }
         let mut totals = totals.lock().expect("horodatages");
         for (i, &k) in marks.iter().enumerate() {
+            let k = k + if steps { 12 } else { 0 };
             totals[k].0 += (stamps[i + 1] - stamps[i]) as f64 * period;
             totals[k].1 += 1;
         }
@@ -1054,7 +1057,7 @@ impl Encoder {
                 self.write_inputs(chunk, Some(s));
                 self.record(chunk.len(), true)?;
                 self.submit_and_wait()?;
-                self.collect_profile()?;
+                self.collect_profile(false)?;
                 for i in 0..chunk.len() {
                     let f = std::slice::from_raw_parts(self.outf.add(i * 20), 20);
                     let mut heads = [0.0; 20];
@@ -1086,7 +1089,7 @@ impl Encoder {
                 }
                 self.record_steps(chunk.len())?;
                 self.submit_and_wait()?;
-                self.collect_profile()?;
+                self.collect_profile(true)?;
                 for i in 0..chunk.len() {
                     out.push(std::slice::from_raw_parts(self.logits.add(i * KEYS), KEYS).to_vec());
                 }
@@ -1171,14 +1174,18 @@ impl Encoder {
             "dec_cross",
             "dec_out",
         ];
-        Some(
-            names
+        // les kernels jamais passés sont omis ; les lectures, puis les pas du décodeur
+        let part = |times: &[(f64, u64)], what: &str| {
+            let sum: f64 = times.iter().map(|t| t.0).sum();
+            let each: Vec<String> = names
                 .iter()
-                .zip(totals.iter())
-                .map(|(n, t)| format!("{n} {:.1} % ({:.2} ms)", 100.0 * t.0 / all, t.0 / 1e6))
-                .collect::<Vec<_>>()
-                .join(", "),
-        )
+                .zip(times)
+                .filter(|(_, t)| t.1 > 0)
+                .map(|(n, t)| format!("{n} {:.1} % ({:.0} ms)", 100.0 * t.0 / all, t.0 / 1e6))
+                .collect();
+            format!("{what} {:.0} ms : {}", sum / 1e6, each.join(", "))
+        };
+        Some(format!("{} ; {}", part(&totals[..12], "lectures"), part(&totals[12..], "pas du décodeur")))
     }
 }
 

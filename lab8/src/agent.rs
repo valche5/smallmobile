@@ -168,6 +168,16 @@ impl Plans {
     }
 }
 
+/// `LAB8_GPU_PROFILE` : le temps du GPU par kernel, à la fin de l'arène.
+#[cfg(feature = "vulkan")]
+impl Drop for Plans {
+    fn drop(&mut self) {
+        if let Some(p) = self.gpu.as_ref().and_then(|(gpu, _)| gpu.0.encoder.profile()) {
+            eprintln!("GPU de {} : {p}", self.label);
+        }
+    }
+}
+
 impl Agent for Plans {
     fn name(&self) -> String {
         format!("plans({})", self.label)
