@@ -209,8 +209,18 @@ class Net(nn.Module):
         x = x * valid[..., None]
         rel = relations(node, dist, region_ok)
         key_mask = torch.where(valid, 0.0, NEG)[:, None, None, :]  # (B, 1, 1, T)
-        for layer in self.layers:
-            bias = layer.rel(rel).permute(0, 3, 1, 2) + key_mask  # (B, H, T, T)
+        # biais des relations de toutes les couches d'un coup, par un produit avec le one-hot des
+        # relations plutôt que `layer.rel(rel)` : le gradient d'une table de 10 lignes lue 921 600 fois
+        # par lot prenait 62 % du temps de l'apprentissage. Un produit par position (`bmm`) : le
+        # gradient de la table en est un aussi, au lieu d'un seul produit de 10 × 48 sur 921 600
+        # termes, très lent. En f32 : les mêmes valeurs qu'une lecture.
+        with torch.autocast(dev.type, enabled=False):
+            table = torch.cat([layer.rel.weight for layer in self.layers], 1)  # (R, L·H)
+            onehot = F.one_hot(rel, RELATIONS).float().view(B, -1, RELATIONS)  # (B, T·T, R)
+            biases = torch.bmm(onehot, table.expand(B, *table.shape))  # (B, T·T, L·H)
+        biases = biases.view(*rel.shape, len(self.layers), -1).permute(3, 0, 4, 1, 2)  # (L, B, H, T, T)
+        for layer, rel_bias in zip(self.layers, biases):
+            bias = rel_bias + key_mask  # (B, H, T, T)
             a = layer.ln1(x)
             x = x + layer.attn(a, a, bias)
             x = x + layer.mlp(layer.ln2(x))

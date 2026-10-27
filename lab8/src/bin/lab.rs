@@ -451,14 +451,22 @@ fn bench_gpu_cmd(opts: &HashMap<String, String>) {
     });
     eprintln!("{}", gpu.describe());
     let positions = random_positions(1024, 5);
-    for count in [16usize, 64, 256, 1024] {
+    // `--slots true` : les sorties restent dans la mémoire du GPU, comme dans la recherche ; sinon elles
+    // reviennent au processeur (172 ko par position)
+    let slots = get(opts, "slots", false);
+    let counts: Vec<usize> = opts
+        .get("counts")
+        .map_or(vec![16, 64, 256, 1024], |c| c.split(',').map(|x| x.parse().expect("--counts")).collect());
+    let ids: Vec<u32> = (0..1024).map(|_| gpu.alloc_slot().expect("place")).collect();
+    for count in counts {
         let items: Vec<(&smallmobile_lab8::encode::Encoded, &[u8])> =
             positions[..count].iter().map(|(e, d)| (e, &d[..])).collect();
-        gpu.encode(&items).expect("GPU");
+        let once = || if slots { gpu.read_slots(&items, &ids[..count]).expect("GPU").len() } else { gpu.encode(&items).expect("GPU").len() };
+        once();
         let start = Instant::now();
         let mut done = 0;
         while start.elapsed().as_secs_f64() < seconds {
-            done += gpu.encode(&items).expect("GPU").len();
+            done += once();
         }
         let secs = start.elapsed().as_secs_f64();
         println!(
