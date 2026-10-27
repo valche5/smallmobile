@@ -3,7 +3,7 @@
 //! Le calcul de `net::Net::encode`, en kernels successifs sur des lots de positions
 //! (`lab9/shaders`) : entrées des jetons (`embed`), produits par les poids (`gemm`, bf16 sur les
 //! matrices coopératives, sommes en f32), positions et jetons absents (`fixup`), `layernorm`,
-//! `attention`, `pool`, et les sorties pour le processeur (`pack`) : la sortie de l'encodeur pour les
+//! `attention` (blocs T), `neighbours` (moyenne des voisines, blocs R), `pool`, et les sorties pour le processeur (`pack`) : la sortie de l'encodeur pour les
 //! régions, `dec_reg`, les clés et valeurs de l'attention croisée du décodeur en bf16, les têtes de
 //! valeur en f32. Le décodeur reste sur le processeur (`Net::step`, 0,3 ms par pas).
 //!
@@ -26,7 +26,8 @@ use crate::encode::{Encoded, GLOBAL, NODE, REGIONS};
 const POS_BYTES: usize = REGIONS * NODE + GLOBAL + REGIONS * REGIONS + 4;
 const _: () = assert!(POS_BYTES.is_multiple_of(4) && TOKENS == 60);
 
-const SPV: [&[u8]; 12] = [
+const KERNELS: usize = 13;
+const SPV: [&[u8]; KERNELS] = [
     include_bytes!(concat!(env!("OUT_DIR"), "/embed.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/gemm.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/fixup.spv")),
@@ -39,6 +40,7 @@ const SPV: [&[u8]; 12] = [
     include_bytes!(concat!(env!("OUT_DIR"), "/dec_self.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/dec_cross.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/dec_out.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/neighbours.spv")),
 ];
 const EMBED: usize = 0;
 const GEMM: usize = 1;
@@ -52,6 +54,7 @@ const DEC_IN: usize = 8;
 const DEC_SELF: usize = 9;
 const DEC_CROSS: usize = 10;
 const DEC_OUT: usize = 11;
+const NEIGHBOURS: usize = 12;
 /// Places de lecture et caches de voie dans la mémoire du GPU, voies au plus par pas, pas au plus par
 /// plan (`slots.glsl`). Réseau 256 × 6 : 2,8 Go de places, 3,2 Go de caches ; assez pour une recherche
 /// de 32 candidats dans 16 mondes sur une douzaine de fils.
@@ -91,8 +94,8 @@ fn vk_err(what: &str) -> impl Fn(vk::Result) -> String + '_ {
 }
 
 /// Durée cumulée (ns) et nombre d'appels de chaque sorte de kernel (`LAB9_GPU_PROFILE`).
-/// Temps et nombre de passages de chaque kernel : les 12 des lectures, puis les 12 des pas du décodeur.
-type KernelTimes = [(f64, u64); 24];
+/// Temps et nombre de passages de chaque kernel : ceux des lectures, puis ceux des pas du décodeur.
+type KernelTimes = [(f64, u64); 2 * KERNELS];
 
 /// Des positions à lire : encodage et distances de la carte.
 type Items = Vec<(Encoded, Vec<u8>)>;
@@ -111,6 +114,19 @@ struct Lin {
 struct Norm {
     g: u32,
     b: u32,
+}
+
+/// Un bloc de l'encodeur : T (attention) ou R (graphe).
+enum Block {
+    T(Layer),
+    R(Conv),
+}
+
+struct Conv {
+    ln1: Norm,
+    conv1: Lin,
+    ln2: Norm,
+    conv2: Lin,
 }
 
 struct Layer {
@@ -135,7 +151,7 @@ struct Weights {
     player_index: u32,
     player_pos: u32,
     market_pos: u32,
-    layers: Vec<Layer>,
+    layers: Vec<Block>,
     enc_ln: Norm,
     val: (Lin, Lin),
     next: (Lin, Lin),
@@ -229,11 +245,21 @@ impl Weights {
         w.player_pos = w.push(&v);
         let v = r.take("market_pos.weight")?;
         w.market_pos = w.push(&v);
+        // le nombre de têtes : écrit par lab9, lu dans les biais des relations pour lab8
+        if r.has("heads") {
+            w.heads = r.take("heads")?[0] as usize;
+        }
         let mut i = 0;
         while r.has(&format!("layers.{i}.ln1.weight")) {
             let p = format!("layers.{i}");
             if r.has(&format!("{p}.conv1.weight")) {
-                return Err("moteur GPU : blocs R pas encore écrits (phase 3)".into());
+                let ln1 = w.norm(&mut r, &format!("{p}.ln1"))?;
+                let conv1 = w.lin(&mut r, &[&format!("{p}.conv1")], 3 * d)?;
+                let ln2 = w.norm(&mut r, &format!("{p}.ln2"))?;
+                let conv2 = w.lin(&mut r, &[&format!("{p}.conv2")], 2 * d)?;
+                w.layers.push(Block::R(Conv { ln1, conv1, ln2, conv2 }));
+                i += 1;
+                continue;
             }
             let ln1 = w.norm(&mut r, &format!("{p}.ln1"))?;
             let qkv = w.lin(&mut r, &[&format!("{p}.attn.q"), &format!("{p}.attn.k"), &format!("{p}.attn.v")], d)?;
@@ -244,7 +270,7 @@ impl Weights {
             let ln2 = w.norm(&mut r, &format!("{p}.ln2"))?;
             let a = w.lin(&mut r, &[&format!("{p}.mlp.a")], d)?;
             let b = w.lin(&mut r, &[&format!("{p}.mlp.b")], 4 * d)?;
-            w.layers.push(Layer { ln1, qkv, o, rel, ln2, a, b });
+            w.layers.push(Block::T(Layer { ln1, qkv, o, rel, ln2, a, b }));
             i += 1;
         }
         w.enc_ln = w.norm(&mut r, "enc_ln")?;
@@ -380,6 +406,8 @@ struct Acts {
     att16: u32,
     h16: u32,
     o16: u32,
+    /// Entrées des produits des blocs R (`neighbours`), 3d par ligne.
+    cat16: u32,
     dn16: u32,
     datt16: u32,
     dh16: u32,
@@ -421,6 +449,7 @@ impl Acts {
             att16: 0,
             h16: 0,
             o16: 0,
+            cat16: 0,
             dn16: 0,
             datt16: 0,
             dh16: 0,
@@ -438,6 +467,7 @@ impl Acts {
         acts.att16 = take16(rows, d);
         acts.h16 = take16(rows, 4 * d);
         acts.o16 = take16(rows, d);
+        acts.cat16 = take16(rows, 3 * d);
         acts.dn16 = take16(MAX_LANES, d);
         acts.datt16 = take16(MAX_LANES, d);
         acts.dh16 = take16(MAX_LANES, 4 * d);
@@ -603,7 +633,7 @@ impl Encoder {
                         None,
                     )
                     .map_err(vk_err("horodatages"))?;
-                e.profile = Some((pool, period, Mutex::new([(0.0, 0); 24])));
+                e.profile = Some((pool, period, Mutex::new([(0.0, 0); 2 * KERNELS])));
             }
             Ok(e)
         }
@@ -908,7 +938,20 @@ impl Encoder {
             self.dispatch(FIXUP, &[a.x, d, w.player_pos, w.market_pos], (bu, 1));
             let rows = b * TOKENS;
             let norm_groups = (rows.div_ceil(8) as u32, 1);
-            for l in &w.layers {
+            for block in &w.layers {
+                let l = match block {
+                    Block::T(l) => l,
+                    Block::R(c) => {
+                        // a = ln1 x ; z = gelu(conv1 [a, voisines, partie]) ; x += conv2 [ln2 z, voisines]
+                        self.dispatch(LAYERNORM, &[rows as u32, d, a.x, 0, c.ln1.g, c.ln1.b, 2, a.n16], norm_groups);
+                        self.dispatch(NEIGHBOURS, &[a.n16, a.cat16, d, 3], (bu, 1));
+                        self.gemm(rows, c.conv1, (a.cat16, 3 * d, one, 0), (a.o, d, one, 0), 8 | 1);
+                        self.dispatch(LAYERNORM, &[rows as u32, d, a.o, 0, c.ln2.g, c.ln2.b, 2, a.n16], norm_groups);
+                        self.dispatch(NEIGHBOURS, &[a.n16, a.cat16, d, 2], (bu, 1));
+                        self.gemm(rows, c.conv2, (a.cat16, 2 * d, one, 0), (a.x, d, one, 0), 8 | 4);
+                        continue;
+                    }
+                };
                 self.dispatch(LAYERNORM, &[rows as u32, d, a.x, 0, l.ln1.g, l.ln1.b, 2, a.n16], norm_groups);
                 self.gemm(rows, l.qkv, (a.n16, d, one, 0), (a.qkv, 3 * d, one, 0), 8);
                 self.dispatch(ATTENTION, &[a.qkv, a.att16, d, w.heads as u32, l.rel], (bu, w.heads as u32));
@@ -1025,7 +1068,7 @@ impl Encoder {
         }
         let mut totals = totals.lock().expect("horodatages");
         for (i, &k) in marks.iter().enumerate() {
-            let k = k + if steps { 12 } else { 0 };
+            let k = k + if steps { KERNELS } else { 0 };
             totals[k].0 += (stamps[i + 1] - stamps[i]) as f64 * period;
             totals[k].1 += 1;
         }
@@ -1176,6 +1219,7 @@ impl Encoder {
             "dec_self",
             "dec_cross",
             "dec_out",
+            "neighbours",
         ];
         // les kernels jamais passés sont omis ; les lectures, puis les pas du décodeur
         let part = |times: &[(f64, u64)], what: &str| {
@@ -1188,7 +1232,7 @@ impl Encoder {
                 .collect();
             format!("{what} {:.0} ms : {}", sum / 1e6, each.join(", "))
         };
-        Some(format!("{} ; {}", part(&totals[..12], "lectures"), part(&totals[12..], "pas du décodeur")))
+        Some(format!("{} ; {}", part(&totals[..KERNELS], "lectures"), part(&totals[KERNELS..], "pas du décodeur")))
     }
 }
 

@@ -43,3 +43,19 @@ plans).
   s1.
 - Puis `best.py`, et la parité des politiques seules des deux meilleurs (920 donnes, graine 82001),
   appariée avec i2 (`lab8/runs/i2/parity-100000.tsv`) et s1 (`lab8/runs/s1/parity-075000.tsv`).
+
+## Phase 3 : le bloc R en Vulkan (27 octobre, pendant l'apprentissage de h1)
+
+`shaders/neighbours.comp` : pour chaque jeton, l'entrée d'un produit du bloc R, `[a, moyenne des
+voisines, a de la partie]` ou `[a, moyenne des voisines]` en bf16 (voisines lues dans les distances,
+en bits dans la mémoire partagée) ; le bloc : `layernorm`, `neighbours`, `gemm` (gelu), `layernorm`,
+`neighbours`, `gemm` (résiduel). `check-gpu`, réseaux hybrides au hasard (sorties au hasard, σ 0,05),
+200 positions, GPU partagé avec l'apprentissage :
+
+| Réseau | Têtes | Régions | `dec_reg` | Attention croisée | Logits | Victoires (décodeur sur GPU) |
+| --- | --- | --- | --- | --- | --- | --- |
+| RRTRRT 256 × 6 | 0,011 | 0,037 | 0,031 | 0,033 | 0,024 | 0,0027 |
+| RRTRRT 128 × 6 | 0,010 | 0,039 | 0,028 | 0,030 | 0,018 | 0,0017 |
+| lab8, TTTTTT 256 × 6 (même mesure) | 0,008 | 0,031 | — | — | 0,023 | — |
+
+Mêmes écarts que le moteur de lab8 (l'arrondi bf16). Vitesse : à mesurer GPU libre.
