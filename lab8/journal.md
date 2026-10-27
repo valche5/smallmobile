@@ -336,3 +336,70 @@ Demandé après la phase 5 : corriger la valeur apprise par cœur, puis refaire 
   (`lab8/runs/i2`).
 - Meilleur réseau par la même règle (`best.py`) ; puis la parité des politiques seules (graine 82001)
   et la phase 5 (graine 82002, k = 16, m = 4, appariée avec `phase5-lab7.tsv` et avec i1).
+
+## i2 : l'apprentissage (27 octobre, 10 h 40 – 13 h 30, arrêté)
+
+Chargement 14 s, 16 139 039 plans, 23,4 Go en mémoire (2,4 Go libres : rien d'autre de lourd en même
+temps), 2 556 plans/s. Arrêté au lot 103 000 sur 150 000 à la demande de l'utilisateur, pour un
+bilan ; l'état du lot 100 000 est gardé (`lab8/runs/i2/state.pt` : la même commande reprend là).
+
+| Lots | i1 politique | i1 valeur | i2 politique | i2 valeur |
+| --- | --- | --- | --- | --- |
+| 50 000 | 1,186 | **1,027** | 1,195 | 1,034 |
+| 60 000 | 1,180 | 1,029 | 1,187 | 1,029 |
+| 70 000 | 1,178 | 1,039 | 1,180 | 1,027 |
+| 80 000 | 1,176 | 1,063 | 1,174 | 1,024 |
+| 90 000 | 1,176 | 1,097 | 1,170 | 1,020 |
+| 100 000 | 1,176 | 1,132 | **1,166** | **1,019** |
+
+- **La valeur n'apprend plus par cœur** : elle baisse encore au lot 100 000 ; sur les plans
+  d'apprentissage 1,001 (lot 103 000), à peine sous la validation.
+- **Critère de la phase 2 atteint au lot 100 000** (`best.py`), en tout et à chaque taille :
+  politique 1,1664 contre 1,1788 (2 j. 1,098 / 1,107 ; 3 j. 1,214 / 1,230 ; 4 j. 1,162 / 1,174 ;
+  5 j. 1,164 / 1,176), valeur 1,0193 contre 1,0318 (2 j. 0,185 / 0,191 ; 3 j. 0,932 / 0,939 ; 4 j.
+  1,191 / 1,203 ; 5 j. 1,317 / 1,337). Précision 58,0 % (c130 60,6 %).
+- Pas encore mesuré en jeu : ni parité des politiques, ni phase 5 avec `i2-100000.bin`.
+
+## Bilan au 27 octobre, 13 h 30
+
+Fait :
+- **La base** (phase 0) : transformer neuf (jetons régions, joueurs, marché, partie ; attention
+  biaisée par les distances), décodeur qui écrit un plan de tour coup par coup, référence Rust égale
+  à PyTorch, forme compacte des parties (33 Go → 8,3 Go pour 100 000 parties).
+- **Les données** (phase 1) : 200 000 parties de c130 à n = 400, 16 millions de plans, ~1 h 35 par
+  100 000 sur le PC.
+- **Le moteur GPU** (phase 3, en partie) : encodeur et décodeur en Vulkan, bf16, mémoire des lectures
+  et caches des voies gardés sur le GPU. Le `gemm` plafonne à ~5 TFLOPS (c130 en Vulkan : ~40) : à
+  reprendre.
+- **L'imitation** : i1 (100 000 parties) joue à parité de c130 sans recherche (−0,1 ± 1,5 point, 920
+  donnes), mais sa valeur apprend par cœur après le lot 50 000. i2 (200 000 parties, victoire finale
+  sur un plan sur quatre) corrige cela et passe le critère de la phase 2 partout.
+- **La recherche sur plans** (phase 5, avec i1) : un tour de profondeur, candidats tirés du
+  décodeur, mondes possibles communs, issues exactes du dé, fins simulées par plans.
+
+Mesures en jeu (contre c130 à n = 400) :
+
+| Joueur | Donnes | Score | Temps par décision |
+| --- | --- | --- | --- |
+| i1, politique seule (contre c130 à n = 1) | 920 | −0,1 ± 1,5 | 23 ms |
+| i1, plans k = 16, m = 4 | 920 | +0,4 ± 1,5 | 131 ms |
+| i1, plans k = 32, m = 16 | 200 | +4,2 ± 3,6 | 743 ms |
+| i1, plans k = 32, m = 32 | 200 | +4,6 ± 3,2 | 1 159 ms |
+| lab7, `n=400,roll=1,mix=0.5` | 920 | **+9,7 ± 1,5** | 5 104 ms |
+
+Ce qu'on en retient :
+- Un transformer neuf, appris en quelques heures sur ce PC, imite c130 aussi bien que son propre
+  réseau ; la cible du vainqueur final, répétée sur tous les plans d'une partie, s'apprend par cœur
+  (même piège qu'AlphaGo) : une position sur quatre et deux fois plus de parties suffisent.
+- La recherche sur plans vaut 400 simulations de c130 en 30 fois moins de temps ; avec plus de
+  calcul elle dépasse c130 de ~4,5 points, mais plafonne vite sur les mondes. Le meilleur joueur
+  reste celui de lab7 (−9,3 ± 2,2 points d'écart apparié à k = 16 ; −2,2 ± 4,2 à k = 32, m = 32,
+  indécis). Phase 5 non atteinte avec i1.
+
+Pistes, dans l'ordre :
+1. Mesurer i2 (`i2-100000.bin`) : parité des politiques (graine 82001), phase 5 (graine 82002),
+   appariées avec i1 et lab7 ; la valeur meilleure doit surtout servir la recherche.
+2. Finir i2 jusqu'au lot 150 000 si la politique y gagne encore (reprise par `--state`).
+3. La recherche : plus de candidats, modifications locales du meilleur plan (`mods`), et un second
+   tour de profondeur, plutôt que plus de mondes.
+4. Le `gemm` du GPU (×5 à gagner sur les lectures), puis la phase 6 (selfplay).
