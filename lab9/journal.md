@@ -84,3 +84,50 @@ Validation (mêmes plans qu'i2) :
   donnes, graine 82001, `runs/h1/parity-150000.tsv`) : **+1,9 ± 1,5 points** (2 j. +3,4, 3 j. +1,0,
   4 j. +0,2, 5 j. +3,1) ; apparié avec i2 : +1,5 ± 2,0 (indécis), avec s1 : +6,0 ± 2,0. 9,6 ms par
   décision (i2 : 20,8), processeur partagé avec l'apprentissage de h2.
+
+## Phase 2 : h2, RRTRRT 128 × 6 (28 octobre)
+
+75 000 lots de 512 en ~50 min (12 000 à 16 000 plans/s, processeur partagé avec la parité de h1).
+
+| Lots | h2 politique | h2 valeur | s1 politique | s1 valeur |
+| --- | --- | --- | --- | --- |
+| 10 000 | 1,294 | 1,086 | 1,321 | 1,087 |
+| 25 000 | 1,224 | 1,046 | 1,229 | 1,051 |
+| 50 000 | 1,194 | 1,031 | 1,198 | 1,035 |
+| 75 000 | **1,186** | **1,027** | 1,189 | 1,031 |
+
+- h2 est meilleur que s1 à chaque lot, de peu ; **il n'atteint pas i2** (1,166 / 1,019) : réponse
+  négative à la question principale de la phase 2. Critère de la phase 2 non atteint (politique sous
+  celle de c130, valeur au-dessus).
+- Parité des politiques seules (`runs/h2/parity-075000.tsv`) : **−2,2 ± 1,5 points** (2 j. −1,6,
+  3 j. −5,7, 4 j. −0,8, 5 j. −0,9) ; apparié avec s1 : +1,8 ± 2,0 (indécis), avec i2 : −2,7 ± 2,0.
+  3,1 ms par décision (s1 : 3,9).
+
+## Temps de calcul : les cinq réseaux (28 octobre)
+
+Demandé par l'utilisateur. **La carte ne tourne pas à pleine puissance sur ces calculs** (100 à 127 W,
+1,7 à 2,3 GHz, pour ~300 W et ~3 GHz au plus) et sa fréquence varie d'un lancement à l'autre : s1
+en lots de 256 a donné 109 200 lectures/s le 27 octobre, 59 000 à 83 000 aujourd'hui (le binaire de
+lab8 de même). Les débits du GPU ci-dessous sont des médianes de trois tours alternés, dans la même
+séance ; ne pas les comparer aux mesures d'autres séances.
+
+| Réseau | Paramètres | Processeur, un cœur (ms par lecture) | GPU, lots de 256 (lectures/s) | GPU, lots de 1 024 | En partie (ms par décision) | Validation (pol / val) | Politique seule contre c130 à n = 1 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| c130 (graphe 128 × 7) | 1,1 M | ~0,15 | 1 053 000 | 1 172 000 | — | 1,179 / 1,032 | 0 |
+| i2 (TTTTTT 256) | 7,9 M | 15,6 | 28 700 | 22 600 | 297 | 1,166 / 1,019 | +0,4 ± 1,6 |
+| **h1 (RRTRRT 256)** | 6,0 M | **8,6** | **41 200** | **32 600** | 287 | **1,154 / 1,014** | **+1,9 ± 1,5** |
+| s1 (TTTT 128) | 1,6 M | 2,8 | 69 800 | 84 200 | 258 | 1,189 / 1,031 | −4,1 ± 1,5 |
+| h2 (RRTRRT 128) | 1,5 M | 2,4 | 67 700 | 87 000 | 279 | 1,186 / 1,027 | −2,2 ± 1,5 |
+
+Processeur : `lab9 speed` (f32, une position à la fois ; h1 et h2 mesurés sur des réseaux au hasard
+de même forme). En partie : la recherche sur plans (`gpu=1`, k = 16, m = 4) contre c130 à n = 1, 20
+donnes, graine 9, les quatre l'un après l'autre (s1 avait fait 136 ms le 27 octobre).
+
+- **h1 est le meilleur réseau, et le moins cher de sa largeur** : 1,4 fois i2 sur le GPU, 1,8 fois
+  sur le processeur.
+- **En partie, le gain fond** : h1 287 ms par décision contre 297 pour i2 ; h2 n'est pas plus rapide
+  que s1. Profil (`LAB9_GPU_PROFILE`) : lectures ~70 % du GPU, pas du décodeur ~30 % (inchangés par
+  l'hybride) ; dans les lectures, `neighbours` prend 10 à 11 % (un groupe par position, peu de travail
+  par groupe dans les petits lots de la recherche) ; lectures en partie : h1 27 600/s, i2 24 900/s
+  (1,1 fois seulement).
+- Tous restent loin de c130 : h2 lit encore ~13 fois moins vite.
