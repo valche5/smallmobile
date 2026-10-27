@@ -53,9 +53,10 @@ const DEC_SELF: usize = 9;
 const DEC_CROSS: usize = 10;
 const DEC_OUT: usize = 11;
 /// Places de lecture et caches de voie dans la mémoire du GPU, voies au plus par pas, pas au plus par
-/// plan (`slots.glsl`).
-pub const SLOTS: usize = 6144;
-pub const CACHES: usize = 3072;
+/// plan (`slots.glsl`). Réseau 256 × 6 : 2,8 Go de places, 3,2 Go de caches ; assez pour une recherche
+/// de 32 candidats dans 16 mondes sur une douzaine de fils.
+pub const SLOTS: usize = 16384;
+pub const CACHES: usize = 12288;
 pub const MAX_LANES: usize = 2048;
 pub const MAX_STEPS: usize = 128;
 const LANE_WORDS: usize = 32;
