@@ -510,3 +510,14 @@ politique un peu en dessous (critère de la phase 2 non atteint).
 deux fois plus rapide. Doubler le calcul de la recherche rapportait moins (k = 32, m = 16 contre
 k = 16, m = 4 : 8 fois le calcul pour +3,8 points) : s1 ne vaut pas i2 à temps égal, sans doute. Une
 taille intermédiaire (192 × 5, 256 × 4) ou s1 appris plus longtemps restent à essayer.
+
+## À faire ensuite (décidé le 27 octobre)
+
+**La phase 5 avec i2**, à lancer plus tard (pas tout de suite, à la demande de l'utilisateur) :
+1. parité des politiques seules : `plan:net=lab8/runs/i2/i2-100000.bin` contre
+   `az:net=lab7/nets/c130.bin,n=1`, 920 donnes, graine 82001, appariée avec
+   `lab8/runs/i1/parity-060000.tsv` (~4 min) ;
+2. phase 5 : `plans:net=lab8/runs/i2/i2-100000.bin,gpu=1` (k = 16, m = 4) contre
+   `az:net=lab7/nets/c130.bin,n=400` sur le processeur, 920 donnes, graine 82002, appariée avec
+   `lab8/runs/i1/phase5-060000.tsv` (i1) et `lab8/runs/i1/phase5-lab7.tsv` (le meilleur de lab7)
+   (~1 h 10, GPU et processeur occupés : rien d'autre de lourd en même temps).
