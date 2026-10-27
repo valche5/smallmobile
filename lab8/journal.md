@@ -455,3 +455,58 @@ plus loin demande de fusionner des kernels.
   calcul par position) appris sur les mêmes 200 000 parties, s'il garde la parité ; maintenant ~1 h
   d'apprentissage.
 - Le `gemm` Vulkan au niveau de hipBLASLt : ~1,2 fois sur la recherche entière.
+
+## s1 : un transformer 128 × 4 (protocole, fixé le 27 octobre avant le calcul)
+
+Demandé : un réseau plus petit, appris avec l'apprentissage accéléré, puis la parité des politiques
+seules et sa vitesse dans la recherche.
+
+- Réseau 128 × 4, 4 têtes (32 par tête, comme i2), décodeur de 2 couches : 1,6 million de paramètres
+  (i2 : 7,9) ; ~6 fois moins de calcul par position lue. Moteur GPU vérifié à cette taille
+  (`check-gpu`, réseau au hasard : écarts du même ordre que pour i2 appris, l'arrondi bf16).
+- Mêmes 200 000 parties, `--value-every 4`, lots de 512 (12 400 plans/s en lots de 256, 17 000 en lots
+  de 512), taux 3e-4 inchangé, 75 000 lots (38 millions de plans, 2,4 passes, ~40 min), validation
+  tous les 5 000 lots (`lab8/runs/s1`) ; meilleur réseau par `best.py`.
+- Parité des politiques seules : `plan:net=…` contre `az:net=lab7/nets/c130.bin,n=1`, 920 donnes,
+  graine 82001, appariée avec i1 ; attendu dans ±2 points.
+- Vitesse, mesurée de deux façons et comparée à i2 mesuré de même :
+  - vitesse brute du GPU (`bench-gpu --slots true`) : des lots de positions lues (passées dans
+    l'encodeur) aussi vite que possible, sorties gardées sur le GPU comme dans la recherche ; i2 :
+    31 700 positions lues par seconde en lots de 256 ;
+  - vitesse en partie : notre joueur (recherche sur plans, 16 candidats, 4 mondes) joue 20 donnes
+    (graine 9 : les mêmes que pour i2) contre c130 sans recherche (`n=1`, presque instantané : le temps
+    mesuré est le nôtre), avec le profil du GPU ; i2 : 25 600 positions lues par seconde, 261,5 ms de
+    réflexion par décision.
+
+## s1 : résultats (27 octobre)
+
+Apprentissage : 75 000 lots de 512 en ~38 min (16 200 à 17 400 plans/s ; 20 Go en mémoire, une
+machine virtuelle de l'utilisateur à côté : 9 à 10 Go d'échange, sans effet visible sur le débit).
+
+| Lots | Politique | Valeur | Précision |
+| --- | --- | --- | --- |
+| 25 000 | 1,229 | 1,051 | 55,3 % |
+| 50 000 | 1,198 | 1,035 | 56,6 % |
+| 75 000 | **1,189** | **1,031** | 56,9 % |
+| i2, lot 100 000 | 1,166 | 1,019 | 58,0 % |
+| c130 seul | 1,179 | 1,032 | 60,6 % |
+
+Meilleur réseau : le dernier (lot 75 000), qui progressait encore un peu. Valeur au niveau de c130,
+politique un peu en dessous (critère de la phase 2 non atteint).
+
+- **Parité des politiques seules** (920 donnes, graine 82001, `lab8/runs/s1/parity-075000.tsv`) :
+  **−4,1 ± 1,5 points** (2 j. −4,6, 3 j. −9,7, 4 j. −2,6, 5 j. +0,6) ; apparié avec i1 : −4,0 ± 1,9.
+  Hors des ±2 attendus : le petit réseau perd en qualité. 3,9 ms par décision sur le processeur
+  (i1 : 22,7).
+- **Vitesse brute du GPU** (`bench-gpu --slots true`) : 52 900 positions lues par seconde en lots de
+  64, **109 200 en lots de 256**, 101 300 en lots de 1 024 ; 3,4 fois i2 (pour ~6 fois moins de
+  calcul : les petits produits occupent moins bien la carte).
+- **Vitesse en partie** (mêmes 20 donnes que i2) : **135,6 ms par décision** (i2 : 261,5), soit 1,9
+  fois plus vite ; lectures 62 800 positions/s (i2 : 25 600), pas du décodeur 381 000/s (i2 :
+  248 000). Le GPU est occupé 85 % du temps : lectures 65 %, pas du décodeur 35 % ; le décodeur
+  (2 couches, inchangé) pèse maintenant autant que la moitié de l'encodeur.
+
+À retenir : 1,6 million de paramètres coûtent ~4 points de jeu sans recherche, pour une recherche
+deux fois plus rapide. Doubler le calcul de la recherche rapportait moins (k = 32, m = 16 contre
+k = 16, m = 4 : 8 fois le calcul pour +3,8 points) : s1 ne vaut pas i2 à temps égal, sans doute. Une
+taille intermédiaire (192 × 5, 256 × 4) ou s1 appris plus longtemps restent à essayer.
