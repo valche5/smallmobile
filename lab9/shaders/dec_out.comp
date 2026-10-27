@@ -1,0 +1,38 @@
+#version 450
+// Les logits des coups de chaque voie : les 32 coups globaux (`out_glob`, déjà calculés), puis par sorte
+// le produit de sa requête (`out_kind`) avec la sortie de l'encodeur de chaque région / √d ; -1e9 pour
+// les régions absentes.
+#include "common.glsl"
+#include "slots.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant) uniform Params {
+    uint glob_off, kq_off, d, per16;
+} p;
+
+const uint KEYS = 608u;
+
+void main() {
+    uint lane = gl_WorkGroupID.x;
+    uint t = gl_LocalInvocationID.x;
+    uint slot = lanes[lane * LANE_WORDS + L_SLOT];
+    uint regions = slot_info[slot * INFO];
+    float norm = inversesqrt(float(p.d));
+    for (uint key = t; key < KEYS; key += 256u) {
+        float v = -1e9;
+        if (key < 32u) {
+            v = act[p.glob_off + lane * 32u + key];
+        } else {
+            uint k = (key - 32u) / 64u, r = (key - 32u) % 64u;
+            if (r < regions) {
+                float s = 0.0;
+                uint q = p.kq_off + lane * 9u * p.d + k * p.d;
+                uint x = slot * p.per16 + r * p.d;
+                for (uint c = 0u; c < p.d; c++) s += act[q + c] * float(slot16[x + c]);
+                v = s * norm;
+            }
+        }
+        logits[lane * KEYS + key] = v;
+    }
+}

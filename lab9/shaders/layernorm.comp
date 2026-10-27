@@ -1,0 +1,33 @@
+#version 450
+// LayerNorm de chaque ligne (d nombres, multiple de 32) : un sous-groupe par ligne ; la sortie en f32
+// et/ou en bf16 (entrée d'un produit).
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant) uniform Params {
+    uint rows, d, in_off, out_off, gamma, beta;
+    // 1 : écrire en f32 à out_off (act) ; 2 : en bf16 à out16 (act16)
+    uint flags, out16;
+} p;
+
+void main() {
+    uint row = gl_WorkGroupID.x * 8u + gl_SubgroupID;
+    if (row >= p.rows) return;
+    uint lane = gl_SubgroupInvocationID;
+    uint base = p.in_off + row * p.d;
+    float s = 0.0;
+    for (uint c = lane; c < p.d; c += 32u) s += act[base + c];
+    float mean = subgroupAdd(s) / float(p.d);
+    float v = 0.0;
+    for (uint c = lane; c < p.d; c += 32u) {
+        float x = act[base + c] - mean;
+        v += x * x;
+    }
+    float inv = inversesqrt(subgroupAdd(v) / float(p.d) + 1e-5);
+    for (uint c = lane; c < p.d; c += 32u) {
+        float y = (act[base + c] - mean) * inv * w[p.gamma + c] + w[p.beta + c];
+        if ((p.flags & 1u) != 0u) act[p.out_off + row * p.d + c] = y;
+        if ((p.flags & 2u) != 0u) act16[p.out16 + row * p.d + c] = bfloat16_t(y);
+    }
+}

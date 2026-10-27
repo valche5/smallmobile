@@ -1,0 +1,31 @@
+#version 450
+// Les sorties d'une position pour le processeur : en bf16, les sorties de l'encodeur pour les régions
+// (48 × d), `dec_reg` des régions (48 × d), les clés et valeurs de l'attention croisée de chaque
+// couche du décodeur (couches × 2 × 60 × d) ; en f32, les 20 têtes de valeur.
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant) uniform Params {
+    uint x_off, reg_off, kv_off, v2_off, n2_off, d, dec, per16;
+} p;
+
+void main() {
+    uint pos = gl_WorkGroupID.x;
+    uint t = gl_LocalInvocationID.x;
+    uint d = p.d;
+    uint base = pos * p.per16;
+    for (uint idx = t; idx < R * d; idx += 256u) {
+        uint i = idx / d, c = idx % d;
+        out16[base + idx] = bfloat16_t(act[p.x_off + (pos * TOKENS + i) * d + c]);
+        out16[base + R * d + idx] = bfloat16_t(act[p.reg_off + (pos * R + i) * d + c]);
+    }
+    uint kvw = 2u * p.dec * d; // largeur d'une ligne de kv : [k0 | v0 | k1 | v1 …]
+    for (uint idx = t; idx < TOKENS * kvw; idx += 256u) {
+        uint tok = idx / kvw, c = idx % kvw;
+        uint which = c / d, cc = c % d; // which = 2 × couche + (0 : k, 1 : v)
+        out16[base + 2u * R * d + (which * TOKENS + tok) * d + cc] = bfloat16_t(act[p.kv_off + (pos * TOKENS + tok) * kvw + c]);
+    }
+    if (t < 10u) outf[pos * 20u + t] = act[p.v2_off + pos * 16u + t];
+    else if (t < 20u) outf[pos * 20u + t] = act[p.n2_off + pos * 16u + t - 10u];
+}

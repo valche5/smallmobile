@@ -1,0 +1,47 @@
+#version 450
+// L'attention causale du décodeur : un groupe par (voie, tête). Les clés et valeurs de ce pas vont dans
+// le cache de la voie (couche `layer`, pas `step`), puis la requête regarde les pas 0 à `step`.
+#include "common.glsl"
+#include "slots.glsl"
+
+layout(local_size_x = 32) in;
+
+layout(push_constant) uniform Params {
+    uint qkv_off, out_off, d, heads, layer, layers, max_steps;
+} p;
+
+const uint DH = 32u;
+shared float sc[MAX_STEPS];
+
+void main() {
+    uint lane = gl_WorkGroupID.x, head = gl_WorkGroupID.y;
+    uint c = gl_LocalInvocationID.x;
+    uint base = lane * LANE_WORDS;
+    uint cid = lanes[base + L_CACHE];
+    uint step = lanes[base + L_STEP];
+    uint d3 = 3u * p.d;
+    // le cache : par voie, par couche, k puis v, max_steps × d chacun
+    uint kbase = ((cid * p.layers + p.layer) * 2u) * p.max_steps * p.d;
+    uint vbase = kbase + p.max_steps * p.d;
+    uint row = p.qkv_off + lane * d3;
+    cache[kbase + step * p.d + head * DH + c] = act[row + p.d + head * DH + c];
+    cache[vbase + step * p.d + head * DH + c] = act[row + 2u * p.d + head * DH + c];
+    barrier();
+    memoryBarrierBuffer();
+    float q = act[row + head * DH + c];
+    float scale = inversesqrt(float(DH));
+    for (uint j = 0u; j <= step; j++) {
+        float s = subgroupAdd(q * cache[kbase + j * p.d + head * DH + c]);
+        if (c == 0u) sc[j] = s * scale;
+    }
+    barrier();
+    float top = -1e30;
+    for (uint j = 0u; j <= step; j++) top = max(top, sc[j]);
+    float sum = 0.0, out_ = 0.0;
+    for (uint j = 0u; j <= step; j++) {
+        float e = exp(sc[j] - top);
+        sum += e;
+        out_ += e * cache[vbase + j * p.d + head * DH + c];
+    }
+    act16[p.out_off + lane * p.d + head * DH + c] = bfloat16_t(out_ / sum);
+}

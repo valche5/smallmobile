@@ -1,0 +1,43 @@
+#version 450
+// Les entrées des jetons d'une position, mises à l'échelle, en lignes complétées de zéros pour les
+// produits : régions (48 × 80), joueurs (5 × 128), marché (6 × 48), partie (80) ; tokens.rs.
+#include "common.glsl"
+
+layout(local_size_x = 128) in;
+
+layout(push_constant) uniform Params {
+    uint region_off, player_off, market_off, game_off; // dans act
+    uint region_scale, player_scale, market_scale, game_scale, player_index; // dans w
+} p;
+
+void main() {
+    uint pos = gl_WorkGroupID.x;
+    uint t = gl_LocalInvocationID.x;
+    uint regions = regions_of(pos);
+    for (uint idx = t; idx < R * 80u; idx += 128u) {
+        uint i = idx / 80u, c = idx % 80u;
+        float v = 0.0;
+        if (i < regions && c < NODE) v = float(byte_at(pos, IN_NODE + i * NODE + c)) * w[p.region_scale + c];
+        act[p.region_off + (pos * R + i) * 80u + c] = v;
+    }
+    for (uint idx = t; idx < 5u * 128u; idx += 128u) {
+        uint r = idx / 128u, c = idx % 128u;
+        float v = 0.0;
+        if (c < 115u) {
+            uint at = uint(w[p.player_index + r * 115u + c]);
+            v = float(byte_at(pos, IN_GLOB + at)) * w[p.player_scale + c];
+        }
+        act[p.player_off + (pos * 5u + r) * 128u + c] = v;
+    }
+    for (uint idx = t; idx < 6u * 48u; idx += 128u) {
+        uint m = idx / 48u, c = idx % 48u;
+        float v = 0.0;
+        if (c < M) v = float(byte_at(pos, IN_GLOB + G_MARKET + m * M + c)) * w[p.market_scale + c];
+        act[p.market_off + (pos * 6u + m) * 48u + c] = v;
+    }
+    if (t < 80u) {
+        float v = 0.0;
+        if (t < G_PLAYER) v = float(byte_at(pos, IN_GLOB + t)) * w[p.game_scale + t];
+        act[p.game_off + pos * 80u + t] = v;
+    }
+}

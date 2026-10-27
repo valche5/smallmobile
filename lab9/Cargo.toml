@@ -1,0 +1,24 @@
+[package]
+name = "smallmobile-lab9"
+version = "0.1.0"
+edition = "2024"
+description = "Laboratoire 9 : le réseau hybride de ResTNet (blocs de graphe et transformer) dans le cadre de lab8 : plans de tour, décodeur, recherche sur des plans (lab9/lab.md)."
+publish = false
+
+[[bin]]
+name = "lab9"
+path = "src/bin/lab.rs"
+
+[features]
+# Vulkan : c130 (parties d'imitation, adversaire des arènes) et l'encodeur de lab9 (`src/vulkan.rs`,
+# shaders compilés par glslc, build.rs) ; --no-default-features : processeur seul.
+default = ["vulkan"]
+vulkan = ["smallmobile-lab7/vulkan", "dep:ash"]
+
+[dependencies]
+smallmobile-kernel = { path = "../kernel" }
+smallmobile-brain9 = { path = "brain" }
+smallmobile-brain7 = { path = "../lab7/brain" }
+# c130 et son moteur GPU, l'arène, les joueurs : ceux de lab7 (figé), tels quels
+smallmobile-lab7 = { path = "../lab7", default-features = false }
+ash = { version = "0.38", optional = true }
