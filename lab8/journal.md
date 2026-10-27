@@ -574,3 +574,27 @@ Mesures avec i2 (200 parties, k = 8, m = 2, beta = 10) :
 - **La cible s'écarte à peine de l'a priori** : KL 0,004 nat par décision, écart moyen 0,003 par coup
   (au plus 0,28). Avec 8 candidats, la plupart des décisions viennent après le dernier embranchement,
   et à beta = 10 les écarts de valeur entre candidats (quelques centièmes) pèsent peu.
+
+## Labo figé (27 octobre)
+
+Décidé par l'utilisateur après la phase 5 d'i2 et la mesure du selfplay : le modèle est plus lent
+par lecture (13 fois le calcul de c130) sans être plus fort que le meilleur de lab7, et la phase 6
+coûterait 12 à 15 h de GPU pour une cible encore proche de l'a priori. La suite va à lab9 : le réseau
+hybride de ResTNet (Ju et al., 2024, arXiv 2410.05347 : blocs résiduels convolutifs et blocs
+transformer alternés, RRTRRT meilleur que le tout-convolutif et le tout-transformer au Go et à Hex),
+pour la qualité d'i2 à moindre coût par lecture.
+
+Bilan :
+
+| Phase | Résultat |
+| --- | --- |
+| 0, base | Faite : transformer, décodeur de plans, Rust égal à PyTorch, forme compacte des parties |
+| 1, données | 200 000 parties de c130 à n = 400 (`data/c130`, `data/c130b`), 16 millions de plans ; relues par lab9 |
+| 2, imitation | i2 (256 × 6) meilleur que le réseau de c130 en politique et en valeur, en tout et à chaque taille ; s1 (128 × 4) un peu en dessous |
+| 3, moteur | Encodeur et décodeur en Vulkan ; i2 : 31 700 lectures/s, s1 : 109 200 ; logits mieux que c130, valeur moins bien |
+| 4, parité | Remplacée par les politiques seules : i2 +0,4 ± 1,6 contre c130 à n = 1 ; s1 −4,1 ± 1,5 |
+| 5, plans | i2 : +3,6 ± 1,5 contre c130 à n = 400, −6,1 ± 2,1 face à lab7, en 134 ms par décision contre 5,1 s ; critère non atteint |
+| 6, selfplay | Écrite et testée (`lab8 selfplay`, `train.py --imitation`), non lancée |
+
+Ce que lab9 reprend : la chaîne entière (plans, décodeur, recherche, moteur GPU, selfplay), les
+parties d'imitation, et i2 et s1 comme témoins (lab9 lit les réseaux de lab8).
