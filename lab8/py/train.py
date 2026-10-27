@@ -12,6 +12,11 @@ sa valeur au début de chaque plan sont enregistrées avec les parties.
     python train.py --data D --size 256,6,8,2 --bench 50      débit seul
 
 Le réseau mesuré et écrit est la moyenne glissante des poids (EMA), mise à jour tous les EMA_EVERY lots.
+
+`--value-every K` : la victoire et les pièces finales ne sont apprises que sur un plan sur K (ceux dont
+l'indice est multiple de K) ; le vainqueur d'une partie, répété sur ses ~80 plans, s'apprend sinon par
+cœur (i1 : valeur au mieux au lot 50 000, puis de plus en plus mauvaise). Les cibles du prochain tour
+(valeur de la recherche de c130) restent sur tous les plans.
 """
 
 import argparse
@@ -84,8 +89,11 @@ def baseline(t):
     return {"pol": pol, "acc": acc, "val": val}
 
 
-def total(m):
-    return (m["pol"] + m["val"] + m["next"] + GAIN_WEIGHT * (m["gain"] + m["next_gain"]) + OWN_WEIGHT * m["own"]).mean()
+def total(m, final):
+    """La perte du lot ; `final` : les plans où la victoire et les pièces finales sont apprises."""
+    kept = lambda v: (v * final).sum() / final.sum().clamp(min=1)
+    rest = m["pol"] + m["next"] + GAIN_WEIGHT * m["next_gain"] + OWN_WEIGHT * m["own"]
+    return rest.mean() + kept(m["val"] + GAIN_WEIGHT * m["gain"])
 
 
 def batches(data, idx, size, rng=None):
@@ -95,7 +103,7 @@ def batches(data, idx, size, rng=None):
     with ThreadPoolExecutor(WORKERS) as pool:
         pending = [pool.submit(data.take, c) for c in chunks[:AHEAD]]
         for i in range(len(chunks)):
-            b = pending.pop(0).result()
+            b = pending.pop(0).result() | {"idx": chunks[i]}
             if i + AHEAD < len(chunks):
                 pending.append(pool.submit(data.take, chunks[i + AHEAD]))
             yield b
@@ -138,6 +146,7 @@ def main():
     ap.add_argument("--val-every", type=int, default=2000)
     ap.add_argument("--bench", type=int, help="mesurer le débit sur ce nombre de lots, puis s'arrêter")
     ap.add_argument("--state", help="état complet pour reprendre (écrit à chaque validation)")
+    ap.add_argument("--value-every", type=int, default=1, help="victoire finale apprise sur un plan sur K")
     a = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -184,9 +193,10 @@ def main():
             torch.cuda.synchronize() if device == "cuda" else None
             t0, seen = time.time(), 0
         t = to_device(b, device)
+        final = torch.from_numpy(b["idx"] % a.value_every == 0).to(device)
         with torch.autocast(device, dtype=torch.bfloat16):
             m = losses(net, t)
-            loss = total(m)
+            loss = total(m, final)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)

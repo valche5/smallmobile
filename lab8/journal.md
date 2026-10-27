@@ -261,6 +261,24 @@ politique 1,179, valeur 1,032, précision 60,6 %) :
 - Remèdes possibles (non faits) : plus de parties, moins de poids pour la valeur, ou la valeur
   apprise sur une partie seulement des plans de chaque partie (AlphaGo : une position par partie).
 
+Contrôles en cours de route (le décodeur seul contre le coup préféré du réseau de c130, `plan:` contre
+`az:…,n=1`, graine 9, hors protocole) :
+- lot 5 000, 40 donnes : −26,4 points. Trace d'une partie (`LAB8_TRACE=1`) : déclin un tour sur deux,
+  tous les jetons sur une région au redéploiement. Sur les plans mis de côté, ce réseau choisit le
+  déclin deux fois plus souvent que la recherche de c130 quand il est possible (26 % contre 13 %) :
+  un réseau trop jeune, pas une erreur de la chaîne (distances Python et Rust vérifiées identiques).
+- Corrigé au passage : le joueur `plan:` recommençait un plan à chaque décision du jeu (chaque
+  conquête), le décodeur toujours à son premier pas, ce qu'il ne voit jamais à l'apprentissage ; il
+  écrit maintenant le plan d'un trait et garde la suite, comme `plans:`. Peu d'effet à ce lot.
+- lot 20 000, 80 donnes : −8,6 points (2 j. 35,0 %, 3 j. 25,8 %, 4 j. 16,9 %, 5 j. 13,0 %).
+- La recherche sur plans (GPU) contre c130 à n = 400 sur le processeur : la chaîne complète tourne
+  (2 donnes de contrôle, 167 ms par décision pendant l'apprentissage).
+- lot 50 000, 200 donnes : **+0,6 point** (2 j. 50,0 %, 3 j. 32,7 %, 4 j. 25,5 %, 5 j. 21,8 %).
+- La recherche sur plans au lot 50 000 (`gpu=1,k=16,m=4`) contre c130 à n = 400, 80 donnes :
+  **−2,2 ± 4,3 points** (2 j. +0,0, 3 j. −3,3, 4 j. −9,4, 5 j. +4,0), 449 ms par décision (GPU
+  partagé avec l'apprentissage). Note : `labtools/score.py` donne tous les rôles par défaut ; le
+  joueur étudié est `--role 0`.
+
 ## Parité des politiques seules (27 octobre, protocole)
 
 `plan:net=lab8/runs/i1/i1-060000.bin` contre `az:net=lab7/nets/c130.bin,n=1`, 920 donnes, graine
@@ -303,23 +321,18 @@ Doubler les mondes au-delà de 16 n'apporte plus rien de visible : la recherche 
 (candidats, puis le plan le plus probable de chacun) ; ce qui reste à gagner est plutôt dans la
 valeur (apprise par cœur) et dans les candidats.
 
-Contrôles en cours de route (le décodeur seul contre le coup préféré du réseau de c130, `plan:` contre
-`az:…,n=1`, graine 9, hors protocole) :
-- lot 5 000, 40 donnes : −26,4 points. Trace d'une partie (`LAB8_TRACE=1`) : déclin un tour sur deux,
-  tous les jetons sur une région au redéploiement. Sur les plans mis de côté, ce réseau choisit le
-  déclin deux fois plus souvent que la recherche de c130 quand il est possible (26 % contre 13 %) :
-  un réseau trop jeune, pas une erreur de la chaîne (distances Python et Rust vérifiées identiques).
-- Corrigé au passage : le joueur `plan:` recommençait un plan à chaque décision du jeu (chaque
-  conquête), le décodeur toujours à son premier pas, ce qu'il ne voit jamais à l'apprentissage ; il
-  écrit maintenant le plan d'un trait et garde la suite, comme `plans:`. Peu d'effet à ce lot.
-- lot 20 000, 80 donnes : −8,6 points (2 j. 35,0 %, 3 j. 25,8 %, 4 j. 16,9 %, 5 j. 13,0 %).
-- La recherche sur plans (GPU) contre c130 à n = 400 sur le processeur : la chaîne complète tourne
-  (2 donnes de contrôle, 167 ms par décision pendant l'apprentissage).
-- lot 50 000, 200 donnes : **+0,6 point** (2 j. 50,0 %, 3 j. 32,7 %, 4 j. 25,5 %, 5 j. 21,8 %).
-- La recherche sur plans au lot 50 000 (`gpu=1,k=16,m=4`) contre c130 à n = 400, 80 donnes :
-  **−2,2 ± 4,3 points** (2 j. +0,0, 3 j. −3,3, 4 j. −9,4, 5 j. +4,0), 449 ms par décision (GPU
-  partagé avec l'apprentissage). Note : `labtools/score.py` donne tous les rôles par défaut ; le
-  joueur étudié est `--role 0`.
+## i2 : la valeur sans apprentissage par cœur (protocole, fixé le 27 octobre avant le calcul)
 
-Reste, pour les phases suivantes : la recherche sur plans et la recherche coup par coup du nouveau
-réseau (phases 4 et 5), le moteur GPU du transformer (phase 3).
+Demandé après la phase 5 : corriger la valeur apprise par cœur, puis refaire la phase 5.
+
+- Données : `lab8/data/c130` et 100 000 parties de plus, `lab8/data/c130b` (même commande que la
+  phase 1, graine 81100000 : autres donnes) ; 200 000 parties, ~16 millions de plans. Validation :
+  mêmes règles (donne multiple de 20), les 50 000 premiers plans mesurés, ceux de i1 : comparables.
+- `train.py --value-every 4` : la victoire et les pièces finales apprises sur un plan sur quatre de
+  chaque partie (indice multiple de 4) ; les cibles du prochain tour (valeur de la recherche de c130,
+  propre à chaque position) et les propriétaires sur tous les plans. Avec deux fois plus de parties
+  et ~2,4 passes, chaque vainqueur est vu ~50 fois au lieu de ~320.
+- Réseau neuf 256 × 6, mêmes réglages que i1, 150 000 lots (~4 h 10), validation tous les 5 000 lots
+  (`lab8/runs/i2`).
+- Meilleur réseau par la même règle (`best.py`) ; puis la parité des politiques seules (graine 82001)
+  et la phase 5 (graine 82002, k = 16, m = 4, appariée avec `phase5-lab7.tsv` et avec i1).
