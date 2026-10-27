@@ -230,5 +230,30 @@ Mesures GPU libre, aussitôt après :
 - Puis la phase 5 : `plans:net=…` contre c130 à n = 400 (sur le processeur, pour ne pas partager le
   GPU), 920 donnes, graine 82002.
 
+## Phase 2 : en cours (nuit du 27 octobre)
+
+Lancée à 0 h 30 (`lab8/runs/i1`, 2 500 plans/s, ~4 h). Validations (plans mis de côté ; c130 seul :
+politique 1,179, valeur 1,032, précision 60,6 %) :
+
+| Lots | Politique | Valeur | Précision |
+| --- | --- | --- | --- |
+| 5 000 | 1,444 | 1,159 | 45,3 % |
+| 10 000 | 1,328 | 1,071 | 50,8 % |
+| 15 000 | 1,270 | 1,054 | 53,8 % |
+| 20 000 | 1,240 | 1,045 | 55,1 % |
+
+Contrôles en cours de route (le décodeur seul contre le coup préféré du réseau de c130, `plan:` contre
+`az:…,n=1`, graine 9, hors protocole) :
+- lot 5 000, 40 donnes : −26,4 points. Trace d'une partie (`LAB8_TRACE=1`) : déclin un tour sur deux,
+  tous les jetons sur une région au redéploiement. Sur les plans mis de côté, ce réseau choisit le
+  déclin deux fois plus souvent que la recherche de c130 quand il est possible (26 % contre 13 %) :
+  un réseau trop jeune, pas une erreur de la chaîne (distances Python et Rust vérifiées identiques).
+- Corrigé au passage : le joueur `plan:` recommençait un plan à chaque décision du jeu (chaque
+  conquête), le décodeur toujours à son premier pas, ce qu'il ne voit jamais à l'apprentissage ; il
+  écrit maintenant le plan d'un trait et garde la suite, comme `plans:`. Peu d'effet à ce lot.
+- lot 20 000, 80 donnes : −8,6 points (2 j. 35,0 %, 3 j. 25,8 %, 4 j. 16,9 %, 5 j. 13,0 %).
+- La recherche sur plans (GPU) contre c130 à n = 400 sur le processeur : la chaîne complète tourne
+  (2 donnes de contrôle, 167 ms par décision pendant l'apprentissage).
+
 Reste, pour les phases suivantes : la recherche sur plans et la recherche coup par coup du nouveau
 réseau (phases 4 et 5), le moteur GPU du transformer (phase 3).
