@@ -5,6 +5,7 @@
 pub mod agent;
 pub mod fixture;
 pub mod record;
+pub mod selfplay;
 #[cfg(feature = "vulkan")]
 pub mod vulkan;
 

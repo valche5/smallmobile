@@ -521,3 +521,56 @@ taille intermédiaire (192 × 5, 256 × 4) ou s1 appris plus longtemps restent �
    `az:net=lab7/nets/c130.bin,n=400` sur le processeur, 920 donnes, graine 82002, appariée avec
    `lab8/runs/i1/phase5-060000.tsv` (i1) et `lab8/runs/i1/phase5-lab7.tsv` (le meilleur de lab7)
    (~1 h 10, GPU et processeur occupés : rien d'autre de lourd en même temps).
+
+## i2 : parité des politiques seules (27 octobre, protocole)
+
+`plan:net=lab8/runs/i2/i2-100000.bin` contre `az:net=lab7/nets/c130.bin,n=1`, 920 donnes, graine
+82001 (`lab8/runs/i2/parity-100000.tsv`) : **+0,4 ± 1,6 point** (2 j. +1,0, 3 j. −0,3, 4 j. +0,7,
+5 j. +0,4) ; 20,8 ms par décision (p95 56,9 ms), 188 s. Dans ±2 points. Apparié avec i1
+(`parity-060000.tsv`) : +0,5 ± 2,1 (indécis) : la politique un peu meilleure sur les plans mis de
+côté ne se voit pas en jeu sans recherche.
+
+## i2 : phase 5 (27 octobre, protocole)
+
+`plans:net=lab8/runs/i2/i2-100000.bin,gpu=1` (k = 16, m = 4) contre c130 à n = 400 sur le processeur,
+920 donnes, graine 82002 (`lab8/runs/i2/phase5-100000.tsv`) :
+
+| Joueur | Score | 2 j. | 3 j. | 4 j. | 5 j. | Temps par décision |
+| --- | --- | --- | --- | --- | --- | --- |
+| i2, plans k = 16, m = 4 | **+3,6 ± 1,5** | +5,8 | +2,8 | +1,4 | +4,2 | 134 ms (p95 525 ms) |
+| i1, plans k = 16, m = 4 | +0,4 ± 1,5 | +2,4 | −3,4 | +1,2 | +1,3 | 131 ms (p95 516 ms) |
+| lab7, `az:c130,n=400,roll=1,mix=0.5` | +9,7 ± 1,5 | +6,8 | +8,8 | +13,2 | +9,9 | 5 104 ms |
+
+- Apparié avec i1 : **+3,2 ± 2,0 points** (2 j. +3,4, 3 j. +6,2, 4 j. +0,2, 5 j. +2,8) : à politique
+  seule égale (parité ci-dessus), la valeur qui n'apprend plus par cœur sert la recherche.
+- Apparié avec lab7 : **−6,1 ± 2,1 points** (2 j. −1,1, 3 j. −6,0, 4 j. −11,8, 5 j. −5,7). Critère de
+  la phase 5 non atteint, à 38 fois moins de temps par décision.
+- Recherches (tous fils) : lectures 8 803 s (40,3 millions de positions, ~12 500 par partie pour le
+  seul joueur étudié), pas du décodeur 11 604 s (131 millions) ; 4 239 s en tout.
+
+## Phase 3 : écarts du moteur GPU avec i2 (27 octobre)
+
+`lab8 check-gpu --net lab8/runs/i2/i2-100000.bin` (200 positions au hasard) : logits du décodeur à 0,10
+près (c130 en Vulkan : 0,58), probabilités de victoire à 0,017 près (c130 : 0,0021) ; têtes brutes
+0,18, sorties des régions 0,14. Les logits valent mieux que ceux de c130, la valeur 8 fois moins bien
+(l'arrondi bf16 sur 6 couches de 256) ; en jeu, les arènes sur GPU ne montrent rien d'anormal.
+
+## Phase 6 : le selfplay, écrit (27 octobre)
+
+`lab8 selfplay` (`src/selfplay.rs`) : tous les joueurs cherchent leurs plans (moteur GPU partagé par
+les fils) ; chaque plan cherché est enregistré dans la forme des parties d'imitation. Cible de
+politique (`search::improved`) : à chaque décision du plan joué, `π'(a) ∝ π(a) · exp(X(a))`, `exp(X(a))`
+moyenne de `exp(beta · valeur)` sur les candidats qui partagent les décisions précédentes et prennent
+`a`, pondérée par leur probabilité selon le décodeur (un coup sans candidat : la moyenne de tous) ;
+après le dernier embranchement, la cible est l'a priori. Valeur au prochain tour : celle lue à la
+racine de la recherche suivante du joueur. Plan joué tiré selon la politique améliorée pendant les 2
+premières manches, le meilleur ensuite. `train.py --imitation D --imitation-share 0.25` mêle des
+parties d'imitation à chaque lot. Tests : `improved_policy_follows_the_best_candidates`,
+`selfplay_games_split_into_plans` ; `data.py` lit les parties de selfplay.
+
+Mesures avec i2 (200 parties, k = 8, m = 2, beta = 10) :
+- 20 fils : 40 parties par minute ; 60 fils : **54 parties par minute (3 200 par heure)**, 81 plans par
+  partie, GPU occupé ~82 % (lectures 74 %, `gemm` 54 %). En k = 16, m = 4 : ~4 fois moins.
+- **La cible s'écarte à peine de l'a priori** : KL 0,004 nat par décision, écart moyen 0,003 par coup
+  (au plus 0,28). Avec 8 candidats, la plupart des décisions viennent après le dernier embranchement,
+  et à beta = 10 les écarts de valeur entre candidats (quelques centièmes) pèsent peu.

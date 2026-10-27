@@ -153,9 +153,11 @@ class Data:
     """Les plans de tous les fils de `dirs`, indexés à plat (fichier, plan)."""
 
     def __init__(self, dirs):
-        prefixes = sorted(str(p)[: -len(".seg")] for d in dirs for p in Path(d).glob("*.seg"))
-        assert prefixes, f"aucun fichier .seg dans {dirs}"
-        self.files = [File(p) for p in prefixes]
+        found = sorted((str(p)[: -len(".seg")], i) for i, d in enumerate(dirs) for p in Path(d).glob("*.seg"))
+        assert found, f"aucun fichier .seg dans {dirs}"
+        self.files = [File(p) for p, _ in found]
+        # le dossier d'origine de chaque plan (son rang dans `dirs`)
+        self.source = np.concatenate([np.full(len(f), i, np.int16) for f, (_, i) in zip(self.files, found)])
         self.file = np.concatenate([np.full(len(f), i, np.int32) for i, f in enumerate(self.files)])
         self.local = np.concatenate([np.arange(len(f), dtype=np.int64) for f in self.files])
         self.val = np.concatenate([f.val for f in self.files])

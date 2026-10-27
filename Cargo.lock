@@ -185,6 +185,7 @@ dependencies = [
 name = "smallmobile-lab8"
 version = "0.1.0"
 dependencies = [
+ "ash",
  "smallmobile-brain7",
  "smallmobile-brain8",
  "smallmobile-kernel",

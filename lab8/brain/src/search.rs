@@ -115,9 +115,89 @@ pub struct Searched {
     /// Les candidats (leurs coups) et leur valeur moyenne, dans l'ordre où ils ont été tirés (le
     /// premier : le plus probable).
     pub candidates: Vec<(Vec<Move>, f32)>,
+    /// Les décisions de chaque candidat, telles que le décodeur les a vues (dans le même ordre).
+    pub traces: Vec<Vec<Decision>>,
+    /// Les deux valeurs lues à la racine (finale, au prochain tour), relatives au joueur qui agit.
+    pub root: (Value, Value),
     /// Lectures de position et pas du décodeur demandés.
     pub encodes: usize,
     pub steps: usize,
+}
+
+/// Une décision d'un candidat : les coups possibles, leurs probabilités selon le décodeur (à la
+/// température 1, quelle que soit celle du tirage), et le coup pris.
+#[derive(Clone, Debug)]
+pub struct Decision {
+    pub keys: Vec<Key>,
+    pub probs: Vec<f32>,
+    pub chosen: usize,
+}
+
+/// La politique améliorée par la recherche le long du candidat `chosen`, pour l'apprentissage
+/// (`lab8 selfplay`) : à chaque décision, pour chaque coup `a` possible,
+/// `π'(a) ∝ π(a) · exp(X(a))`, où `exp(X(a))` est la moyenne de `exp(beta · valeur)` sur les candidats
+/// qui partagent les décisions précédentes et prennent `a`, pondérée par leur probabilité selon le
+/// décodeur (leur ensemble est sans doublon) ; un coup qu'aucun candidat ne prend reçoit la moyenne de
+/// tous ceux qui partagent les décisions précédentes. Après le dernier embranchement, la cible est
+/// donc l'a priori. Par décision : (coup, cible, a priori).
+pub fn improved(s: &Searched, chosen: usize, beta: f32) -> Vec<Vec<(Key, f32, f32)>> {
+    let logp: Vec<f64> =
+        s.traces.iter().map(|t| t.iter().map(|d| (d.probs[d.chosen].max(1e-30) as f64).ln()).sum()).collect();
+    let key_at = |c: usize, j: usize| s.traces[c].get(j).map(|d| d.keys[d.chosen]);
+    // log de la moyenne pondérée de exp(beta · valeur) sur les candidats `group`
+    let mean = |group: &[usize]| -> f64 {
+        let top = group.iter().map(|&c| logp[c]).fold(f64::NEG_INFINITY, f64::max);
+        let (mut num, mut den) = (0.0, 0.0);
+        for &c in group {
+            let w = (logp[c] - top).exp();
+            num += w * (beta as f64 * s.candidates[c].1 as f64).exp();
+            den += w;
+        }
+        (num / den).ln()
+    };
+    let mut group: Vec<usize> = (0..s.candidates.len()).collect();
+    let mut out = Vec::new();
+    for (j, d) in s.traces[chosen].iter().enumerate() {
+        let all = mean(&group);
+        let x: Vec<f64> = d
+            .keys
+            .iter()
+            .map(|&a| {
+                let sub: Vec<usize> = group.iter().copied().filter(|&c| key_at(c, j) == Some(a)).collect();
+                if sub.is_empty() { all } else { mean(&sub) }
+            })
+            .collect();
+        let top = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let raw: Vec<f64> = d.probs.iter().zip(&x).map(|(&p, &x)| p as f64 * (x - top).exp()).collect();
+        let sum: f64 = raw.iter().sum();
+        out.push(d.keys.iter().zip(&raw).zip(&d.probs).map(|((&k, &r), &p)| (k, (r / sum) as f32, p)).collect());
+        let taken = d.keys[d.chosen];
+        group.retain(|&c| key_at(c, j) == Some(taken));
+    }
+    out
+}
+
+/// Un candidat tiré selon la politique améliorée sur l'ensemble des candidats,
+/// `∝ π(c) · exp(beta · valeur)` (exploration du selfplay).
+pub fn sample(s: &Searched, beta: f32, rng: &mut Rng) -> usize {
+    let logw: Vec<f64> = s
+        .traces
+        .iter()
+        .zip(&s.candidates)
+        .map(|(t, c)| {
+            t.iter().map(|d| (d.probs[d.chosen].max(1e-30) as f64).ln()).sum::<f64>() + beta as f64 * c.1 as f64
+        })
+        .collect();
+    let top = logw.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let w: Vec<f64> = logw.iter().map(|l| (l - top).exp()).collect();
+    let mut u = rng.unit() * w.iter().sum::<f64>();
+    for (i, &x) in w.iter().enumerate() {
+        if u < x {
+            return i;
+        }
+        u -= x;
+    }
+    w.len() - 1
 }
 
 /// Le tour en cours, compté depuis le début de la partie (lab7).
@@ -203,6 +283,8 @@ struct Lane<'m, E: Engine> {
     rng: Rng,
     /// Coups joués (candidat).
     played: Vec<Move>,
+    /// Les décisions vues par le décodeur (candidats seulement).
+    trace: Vec<Decision>,
     decisions: usize,
     /// La valeur à la première lecture après le candidat, et celle du bout.
     first: Option<[f32; MAX_PLAYERS]>,
@@ -415,13 +497,22 @@ fn run<E: Engine>(engine: &E, cfg: &Config, lanes: &mut [Lane<E>], dist: &[u8], 
         for (i, all) in stepping.into_iter().zip(logits) {
             let Need::Step(legal) = &needs[i] else { unreachable!() };
             let lane = &mut lanes[i];
-            let c = match lane.prefix.next() {
-                Some(key) => *legal.iter().find(|c| c.key == key).expect("décision du préfixe"),
-                None => {
-                    let choice: Vec<f32> = legal.iter().map(|c| all[c.key as usize]).collect();
-                    legal[pick(&choice, lane.t, &mut lane.rng)]
-                }
+            let choice: Vec<f32> = legal.iter().map(|c| all[c.key as usize]).collect();
+            let at = match lane.prefix.next() {
+                Some(key) => legal.iter().position(|c| c.key == key).expect("décision du préfixe"),
+                None => pick(&choice, lane.t, &mut lane.rng),
             };
+            let c = legal[at];
+            if lane.horizon.is_none() {
+                let top = choice.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                let e: Vec<f32> = choice.iter().map(|&l| (l - top).exp()).collect();
+                let sum: f32 = e.iter().sum();
+                lane.trace.push(Decision {
+                    keys: legal.iter().map(|c| c.key).collect(),
+                    probs: e.iter().map(|x| x / sum).collect(),
+                    chosen: at,
+                });
+            }
             lane.plan.as_mut().expect("plan en cours").3 = Some(c.key);
             lane.decisions += 1;
             lane.play(c.mv);
@@ -441,6 +532,7 @@ fn lane<'m, E: Engine>(w: &Game<'m>, k: &Knowledge) -> Lane<'m, E> {
         t: 0.0,
         rng: Rng::new(0),
         played: Vec::new(),
+        trace: Vec::new(),
         decisions: 0,
         first: None,
         end: None,
@@ -463,7 +555,7 @@ fn write_plans<E: Engine>(
     rng: &mut Rng,
     dist: &[u8],
     count: &mut (usize, usize),
-) -> Vec<Vec<Move>> {
+) -> Vec<(Vec<Move>, Vec<Decision>)> {
     let mut lanes: Vec<Lane<E>> = tries
         .into_iter()
         .enumerate()
@@ -477,7 +569,7 @@ fn write_plans<E: Engine>(
         })
         .collect();
     run(engine, cfg, &mut lanes, dist, count);
-    lanes.into_iter().map(|l| l.played).collect()
+    lanes.into_iter().map(|l| (l.played, l.trace)).collect()
 }
 
 /// Les clés des décisions d'un plan joué depuis `g` (coups forcés exclus).
@@ -541,14 +633,16 @@ pub fn search<E: Engine>(engine: &E, cfg: &Config, g: &Game, k: &Knowledge, rng:
     let dist = distances(g.map);
     let mut count = (0, 0);
     // une seule lecture de la racine pour tous les candidats
-    let root = Rc::new(read_all(engine, &[(g, k)], &dist).pop().expect("lecture").0);
+    let (root, root_value, root_next) = read_all(engine, &[(g, k)], &dist).pop().expect("lecture");
+    let root = Rc::new(root);
     count.0 += 1;
     // 1. les candidats : le plus probable, puis des tirages, sans doublon
     let tries = (0..3 * cfg.candidates).map(|i| (Vec::new(), if i == 0 { 0.0 } else { cfg.temperature })).collect();
-    let mut candidates: Vec<Vec<Move>> = Vec::new();
-    for plan in write_plans(engine, cfg, g, k, &root, tries, rng, &dist, &mut count) {
+    let (mut candidates, mut traces): (Vec<Vec<Move>>, Vec<Vec<Decision>>) = (Vec::new(), Vec::new());
+    for (plan, trace) in write_plans(engine, cfg, g, k, &root, tries, rng, &dist, &mut count) {
         if candidates.len() < cfg.candidates && !candidates.contains(&plan) {
             candidates.push(plan);
+            traces.push(trace);
         }
     }
     // 2-4. chaque candidat dans chaque monde, avec sa fin simulée
@@ -563,9 +657,10 @@ pub fn search<E: Engine>(engine: &E, cfg: &Config, g: &Game, k: &Knowledge, rng:
         let tries: Vec<(Vec<Key>, f32)> =
             (0..3 * cfg.mods).map(|_| (keys[..rng.below(keys.len())].to_vec(), cfg.temperature)).collect();
         let mut fresh = Vec::new();
-        for plan in write_plans(engine, cfg, g, k, &root, tries, rng, &dist, &mut count) {
+        for (plan, trace) in write_plans(engine, cfg, g, k, &root, tries, rng, &dist, &mut count) {
             if fresh.len() < cfg.mods && !candidates.contains(&plan) && !fresh.contains(&plan) {
                 fresh.push(plan);
+                traces.push(trace);
             }
         }
         scores.extend(evaluate(engine, cfg, g, k, &worlds, &fresh, &dist, &mut count));
@@ -576,6 +671,8 @@ pub fn search<E: Engine>(engine: &E, cfg: &Config, g: &Game, k: &Knowledge, rng:
     Searched {
         plan: candidates[best].clone(),
         candidates: candidates.into_iter().zip(scores).collect(),
+        traces,
+        root: (root_value, root_next),
         encodes: count.0,
         steps: count.1,
     }

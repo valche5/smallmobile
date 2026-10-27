@@ -100,37 +100,37 @@ pub fn half(x: f32) -> u16 {
 }
 
 /// Une décision d'un plan.
-struct Step {
-    key: Key,
-    dy: [u8; DYN],
-    legal: Vec<(Key, u16, u16)>,
+pub(crate) struct Step {
+    pub(crate) key: Key,
+    pub(crate) dy: [u8; DYN],
+    pub(crate) legal: Vec<(Key, u16, u16)>,
 }
 
 /// Un plan, avec ses cibles.
-struct Segment {
-    players: usize,
-    regions: usize,
-    phase: Phase,
-    actor: usize,
+pub(crate) struct Segment {
+    pub(crate) players: usize,
+    pub(crate) regions: usize,
+    pub(crate) phase: Phase,
+    pub(crate) actor: usize,
     /// Le tour (`turn` de `play`) où il commence.
-    turn: usize,
-    node: Vec<u8>,
-    global: Vec<u8>,
-    adj: Vec<u64>,
-    steps: Vec<Step>,
-    coins: [i32; MAX_PLAYERS],
-    here: [f32; MAX_PLAYERS],
+    pub(crate) turn: usize,
+    pub(crate) node: Vec<u8>,
+    pub(crate) global: Vec<u8>,
+    pub(crate) adj: Vec<u64>,
+    pub(crate) steps: Vec<Step>,
+    pub(crate) coins: [i32; MAX_PLAYERS],
+    pub(crate) here: [f32; MAX_PLAYERS],
     /// La valeur du réseau seul au début du plan (relative).
-    prior: [f32; MAX_PLAYERS],
-    next: Option<([f32; MAX_PLAYERS], [f32; MAX_PLAYERS])>,
-    owners: Option<[u8; REGIONS]>,
+    pub(crate) prior: [f32; MAX_PLAYERS],
+    pub(crate) next: Option<([f32; MAX_PLAYERS], [f32; MAX_PLAYERS])>,
+    pub(crate) owners: Option<[u8; REGIONS]>,
     /// Résultat final : victoire, pièces gagnées depuis le début du plan.
-    win: [f32; MAX_PLAYERS],
-    gain: [f32; MAX_PLAYERS],
+    pub(crate) win: [f32; MAX_PLAYERS],
+    pub(crate) gain: [f32; MAX_PLAYERS],
 }
 
 /// Les valeurs de joueurs réels vues du joueur `actor` (relatif 0).
-fn relative<T: Copy + Default>(v: &[T; MAX_PLAYERS], actor: usize, n: usize) -> [T; MAX_PLAYERS] {
+pub(crate) fn relative<T: Copy + Default>(v: &[T; MAX_PLAYERS], actor: usize, n: usize) -> [T; MAX_PLAYERS] {
     let mut out = [T::default(); MAX_PLAYERS];
     for (r, x) in out.iter_mut().enumerate().take(n) {
         *x = v[(actor + r) % n];
@@ -138,7 +138,7 @@ fn relative<T: Copy + Default>(v: &[T; MAX_PLAYERS], actor: usize, n: usize) -> 
     out
 }
 
-fn coins(g: &Game) -> [i32; MAX_PLAYERS] {
+pub(crate) fn coins(g: &Game) -> [i32; MAX_PLAYERS] {
     std::array::from_fn(|q| g.state.players.get(q).map_or(0, |p| p.coins))
 }
 
@@ -217,8 +217,16 @@ async fn play(table: &Table, seed: u32, az: &Az, rng: &mut Rng, oracle: &impl Or
             }
         }
     }
-    let o = Outcome::of(&g);
-    let end = coins(&g);
+    finish(&mut segments, &g);
+    segments
+}
+
+/// Les cibles connues à la fin de la partie `g` : le résultat final, et ce qui manque encore (valeur au
+/// prochain tour, propriétaires) aux plans dont le joueur n'a pas rejoué.
+pub(crate) fn finish(segments: &mut [Segment], g: &Game) {
+    let n = g.state.player_count();
+    let o = Outcome::of(g);
+    let end = coins(g);
     let win: [f32; MAX_PLAYERS] = std::array::from_fn(|q| o.win[q] as f32);
     for p in segments.iter_mut() {
         let gain: [f32; MAX_PLAYERS] = std::array::from_fn(|q| (end[q] - p.coins[q]) as f32);
@@ -228,10 +236,9 @@ async fn play(table: &Table, seed: u32, az: &Az, rng: &mut Rng, oracle: &impl Or
             p.next = Some((p.win, p.gain));
         }
         if p.owners.is_none() {
-            p.owners = Some(owners(&g, p.actor));
+            p.owners = Some(owners(g, p.actor));
         }
     }
-    segments
 }
 
 /// Les fichiers d'un fil (`r{graine}-{fil}.*`).
@@ -268,7 +275,7 @@ impl Files {
         Ok(Files { out, raw: if raw { Some(open(".raw")?) } else { None }, games: 0 })
     }
 
-    fn write(&mut self, game: &Game_, segments: &[Segment]) -> std::io::Result<()> {
+    pub(crate) fn write(&mut self, game: &Game_, segments: &[Segment]) -> std::io::Result<()> {
         let o = &mut self.out;
         if let Some(first) = segments.first() {
             for row in first.node.chunks(NODE) {
@@ -347,11 +354,11 @@ impl Files {
 }
 
 /// Une donne : de quoi rejouer la partie.
-struct Game_ {
-    deal: u64,
-    map_seed: u64,
-    seed: u32,
-    players: usize,
+pub(crate) struct Game_ {
+    pub(crate) deal: u64,
+    pub(crate) map_seed: u64,
+    pub(crate) seed: u32,
+    pub(crate) players: usize,
 }
 
 pub struct Config {

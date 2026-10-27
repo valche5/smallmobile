@@ -173,3 +173,102 @@ fn imitation_games_split_into_plans() {
     assert!(plans > 50, "{plans} plans");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// La politique améliorée : l'a priori quand `beta` est nul, et après le dernier embranchement ; ailleurs,
+/// elle penche vers les coups des meilleurs candidats.
+#[test]
+fn improved_policy_follows_the_best_candidates() {
+    use smallmobile_lab8::net::Value;
+    use smallmobile_lab8::search::{Decision, Searched, improved};
+    let d = |keys: &[u16], probs: &[f32], chosen| Decision { keys: keys.to_vec(), probs: probs.to_vec(), chosen };
+    // trois candidats : A = (1, 5), B = (1, 6), C = (2, 7) ; B est le meilleur
+    let traces = vec![
+        vec![d(&[1, 2, 3], &[0.5, 0.3, 0.2], 0), d(&[5, 6], &[0.6, 0.4], 0)],
+        vec![d(&[1, 2, 3], &[0.5, 0.3, 0.2], 0), d(&[5, 6], &[0.6, 0.4], 1)],
+        vec![d(&[1, 2, 3], &[0.5, 0.3, 0.2], 1), d(&[7, 8], &[0.9, 0.1], 0)],
+    ];
+    let value = Value { win: [0.2; 5], gain: [0.0; 5] };
+    let s = Searched {
+        plan: Vec::new(),
+        candidates: vec![(Vec::new(), 0.4), (Vec::new(), 0.6), (Vec::new(), 0.3)],
+        traces,
+        root: (value, value),
+        encodes: 0,
+        steps: 0,
+    };
+    for chosen in 0..3 {
+        for step in improved(&s, chosen, 0.0) {
+            for (_, p, q) in step {
+                assert!((p - q).abs() < 1e-6, "beta nul : l'a priori");
+            }
+        }
+    }
+    let t = improved(&s, 1, 10.0);
+    let sum = |step: &[(u16, f32, f32)]| step.iter().map(|x| x.1).sum::<f32>();
+    assert!((sum(&t[0]) - 1.0).abs() < 1e-5 && (sum(&t[1]) - 1.0).abs() < 1e-5);
+    // premier pas : le coup 1 (A et B) gagne sur le coup 2 (C) ; le coup 3, sans candidat, reçoit la
+    // moyenne de tous
+    assert!(t[0][0].1 > 0.5 && t[0][1].1 < 0.3);
+    // second pas : le coup 6 (B) l'emporte sur le coup 5 (A)
+    assert!(t[1][1].1 > 0.4 && t[1][0].1 < 0.6);
+    // le long de C, le second pas n'a qu'un candidat : l'a priori
+    for (_, p, q) in &improved(&s, 2, 10.0)[1] {
+        assert!((p - q).abs() < 1e-6);
+    }
+}
+
+/// Le selfplay (réseau au hasard, sur le processeur) : chaque plan cherché est enregistré, ses
+/// décisions ont leurs coups possibles, le coup joué en est, la cible et l'a priori font 1 ; Python
+/// les lit comme les parties d'imitation.
+#[test]
+fn selfplay_games_split_into_plans() {
+    use smallmobile_lab8::net::Net;
+    use smallmobile_lab8::search::{self, Cpu};
+    use smallmobile_lab8::selfplay;
+    let net = Net::load(Path::new(&fixture_net())).unwrap();
+    let dir = std::env::temp_dir().join(format!("lab8-selfplay-{}", std::process::id()));
+    let cfg = selfplay::Config {
+        players: vec![2, 4],
+        games: 2,
+        threads: 1,
+        seed: 5,
+        search: search::Config::parse("k=4,m=2,mods=2").unwrap(),
+        beta: 10.0,
+        explore: 1,
+    };
+    selfplay::run(&cfg, &Cpu(&net), &dir).unwrap();
+    let prefix = dir.join("s5-00");
+    let f: Vec<Vec<u8>> = EXTENSIONS.iter().map(|e| read(&prefix, e)).collect();
+    let [games, _, _, seg, .., owner, step, legal] = &f[..] else { panic!() };
+    let games = String::from_utf8(games.clone()).unwrap();
+    let plans = seg.len() / SEG;
+    assert_eq!(games.lines().map(|l| l.split(' ').nth(4).unwrap().parse::<usize>().unwrap()).sum::<usize>(), plans);
+    let (mut steps, mut at, mut regions) = (0, 0, 0);
+    for p in seg.chunks(SEG) {
+        let (s, n) = (u16_at(p, 4) as usize, p[10] as usize);
+        regions += p[11] as usize;
+        assert!(s >= 1);
+        let v: Vec<f32> = (0..30).map(|k| unhalf(u16_at(p, 16 + 2 * k))).collect();
+        for (what, from) in [("win", 0), ("here", 10), ("next_win", 15), ("prior_win", 25)] {
+            let sum: f32 = v[from..from + n].iter().sum();
+            assert!((sum - 1.0).abs() < 5e-3, "{what} : {sum}");
+        }
+        for st in step[steps * STEP..(steps + s) * STEP].chunks(STEP) {
+            let (key, count) = (u16_at(st, 0), u16_at(st, 2) as usize);
+            assert!(count >= 2);
+            let moves: Vec<(u16, u16, u16)> = legal[at * LEGAL..(at + count) * LEGAL]
+                .chunks(LEGAL)
+                .map(|c| (u16_at(c, 0), u16_at(c, 2), u16_at(c, 4)))
+                .collect();
+            assert!(moves.iter().any(|m| m.0 == key), "le coup joué est possible");
+            for total in [moves.iter().map(|m| m.1 as f32).sum::<f32>(), moves.iter().map(|m| m.2 as f32).sum()] {
+                assert!((total - PROBABILITY).abs() <= count as f32, "{total}");
+            }
+            at += count;
+        }
+        steps += s;
+    }
+    assert_eq!((step.len(), legal.len(), owner.len()), (steps * STEP, at * LEGAL, regions));
+    assert!(plans > 40, "{plans} plans");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

@@ -13,6 +13,12 @@ sa valeur au début de chaque plan sont enregistrées avec les parties.
 
 Le réseau mesuré et écrit est la moyenne glissante des poids (EMA), mise à jour tous les EMA_EVERY lots.
 
+Phase 6 (`lab8 selfplay`) : `--data` les parties de selfplay, `--imitation` des parties d'imitation dont
+une part `--imitation-share` de chaque lot est tirée (le réseau ne dérive pas sur peu de parties). La
+validation porte alors sur les plans mis de côté des deux : imitation (face à c130, comparable aux
+apprentissages précédents) et selfplay (face à la cible de la recherche ; « c130 » y est l'a priori du
+réseau qui a joué).
+
 `--value-every K` : la victoire et les pièces finales ne sont apprises que sur un plan sur K (ceux dont
 l'indice est multiple de K) ; le vainqueur d'une partie, répété sur ses ~80 plans, s'apprend sinon par
 cœur (i1 : valeur au mieux au lot 50 000, puis de plus en plus mauvaise). Les cibles du prochain tour
@@ -147,17 +153,26 @@ def main():
     ap.add_argument("--bench", type=int, help="mesurer le débit sur ce nombre de lots, puis s'arrêter")
     ap.add_argument("--state", help="état complet pour reprendre (écrit à chaque validation)")
     ap.add_argument("--value-every", type=int, default=1, help="victoire finale apprise sur un plan sur K")
+    ap.add_argument("--imitation", help="parties d'imitation mêlées à `--data` (dossiers, virgules)")
+    ap.add_argument("--imitation-share", type=float, default=0.25, help="part de chaque lot tirée de `--imitation`")
     a = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(a.seed)
     rng = np.random.default_rng(a.seed)
     start = time.time()
-    data = Data(a.data.split(","))
-    train_idx = np.flatnonzero(~data.val)
-    val_idx = np.flatnonzero(data.val)[:VAL_PLANS]
-    print(f"{len(data)} plans ({len(train_idx)} pour l'apprentissage, {len(val_idx)} mesurés) ; "
-          f"chargement {time.time() - start:.0f} s ; {device}", flush=True)
+    own = a.data.split(",")
+    data = Data(own + (a.imitation.split(",") if a.imitation else []))
+    imitated = data.source >= len(own)
+    train_idx = np.flatnonzero(~data.val & ~imitated)
+    imit_idx = np.flatnonzero(~data.val & imitated)
+    # validation : les plans mis de côté de l'imitation s'il y en a (comparables d'un apprentissage à
+    # l'autre), puis ceux de `--data`
+    vals = [("", np.flatnonzero(data.val & (imitated if a.imitation else ~imitated))[:VAL_PLANS])]
+    if a.imitation:
+        vals.append(("selfplay ", np.flatnonzero(data.val & ~imitated)[:VAL_PLANS]))
+    print(f"{len(data)} plans ({len(train_idx)} + {len(imit_idx)} d'imitation pour l'apprentissage, "
+          f"{' + '.join(str(len(v)) for _, v in vals)} mesurés) ; chargement {time.time() - start:.0f} s ; {device}", flush=True)
     net = (load(a.init) if a.init else Net(*map(int, a.size.split(",")))).to(device)
     print(f"{sum(p.numel() for p in net.parameters()):,} paramètres", flush=True)
     decay = [p for n, p in net.named_parameters() if p.dim() >= 2 and "rel" not in n]
@@ -167,6 +182,9 @@ def main():
     lr = lambda i: min(1.0, (i + 1) / WARMUP) * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * min(1.0, i / steps))))
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr)
     order = rng.choice(train_idx, size=steps * a.batch, replace=len(train_idx) < steps * a.batch)
+    if a.imitation:
+        mixed = rng.random(len(order)) < a.imitation_share
+        order[mixed] = rng.choice(imit_idx, size=int(mixed.sum()))
     params = list(net.parameters())
     ema = [p.detach().clone() for p in params]
     first = 0
@@ -215,11 +233,12 @@ def main():
             sums, count = {}, 0
             print(f"lot {i + 1}/{steps} : {show(avg)} ; {seen / secs:.0f} plans/s", flush=True)
         if not a.bench and ((i + 1) % a.val_every == 0 or i + 1 == steps):
-            start = time.time()
-            ours, by_phase, by_players = validate(publish(), data, val_idx, device)
-            print(f"  validation ({time.time() - start:.0f} s, moyenne des poids) : {show(ours)}")
-            for name, part in list(by_phase.items()) + [(f"{n} j.", v) for n, v in by_players.items()]:
-                print(f"    {name} : {show(part)}")
+            for label, val_idx in vals:
+                start = time.time()
+                ours, by_phase, by_players = validate(publish(), data, val_idx, device)
+                print(f"  validation {label}({time.time() - start:.0f} s, moyenne des poids) : {show(ours)}")
+                for name, part in list(by_phase.items()) + [(f"{n} j.", v) for n, v in by_players.items()]:
+                    print(f"    {name} : {show(part)}")
             sys.stdout.flush()
             if a.out:
                 # le dernier sous `out`, et chaque validation à côté (`x-012000.bin`) : le meilleur se

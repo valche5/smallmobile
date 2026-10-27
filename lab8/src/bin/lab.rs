@@ -3,6 +3,9 @@
 //! lab8 record --games N --out DIR [--agent az:net=lab7/nets/c130.bin,n=400] [--players 2,3,4,5]
 //!     [--seed S] [--threads N] [--device vulkan] [--raw true]   (parties d'imitation découpées en plans,
 //!     `record` ; `--raw` : aussi les entrées pleines, pour vérifier la forme compacte)
+//! lab8 selfplay --net poids.bin --games N --out DIR [--search k=16,m=4] [--beta 10] [--explore 2]
+//!     [--players 2,3,4,5] [--seed S] [--threads N] [--device vulkan]   (phase 6 : tous les joueurs
+//!     cherchent leurs plans, chaque plan cherché enregistré comme les parties d'imitation)
 //! lab8 arena --hero A --field B [--players 2,3,4,5] [--deals N] [--seed S] [--out F] [--device vulkan]
 //!     (l'arène de lab7 ; joueurs de lab7, `plan:net=…[,t=…]` : le décodeur de lab8 sans recherche,
 //!     `plans:net=…[,k=16,m=4,…]` : la recherche sur des plans, `search::Config`)
@@ -30,6 +33,8 @@ use smallmobile_lab8::net::Net;
 use smallmobile_lab8::plan::Start;
 use smallmobile_lab8::rand::{Rng, mix};
 use smallmobile_lab8::record;
+use smallmobile_lab8::search;
+use smallmobile_lab8::selfplay;
 use smallmobile_lab8::tokens::{distances, dynamics};
 
 fn main() {
@@ -39,6 +44,7 @@ fn main() {
     match cmd.as_str() {
         "record" => record_cmd(&opts),
         "arena" => arena_cmd(&opts),
+        "selfplay" => selfplay_cmd(&opts),
         "fixture" => fixture_cmd(&opts),
         "check-net" => check_net_cmd(&opts),
         "speed" => speed_cmd(&opts),
@@ -119,6 +125,47 @@ fn start_gpu(device: Option<Device>, paths: &[PathBuf]) -> Option<Gpu> {
 fn net_path(spec: &str) -> PathBuf {
     let net = spec.split(',').find_map(|p| p.strip_prefix("az:").unwrap_or(p).strip_prefix("net="));
     PathBuf::from(net.unwrap_or_else(|| usage()))
+}
+
+fn selfplay_cmd(opts: &HashMap<String, String>) {
+    let path = opts.get("net").unwrap_or_else(|| usage()).clone();
+    let search = opts.get("search").map_or(Some(search::Config::default()), |s| search::Config::parse(s));
+    let cfg = selfplay::Config {
+        players: players(opts),
+        games: get(opts, "games", 100),
+        threads: get(opts, "threads", threads()),
+        seed: get(opts, "seed", 86_000_000),
+        search: search.unwrap_or_else(|| usage()),
+        beta: get(opts, "beta", 10.0),
+        explore: get(opts, "explore", 2),
+    };
+    let dir = PathBuf::from(opts.get("out").unwrap_or_else(|| usage()));
+    let net = Net::load(Path::new(&path)).unwrap_or_else(|e| panic!("{path} : {e}"));
+    eprintln!(
+        "selfplay : {path}, {:?}, beta {}, {} manches d'exploration, {} fils",
+        cfg.search, cfg.beta, cfg.explore, cfg.threads
+    );
+    let start = Instant::now();
+    let done = match device(opts) {
+        #[cfg(feature = "vulkan")]
+        Some(_) => {
+            use smallmobile_lab8::vulkan::{Encoder, Gpu, Shared};
+            let encoder = Encoder::new(Path::new(&path), 1024).unwrap_or_else(|e| panic!("GPU : {e}"));
+            eprintln!("encodeur de lab8 : {}", encoder.describe());
+            let gpu = Gpu(std::sync::Arc::new(Shared::new(encoder)));
+            let done = selfplay::run(&cfg, &gpu, &dir);
+            if let Some(p) = gpu.0.encoder.profile() {
+                eprintln!("GPU : {p}");
+            }
+            done
+        }
+        _ => selfplay::run(&cfg, &search::Cpu(&net), &dir),
+    };
+    done.unwrap_or_else(|e| {
+        eprintln!("échec : {e}");
+        std::process::exit(1)
+    });
+    eprintln!("{} parties en {:.0} s", cfg.games, start.elapsed().as_secs_f64());
 }
 
 fn record_cmd(opts: &HashMap<String, String>) {
