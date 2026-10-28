@@ -15,7 +15,7 @@
 # Réglages : START (réseau de départ), GAMES (5 000), SEARCH (k=8,m=2), BETA (vide : celui de mctx),
 # EXPLORE (2), THREADS (200, parties menées ensemble : le GPU veut de gros lots), STEPS (4 000), BATCH
 # (256), LR (1e-4), EMA (0,998), WINDOW (4 cycles), IMIT (lab8/data/c130), IMIT_SHARE (0,25),
-# DUEL_SEARCH (k=8,m=2), DEALS (460), STOP (3), SEED_BASE (90 000 000), PY (le python de PyTorch), LAB
+# DUEL_SEARCH (k=8,m=2), DEALS (460), DUEL_THREADS (150), STOP (3), SEED_BASE (90 000 000), PY (le python de PyTorch), LAB
 # (le programme lab9 ; une copie figée si l'on compile pendant la boucle).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -38,6 +38,9 @@ IMIT=${IMIT:-lab8/data/c130}
 IMIT_SHARE=${IMIT_SHARE:-0.25}
 DUEL_SEARCH=${DUEL_SEARCH:-k=8,m=2}
 DEALS=${DEALS:-460}
+# parties menées ensemble dans un duel : 20 (un fil par cœur) laissaient au GPU des lots de 9 lectures,
+# 8,6 s par donne ; 100 fils : 3,2 s
+DUEL_THREADS=${DUEL_THREADS:-150}
 STOP=${STOP:-3}
 SEED_BASE=${SEED_BASE:-90000000}
 PY=${PY:-$PWD/lab3/py/.venv/bin/python}
@@ -89,7 +92,7 @@ duel() { # réseau : contre c000, la même recherche des deux côtés
   [ -f "$f.tsv" ] && return 0
   start=$(date +%s)
   $LAB arena --hero "plans:net=$OUT/$c.bin,gpu=1,$DUEL_SEARCH" --field "plans:net=$OUT/c000.bin,gpu=1,$DUEL_SEARCH" \
-    --deals "$DEALS" --seed 1004 --stop "$STOP" --out "$f.tmp" > "$f.txt" 2> "$f.err"
+    --deals "$DEALS" --seed 1004 --stop "$STOP" --threads "$DUEL_THREADS" --out "$f.tmp" > "$f.txt" 2> "$f.err"
   mv "$f.tmp" "$f.tsv"
   log "$c face à c000 : $(($(date +%s) - start)) s, $(grep -E '^(arrêt|test séquentiel)' "$f.txt")"
 }

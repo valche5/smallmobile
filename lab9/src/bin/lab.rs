@@ -155,9 +155,9 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
         Some(_) => {
             use smallmobile_lab9::vulkan::{Encoder, Gpu, Shared};
             // plusieurs moteurs sur la carte, les fils répartis entre eux ; à chacun ses places et caches,
-            // 64 par fil (une recherche en k = 8, m = 2 en tient moins de 50)
+            // 32 par fil (200 fils en k = 8, m = 2 : au plus 3 800 places et 3 400 caches pris)
             let engines: usize = get(opts, "engines", 1);
-            let each = (64 * cfg.threads.div_ceil(engines)).min(16384);
+            let each = (32 * cfg.threads.div_ceil(engines)).min(16384);
             let gpus: Vec<Gpu> = (0..engines)
                 .map(|_| {
                     let encoder =

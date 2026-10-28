@@ -1,7 +1,8 @@
 #version 450
 // Les logits des coups de chaque voie : les 32 coups globaux (`out_glob`, déjà calculés), puis par sorte
 // le produit de sa requête (`out_kind`) avec la sortie de l'encodeur de chaque région / √d ; -1e9 pour
-// les régions absentes.
+// les régions absentes. Un groupe par voie : ses 9 requêtes et les sorties de ses régions d'abord dans
+// la mémoire partagée (lectures groupées), puis un sous-groupe par logit, chaque fil une part de d.
 #include "common.glsl"
 #include "slots.glsl"
 
@@ -12,27 +13,32 @@ layout(push_constant) uniform Params {
 } p;
 
 const uint KEYS = 608u;
+const uint KINDS = 9u;
+const uint DMAX = 256u;
+
+shared float qs[KINDS * DMAX];
+shared float xs[R * DMAX];
 
 void main() {
     uint lane = gl_WorkGroupID.x;
     uint t = gl_LocalInvocationID.x;
     uint slot = lanes[lane * LANE_WORDS + L_SLOT];
     uint regions = slot_info[slot * INFO];
+    for (uint i = t; i < KINDS * p.d; i += 256u) qs[i] = act[p.kq_off + lane * KINDS * p.d + i];
+    for (uint i = t; i < regions * p.d; i += 256u) xs[i] = float(slot16[slot * p.per16 + i]);
+    if (t < 32u) logits[lane * KEYS + t] = act[p.glob_off + lane * 32u + t];
+    barrier();
     float norm = inversesqrt(float(p.d));
-    for (uint key = t; key < KEYS; key += 256u) {
-        float v = -1e9;
-        if (key < 32u) {
-            v = act[p.glob_off + lane * 32u + key];
-        } else {
-            uint k = (key - 32u) / 64u, r = (key - 32u) % 64u;
-            if (r < regions) {
-                float s = 0.0;
-                uint q = p.kq_off + lane * 9u * p.d + k * p.d;
-                uint x = slot * p.per16 + r * p.d;
-                for (uint c = 0u; c < p.d; c++) s += act[q + c] * float(slot16[x + c]);
-                v = s * norm;
-            }
+    uint sg = gl_SubgroupID, sl = gl_SubgroupInvocationID;
+    for (uint key = 32u + sg; key < KEYS; key += gl_NumSubgroups) {
+        uint k = (key - 32u) / 64u, r = (key - 32u) % 64u;
+        if (r >= regions) {
+            if (sl == 0u) logits[lane * KEYS + key] = -1e9;
+            continue;
         }
-        logits[lane * KEYS + key] = v;
+        float s = 0.0;
+        for (uint c = sl; c < p.d; c += 32u) s += qs[k * p.d + c] * xs[r * p.d + c];
+        s = subgroupAdd(s);
+        if (sl == 0u) logits[lane * KEYS + key] = s * norm;
     }
 }

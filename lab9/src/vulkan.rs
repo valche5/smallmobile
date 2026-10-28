@@ -533,6 +533,8 @@ pub struct Encoder {
     born: std::time::Instant,
     /// Les kernels enregistrés sont ceux des pas du décodeur (pour le profil).
     stepping: std::sync::atomic::AtomicBool,
+    /// Le moins de places et de caches libres atteint.
+    lowest: [std::sync::atomic::AtomicUsize; 2],
 }
 
 const S_READS: usize = 0;
@@ -664,6 +666,7 @@ impl Encoder {
                 stats: Default::default(),
                 born: std::time::Instant::now(),
                 stepping: std::sync::atomic::AtomicBool::new(false),
+                lowest: [std::sync::atomic::AtomicUsize::new(usize::MAX), std::sync::atomic::AtomicUsize::new(usize::MAX)],
             };
             e.build(&memory, family)?;
             if std::env::var_os("LAB9_GPU_PROFILE").is_some() {
@@ -1150,9 +1153,13 @@ impl Encoder {
         Ok(())
     }
 
-    /// Une place de lecture et un cache de voie libres (`None` : plus aucun).
+    /// Une place de lecture et un cache de voie libres (`None` : plus aucun). Le plus petit nombre de
+    /// libres atteint est noté (`peaks`).
     pub fn alloc_slot(&self) -> Option<u32> {
-        self.free_slots.lock().expect("places").pop()
+        let mut free = self.free_slots.lock().expect("places");
+        let slot = free.pop();
+        self.lowest[0].fetch_min(free.len(), std::sync::atomic::Ordering::Relaxed);
+        slot
     }
 
     pub fn free_slot(&self, slot: u32) {
@@ -1160,7 +1167,22 @@ impl Encoder {
     }
 
     pub fn alloc_cache(&self) -> Option<u32> {
-        self.free_caches.lock().expect("caches").pop()
+        let mut free = self.free_caches.lock().expect("caches");
+        let cache = free.pop();
+        self.lowest[1].fetch_min(free.len(), std::sync::atomic::Ordering::Relaxed);
+        cache
+    }
+
+    /// Le plus grand nombre de places et de caches pris en même temps, et leur nombre.
+    pub fn peaks(&self) -> String {
+        use std::sync::atomic::Ordering::Relaxed;
+        format!(
+            "places prises au plus {} sur {}, caches {} sur {}",
+            self.slots - self.lowest[0].load(Relaxed).min(self.slots),
+            self.slots,
+            self.caches - self.lowest[1].load(Relaxed).min(self.caches),
+            self.caches
+        )
     }
 
     pub fn free_cache(&self, cache: u32) {
@@ -1499,10 +1521,11 @@ impl Shared {
         use std::sync::atomic::Ordering::Relaxed;
         let (turns, ns) = (self.turns[0].load(Relaxed) as f64, self.turns[1].load(Relaxed) as f64);
         format!(
-            "{turns:.0} tours de {:.2} ms, {:.0} % du temps ; {}",
+            "{turns:.0} tours de {:.2} ms, {:.0} % du temps ; {} ; {}",
             ns / 1e6 / turns.max(1.0),
             100.0 * ns / 1e9 / self.encoder.born.elapsed().as_secs_f64(),
-            self.encoder.batches()
+            self.encoder.batches(),
+            self.encoder.peaks()
         )
     }
 

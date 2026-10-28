@@ -98,8 +98,8 @@ impl Agent for Plan {
     }
 }
 
-/// La recherche sur des plans (`search`) comme joueur des arènes : `plans:net=…[,k=16,m=4,t=1,mix=0.5,
-/// win=0.5,head=final]`. Le plan choisi couvre souvent plusieurs décisions du jeu (les conquêtes une à
+/// La recherche sur des plans (`search`) comme joueur des arènes : `plans:net=…[,gpu=1,slots=4096,k=16,m=4,t=1,
+/// mix=0.5,win=0.5,head=final]`. Le plan choisi couvre souvent plusieurs décisions du jeu (les conquêtes une à
 /// une) : sa suite est gardée, sous l'empreinte de la position où elle reprend.
 pub struct Plans {
     pub net: Arc<Net>,
@@ -111,6 +111,12 @@ pub struct Plans {
     #[cfg(feature = "vulkan")]
     gpu: Option<(crate::vulkan::Gpu, bool)>,
 }
+
+/// Places de lecture et caches de voie sur le GPU d'un joueur `plans:` par défaut (`slots=` pour d'autres) :
+/// assez pour k = 16, m = 4 sur 20 fils, ~2,8 Go pour un réseau 256 × 6. Les 16 384 places et 12 288
+/// caches de `vulkan::Encoder::new` (les grosses recherches de lab8) ne tiennent pas deux fois dans les
+/// 16 Go de la carte : un duel débordait dans la mémoire du PC, plusieurs fois plus lent.
+const SLOTS: usize = 4096;
 
 /// Décisions du jeu où le plan choisi était fini trop tôt (jamais attendu : compté pour les tests), et
 /// suites de plans reprises.
@@ -131,9 +137,11 @@ impl Plans {
     pub fn named(name: &str) -> Option<Plans> {
         let opts = name.strip_prefix("plans:")?;
         let (mut net, mut rest, mut gpu, mut decoder) = (None, Vec::new(), false, true);
+        let mut slots = SLOTS;
         for part in opts.split(',') {
             match part.split_once('=')? {
                 ("net", path) => net = Some(path.to_string()),
+                ("slots", n) => slots = n.parse().ok()?,
                 ("gpu", "1") => gpu = true,
                 ("gpu", "enc") => (gpu, decoder) = (true, false),
                 ("gpu", _) => return None,
@@ -148,8 +156,9 @@ impl Plans {
         let loaded = Net::load(Path::new(&path)).unwrap_or_else(|e| panic!("{path} : {e}"));
         #[cfg(feature = "vulkan")]
         let gpu = gpu.then(|| {
-            let encoder = crate::vulkan::Encoder::new(Path::new(&path), 1024).unwrap_or_else(|e| panic!("GPU : {e}"));
-            eprintln!("encodeur de lab9 : {}", encoder.describe());
+            let encoder = crate::vulkan::Encoder::sized(Path::new(&path), 1024, slots, slots)
+                .unwrap_or_else(|e| panic!("GPU : {e}"));
+            eprintln!("encodeur de lab9 : {}, {slots} places et caches", encoder.describe());
             (crate::vulkan::Gpu(Arc::new(crate::vulkan::Shared::new(encoder))), decoder)
         });
         #[cfg(not(feature = "vulkan"))]
@@ -172,8 +181,11 @@ impl Plans {
 #[cfg(feature = "vulkan")]
 impl Drop for Plans {
     fn drop(&mut self) {
-        if let Some(p) = self.gpu.as_ref().and_then(|(gpu, _)| gpu.0.encoder.profile()) {
-            eprintln!("GPU de {} : {p}", self.label);
+        if let Some((gpu, _)) = self.gpu.as_ref() {
+            eprintln!("GPU de {} : {}", self.label, gpu.0.report());
+            if let Some(p) = gpu.0.encoder.profile() {
+                eprintln!("kernels de {} : {p}", self.label);
+            }
         }
     }
 }
