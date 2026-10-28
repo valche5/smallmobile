@@ -255,3 +255,25 @@ un duel à 100 fils 1 650. Réserves : 32 par fil pour le selfplay (10,6 → ~5,
 La boucle mène ses duels à 150 fils.
 
 Boucle reprise à 11 h 50 au duel de c001, avec ce programme (`d6e0fea`).
+
+## Phase 6 : la boucle p1, quatre pas sans progrès (28 octobre, arrêtée)
+
+Pas de la boucle (5 000 parties par cycle en ~28 min avec le moteur accéléré, apprentissage ~2 min 20,
+duel 9 à 14 min) ; duels contre c000 (h1), recherche sur plans k = 8, m = 2 des deux côtés, graine 1004,
+arrêt séquentiel à 3 points :
+
+| Pas | Fenêtre | Politique, imitation (c130 : 1,179) | Politique, selfplay (réseau qui a joué) | Valeur, selfplay | Duel contre c000 |
+| --- | --- | --- | --- | --- | --- |
+| c000 (h1) | — | 1,154 | — | — | — |
+| c001 | c001 | 1,166 | 1,158 (1,168) | 1,015 | −2,9 ± 3,5 (184 donnes) |
+| c002 | c001-c002 | 1,172 | 1,162 (1,168) | 1,010 | −2,0 ± 3,1 (184) |
+| c003 | c001-c003 | 1,175 | 1,161 (1,167) | 1,002 | 0,0 ± 2,3 (368) |
+| c004 | c001-c004 | 1,177 | 1,162 (1,167) | 1,002 | −3,7 ± 3,4 (184) |
+
+Arrêtée à la demande de l'utilisateur pendant les parties de c005. Le réseau s'écarte de la politique de
+c130 et apprend un peu les cibles de sa recherche (mieux que le réseau qui a joué, de 0,005), sans rien
+gagner en jeu. Lecture : le professeur n'est pas plus fort que l'élève. h1 imite les recherches de c130
+à n = 400 ; le selfplay apprend d'une recherche sur plans à k = 8, m = 2, qui n'est sans doute pas plus
+forte (i2 en k = 16, m = 4 : +3,6 points seulement contre c130 à n = 400), et dont la cible n'est
+corrigée qu'aux décisions où des candidats divergent (ailleurs : l'a priori). Même blocage que lab7
+(dix pas sans progrès). Réseaux et parties gardés (`runs/p1`, `data/p1/c001` à `c004`).
