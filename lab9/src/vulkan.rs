@@ -55,9 +55,12 @@ const DEC_SELF: usize = 9;
 const DEC_CROSS: usize = 10;
 const DEC_OUT: usize = 11;
 const NEIGHBOURS: usize = 12;
-/// Places de lecture et caches de voie dans la mémoire du GPU, voies au plus par pas, pas au plus par
-/// plan (`slots.glsl`). Réseau 256 × 6 : 2,8 Go de places, 3,2 Go de caches ; assez pour une recherche
-/// de 32 candidats dans 16 mondes sur une douzaine de fils.
+/// Groupes de `neighbours` par position (chacun une part des jetons).
+const NEIGHBOUR_PARTS: u32 = 1;
+/// Places de lecture et caches de voie dans la mémoire du GPU par défaut (`Encoder::sized` pour d'autres
+/// nombres), voies au plus par pas, pas au plus par plan (`slots.glsl`). Réseau 256 × 6 : 2,8 Go de
+/// places, 6,4 Go de caches ; assez pour une recherche de 32 candidats dans 16 mondes sur une douzaine
+/// de fils.
 pub const SLOTS: usize = 16384;
 pub const CACHES: usize = 12288;
 pub const MAX_LANES: usize = 2048;
@@ -504,6 +507,9 @@ pub struct Encoder {
     /// Nombres bf16 rendus par position (`pack.comp`).
     per16: usize,
     pub max: usize,
+    /// Places de lecture et caches de voie.
+    slots: usize,
+    caches: usize,
     name: String,
     /// Un lot à la fois.
     lock: Mutex<()>,
@@ -511,17 +517,23 @@ pub struct Encoder {
     /// (nanosecondes, nombre), affichée à la fin.
     profile: Option<(vk::QueryPool, f64, Mutex<KernelTimes>)>,
     marks: Mutex<Vec<usize>>,
-    /// Lots de lectures et positions lues, lots de pas et voies, temps passé à attendre le GPU (ns),
-    /// depuis `born` (`profile`).
-    stats: [std::sync::atomic::AtomicU64; 5],
+    /// Lots de lectures et positions lues, lots de pas et voies ; temps (ns) passés à attendre le GPU
+    /// (lectures, pas), à préparer les lots sur le processeur (entrées, commandes) et à relire leurs
+    /// sorties ; depuis `born` (`batches`).
+    stats: [std::sync::atomic::AtomicU64; 8],
     born: std::time::Instant,
+    /// Les kernels enregistrés sont ceux des pas du décodeur (pour le profil).
+    stepping: std::sync::atomic::AtomicBool,
 }
 
 const S_READS: usize = 0;
 const S_READ_ITEMS: usize = 1;
 const S_STEPS: usize = 2;
 const S_STEP_ITEMS: usize = 3;
-const S_WAIT: usize = 4;
+const S_READ_WAIT: usize = 4;
+const S_STEP_WAIT: usize = 5;
+const S_PREP: usize = 6;
+const S_BACK: usize = 7;
 
 // SAFETY : les pointeurs sont ceux de la mémoire projetée, qui vit autant que l'`Encoder` ; un seul
 // lot à la fois les touche (`lock`).
@@ -532,6 +544,12 @@ impl Encoder {
     /// Le premier GPU dédié (ou celui dont le nom contient `LAB9_VULKAN_DEVICE`) et les poids `net`,
     /// pour des lots de `max` positions au plus.
     pub fn new(net: &Path, max: usize) -> Result<Encoder, String> {
+        Encoder::sized(net, max, SLOTS, CACHES)
+    }
+
+    /// `new`, avec `slots` places de lecture et `caches` caches de voie (la mémoire du GPU qu'ils prennent
+    /// : ~172 ko par place et 512 ko par cache pour un réseau 256 × 6).
+    pub fn sized(net: &Path, max: usize, slots: usize, caches: usize) -> Result<Encoder, String> {
         let weights = Weights::load(net)?;
         // SAFETY : appels Vulkan dans l'ordre de la spécification ; chaque objet créé est détruit
         // par `Drop`
@@ -622,18 +640,21 @@ impl Encoder {
                 outf: std::ptr::null(),
                 lanes: std::ptr::null_mut(),
                 logits: std::ptr::null(),
-                free_slots: Mutex::new((0..SLOTS as u32).rev().collect()),
-                free_caches: Mutex::new((0..CACHES as u32).rev().collect()),
+                free_slots: Mutex::new((0..slots as u32).rev().collect()),
+                free_caches: Mutex::new((0..caches as u32).rev().collect()),
                 weights,
                 acts,
                 per16,
                 max,
+                slots,
+                caches,
                 name,
                 lock: Mutex::new(()),
                 profile: None,
                 marks: Mutex::new(Vec::new()),
                 stats: Default::default(),
                 born: std::time::Instant::now(),
+                stepping: std::sync::atomic::AtomicBool::new(false),
             };
             e.build(&memory, family)?;
             if std::env::var_os("LAB9_GPU_PROFILE").is_some() {
@@ -770,9 +791,10 @@ impl Encoder {
                 self.buffer(memory, self.max * self.per16 * 2, storage, &[host | M::HOST_CACHED, host])?;
             let (fbuf, fmem) = self.buffer(memory, self.max * 20 * 4, storage, &[host | M::HOST_CACHED, host])?;
             let dw = self.weights.d * self.weights.dec.max(1);
-            let (slotbuf, _) = self.buffer(memory, SLOTS * self.per16 * 2, storage, &[M::DEVICE_LOCAL])?;
-            let (infobuf, _) = self.buffer(memory, SLOTS * INFO * 4, storage, &[M::DEVICE_LOCAL])?;
-            let (cachebuf, _) = self.buffer(memory, CACHES * 2 * MAX_STEPS * dw * 4, storage, &[M::DEVICE_LOCAL])?;
+            let (slotbuf, _) = self.buffer(memory, self.slots * self.per16 * 2, storage, &[M::DEVICE_LOCAL])?;
+            let (infobuf, _) = self.buffer(memory, self.slots * INFO * 4, storage, &[M::DEVICE_LOCAL])?;
+            let (cachebuf, _) =
+                self.buffer(memory, self.caches * 2 * MAX_STEPS * dw * 4, storage, &[M::DEVICE_LOCAL])?;
             let (lanebuf, lmem) =
                 self.buffer(memory, MAX_LANES * LANE_WORDS * 4, storage, &[M::DEVICE_LOCAL | host, host])?;
             let (logbuf, gmem) = self.buffer(memory, MAX_LANES * KEYS * 4, storage, &[host | M::HOST_CACHED, host])?;
@@ -871,7 +893,7 @@ impl Encoder {
             if let Some((pool, ..)) = &self.profile {
                 let mut marks = self.marks.lock().expect("horodatages");
                 d.cmd_write_timestamp(c, vk::PipelineStageFlags::COMPUTE_SHADER, *pool, marks.len() as u32 + 1);
-                marks.push(kernel);
+                marks.push(kernel + if self.stepping.load(std::sync::atomic::Ordering::Relaxed) { KERNELS } else { 0 });
             }
             let barrier = vk::MemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
@@ -897,14 +919,8 @@ impl Encoder {
         unsafe { self.dispatch(GEMM, &push, (rows.div_ceil(128) as u32, lin.n.div_ceil(128))) }
     }
 
-    /// Enregistre le calcul de `b` positions ; leurs sorties vont à l'hôte (`pack`), ou dans leurs places
-    /// de la mémoire du GPU (`store`).
-    unsafe fn record(&self, b: usize, to_slots: bool) -> Result<(), String> {
-        let w = &self.weights;
-        let a = &self.acts;
-        let d = w.d as u32;
-        let one = u32::MAX; // pas de saut de lignes
-        let t = TOKENS as u32;
+    /// Commence l'enregistrement des commandes (tampon remis à zéro, descripteurs, profil).
+    unsafe fn begin_commands(&self) -> Result<(), String> {
         // SAFETY : voir `new`
         unsafe {
             let dev = &self.device;
@@ -925,6 +941,35 @@ impl Encoder {
                 dev.cmd_write_timestamp(self.command, vk::PipelineStageFlags::TOP_OF_PIPE, *pool, 0);
                 self.marks.lock().expect("horodatages").clear();
             }
+        }
+        Ok(())
+    }
+
+    unsafe fn end_commands(&self) -> Result<(), String> {
+        // SAFETY : voir `new`
+        unsafe { self.device.end_command_buffer(self.command).map_err(vk_err("commandes")) }
+    }
+
+    /// Enregistre le calcul de `b` positions, seul ; leurs sorties vont à l'hôte (`pack`), ou dans leurs
+    /// places de la mémoire du GPU (`store`).
+    unsafe fn record(&self, b: usize, to_slots: bool) -> Result<(), String> {
+        // SAFETY : voir `new`
+        unsafe {
+            self.begin_commands()?;
+            self.record_reads(b, to_slots);
+            self.end_commands()
+        }
+    }
+
+    /// Les commandes du calcul de `b` positions (`record`).
+    unsafe fn record_reads(&self, b: usize, to_slots: bool) {
+        let w = &self.weights;
+        let a = &self.acts;
+        let d = w.d as u32;
+        let one = u32::MAX; // pas de saut de lignes
+        let t = TOKENS as u32;
+        // SAFETY : voir `new`
+        unsafe {
             let bu = b as u32;
             self.dispatch(
                 EMBED,
@@ -956,10 +1001,10 @@ impl Encoder {
                     Block::R(c) => {
                         // a = ln1 x ; z = gelu(conv1 [a, voisines, partie]) ; x += conv2 [ln2 z, voisines]
                         self.dispatch(LAYERNORM, &[rows as u32, d, a.x, 0, c.ln1.g, c.ln1.b, 2, a.n16], norm_groups);
-                        self.dispatch(NEIGHBOURS, &[a.n16, a.cat16, d, 3], (bu, 1));
+                        self.dispatch(NEIGHBOURS, &[a.n16, a.cat16, d, 3], (bu, NEIGHBOUR_PARTS));
                         self.gemm(rows, c.conv1, (a.cat16, 3 * d, one, 0), (a.o, d, one, 0), 8 | 1);
                         self.dispatch(LAYERNORM, &[rows as u32, d, a.o, 0, c.ln2.g, c.ln2.b, 2, a.n16], norm_groups);
-                        self.dispatch(NEIGHBOURS, &[a.n16, a.cat16, d, 2], (bu, 1));
+                        self.dispatch(NEIGHBOURS, &[a.n16, a.cat16, d, 2], (bu, NEIGHBOUR_PARTS));
                         self.gemm(rows, c.conv2, (a.cat16, 2 * d, one, 0), (a.x, d, one, 0), 8 | 4);
                         continue;
                     }
@@ -983,9 +1028,7 @@ impl Encoder {
             self.gemm(b * REGIONS, w.reg, (a.o16, d, r, t), (a.reg, d, one, 0), 8);
             let out = if to_slots { STORE } else { PACK };
             self.dispatch(out, &[a.o, a.reg, a.kv, a.v2, a.n2, d, w.dec as u32, self.per16 as u32], (bu, 1));
-            dev.end_command_buffer(self.command).map_err(vk_err("commandes"))?;
         }
-        Ok(())
     }
 
     /// Les lectures des positions `items` (encodage, distances de la carte).
@@ -1007,7 +1050,7 @@ impl Encoder {
             self.record(b, false)?;
             self.submit_and_wait()?;
             let t1 = std::time::Instant::now();
-            self.collect_profile(false)?;
+            self.collect_profile()?;
             let d = self.weights.d;
             let mut out = Vec::with_capacity(b);
             for (i, (e, _)) in items.iter().enumerate() {
@@ -1063,7 +1106,7 @@ impl Encoder {
 
     /// Ajoute les horodatages du dernier calcul aux durées par kernel (`LAB9_GPU_PROFILE`).
     /// `steps` : le travail mesuré était des pas du décodeur (sinon des lectures).
-    unsafe fn collect_profile(&self, steps: bool) -> Result<(), String> {
+    unsafe fn collect_profile(&self) -> Result<(), String> {
         let Some((pool, period, totals)) = &self.profile else { return Ok(()) };
         let marks = self.marks.lock().expect("horodatages");
         let mut stamps = vec![0u64; marks.len() + 1];
@@ -1080,7 +1123,6 @@ impl Encoder {
         }
         let mut totals = totals.lock().expect("horodatages");
         for (i, &k) in marks.iter().enumerate() {
-            let k = k + if steps { KERNELS } else { 0 };
             totals[k].0 += (stamps[i + 1] - stamps[i]) as f64 * period;
             totals[k].1 += 1;
         }
@@ -1112,16 +1154,20 @@ impl Encoder {
             let _held = self.lock.lock().expect("GPU");
             // SAFETY : sous `lock`, `chunk` au plus `max`
             unsafe {
+                let t0 = std::time::Instant::now();
                 self.write_inputs(chunk, Some(s));
                 self.record(chunk.len(), true)?;
+                self.add(S_PREP, t0);
                 self.timed_submit(S_READS, chunk.len())?;
-                self.collect_profile(false)?;
+                self.collect_profile()?;
+                let t0 = std::time::Instant::now();
                 for i in 0..chunk.len() {
                     let f = std::slice::from_raw_parts(self.outf.add(i * 20), 20);
                     let mut heads = [0.0; 20];
                     heads.copy_from_slice(f);
                     out.push(heads);
                 }
+                self.add(S_BACK, t0);
             }
         }
         Ok(out)
@@ -1134,56 +1180,103 @@ impl Encoder {
             let _held = self.lock.lock().expect("GPU");
             // SAFETY : sous `lock`, `chunk` au plus `MAX_LANES`
             unsafe {
-                for (i, l) in chunk.iter().enumerate() {
-                    let words = std::slice::from_raw_parts_mut(self.lanes.add(i * LANE_WORDS), LANE_WORDS);
-                    words[0] = l.slot;
-                    words[1] = l.cache;
-                    words[2] = l.step;
-                    words[3] = l.prev.map_or(65535, u32::from);
-                    words[4] = l.count;
-                    for (j, &x) in l.dy.iter().enumerate() {
-                        words[8 + j] = u32::from(x);
-                    }
-                }
+                let t0 = std::time::Instant::now();
+                self.write_lanes(chunk);
                 self.record_steps(chunk.len())?;
+                self.add(S_PREP, t0);
                 self.timed_submit(S_STEPS, chunk.len())?;
-                self.collect_profile(true)?;
+                self.collect_profile()?;
+                let t0 = std::time::Instant::now();
                 for i in 0..chunk.len() {
                     out.push(std::slice::from_raw_parts(self.logits.add(i * KEYS), KEYS).to_vec());
                 }
+                self.add(S_BACK, t0);
             }
         }
         Ok(out)
     }
 
-    /// Enregistre un pas du décodeur pour `n` voies (`steps`).
+    /// Écrit les voies d'un pas dans la mémoire projetée (au plus `MAX_LANES`).
+    unsafe fn write_lanes(&self, chunk: &[LaneIn]) {
+        for (i, l) in chunk.iter().enumerate() {
+            // SAFETY : `MAX_LANES` voies dans la mémoire projetée ; un seul lot à la fois (`lock`)
+            let words = unsafe { std::slice::from_raw_parts_mut(self.lanes.add(i * LANE_WORDS), LANE_WORDS) };
+            words[0] = l.slot;
+            words[1] = l.cache;
+            words[2] = l.step;
+            words[3] = l.prev.map_or(65535, u32::from);
+            words[4] = l.count;
+            for (j, &x) in l.dy.iter().enumerate() {
+                words[8 + j] = u32::from(x);
+            }
+        }
+    }
+
+    /// Un tour : les lectures `items` (gardées dans `slots`) et un pas pour les voies `lanes`, enregistrés
+    /// ensemble et envoyés en une seule soumission (pas d'aller-retour du processeur entre les deux ; les
+    /// voies ne touchent pas les places lues dans ce tour). Rend les 20 têtes de chaque lecture et les
+    /// logits de chaque voie. Au-delà d'un lot (`max` lectures, `MAX_LANES` voies), séparément.
+    pub fn turn(
+        &self,
+        items: &[(&Encoded, &[u8])],
+        slots: &[u32],
+        lanes: &[LaneIn],
+    ) -> Result<(Vec<[f32; 20]>, Vec<Vec<f32>>), String> {
+        if items.len() > self.max || lanes.len() > MAX_LANES || items.is_empty() || lanes.is_empty() {
+            return Ok((self.read_slots(items, slots)?, self.steps(lanes)?));
+        }
+        let _held = self.lock.lock().expect("GPU");
+        // SAFETY : sous `lock`, au plus un lot de chaque
+        unsafe {
+            let t0 = std::time::Instant::now();
+            self.write_inputs(items, Some(slots));
+            self.write_lanes(lanes);
+            self.begin_commands()?;
+            self.record_reads(items.len(), true);
+            self.record_step_kernels(lanes.len());
+            self.end_commands()?;
+            self.add(S_PREP, t0);
+            self.timed_submit(S_READS, items.len())?;
+            self.stats[S_STEPS].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.stats[S_STEP_ITEMS].fetch_add(lanes.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            self.collect_profile()?;
+            let t0 = std::time::Instant::now();
+            let heads = (0..items.len())
+                .map(|i| {
+                    let mut h = [0.0; 20];
+                    h.copy_from_slice(std::slice::from_raw_parts(self.outf.add(i * 20), 20));
+                    h
+                })
+                .collect();
+            let logits = (0..lanes.len())
+                .map(|i| std::slice::from_raw_parts(self.logits.add(i * KEYS), KEYS).to_vec())
+                .collect();
+            self.add(S_BACK, t0);
+            Ok((heads, logits))
+        }
+    }
+
+    /// Enregistre un pas du décodeur pour `n` voies (`steps`), seul.
     unsafe fn record_steps(&self, n: usize) -> Result<(), String> {
+        // SAFETY : voir `new`
+        unsafe {
+            self.begin_commands()?;
+            self.record_step_kernels(n);
+            self.end_commands()
+        }
+    }
+
+    /// Les commandes d'un pas du décodeur pour `n` voies (`record_steps`).
+    unsafe fn record_step_kernels(&self, n: usize) {
         let w = &self.weights;
         let a = &self.acts;
         let d = w.d as u32;
         let one = u32::MAX;
         let nu = n as u32;
         let h = w.heads as u32;
+        self.stepping.store(true, std::sync::atomic::Ordering::Relaxed);
         // SAFETY : voir `new`
         unsafe {
-            let dev = &self.device;
-            dev.reset_command_buffer(self.command, vk::CommandBufferResetFlags::empty())
-                .map_err(vk_err("commandes"))?;
-            dev.begin_command_buffer(self.command, &vk::CommandBufferBeginInfo::default())
-                .map_err(vk_err("commandes"))?;
-            dev.cmd_bind_descriptor_sets(
-                self.command,
-                vk::PipelineBindPoint::COMPUTE,
-                self.layout,
-                0,
-                &[self.set],
-                &[],
-            );
-            if let Some((pool, ..)) = &self.profile {
-                dev.cmd_reset_query_pool(self.command, *pool, 0, 512);
-                dev.cmd_write_timestamp(self.command, vk::PipelineStageFlags::TOP_OF_PIPE, *pool, 0);
-                self.marks.lock().expect("horodatages").clear();
-            }
             self.dispatch(
                 DEC_IN,
                 &[a.dx, a.ddyn, d, w.dec_start, w.dec_glob, w.dec_kind, w.dec_count, w.dyn_scale, self.per16 as u32],
@@ -1208,9 +1301,12 @@ impl Encoder {
             self.gemm(n, w.out_glob, (a.dn16, d, one, 0), (a.dg, 32, one, 0), 8);
             self.gemm(n, w.out_kind, (a.dn16, d, one, 0), (a.dkq, 9 * d, one, 0), 8);
             self.dispatch(DEC_OUT, &[a.dg, a.dkq, d, self.per16 as u32], (nu, 1));
-            dev.end_command_buffer(self.command).map_err(vk_err("commandes"))?;
         }
-        Ok(())
+        self.stepping.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn add(&self, what: usize, since: std::time::Instant) {
+        self.stats[what].fetch_add(since.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// `submit_and_wait`, compté dans `stats` (`what` : S_READS ou S_STEPS, `items` positions ou voies).
@@ -1219,23 +1315,33 @@ impl Encoder {
         let t0 = std::time::Instant::now();
         // SAFETY : voir `submit_and_wait`
         unsafe { self.submit_and_wait()? };
-        self.stats[S_WAIT].fetch_add(t0.elapsed().as_nanos() as u64, Relaxed);
+        self.add(if what == S_READS { S_READ_WAIT } else { S_STEP_WAIT }, t0);
         self.stats[what].fetch_add(1, Relaxed);
         self.stats[what + 1].fetch_add(items as u64, Relaxed);
         Ok(())
     }
 
-    /// La taille moyenne des lots, et la part du temps passée à attendre le GPU (`LAB9_GPU_PROFILE`).
+    /// Les lots et la part du temps (depuis la création du moteur) de chaque étape d'un lot : attente du
+    /// GPU (lectures, pas), préparation et relecture sur le processeur.
     pub fn batches(&self) -> String {
         use std::sync::atomic::Ordering::Relaxed;
         let s: Vec<f64> = self.stats.iter().map(|x| x.load(Relaxed) as f64).collect();
+        let wall = self.born.elapsed().as_secs_f64() * 1e9;
+        let pc = |i: usize| 100.0 * s[i] / wall;
         format!(
-            "{:.0} lots de lectures ({:.1} positions en moyenne), {:.0} lots de pas ({:.1} voies) ; GPU attendu {:.0} % du temps",
+            "{:.0} lots de lectures ({:.1} positions en moyenne, {:.2} ms chacun), {:.0} lots de pas ({:.1} voies, \
+             {:.2} ms) ; du temps : GPU {:.0} % (lectures {:.0}, pas {:.0}), préparation {:.1} %, relecture {:.1} %",
             s[S_READS],
             s[S_READ_ITEMS] / s[S_READS].max(1.0),
+            s[S_READ_WAIT] / 1e6 / s[S_READS].max(1.0),
             s[S_STEPS],
             s[S_STEP_ITEMS] / s[S_STEPS].max(1.0),
-            100.0 * s[S_WAIT] / 1e9 / self.born.elapsed().as_secs_f64()
+            s[S_STEP_WAIT] / 1e6 / s[S_STEPS].max(1.0),
+            pc(S_READ_WAIT) + pc(S_STEP_WAIT),
+            pc(S_READ_WAIT),
+            pc(S_STEP_WAIT),
+            pc(S_PREP),
+            pc(S_BACK)
         )
     }
 
@@ -1270,12 +1376,7 @@ impl Encoder {
                 .collect();
             format!("{what} {:.0} ms : {}", sum / 1e6, each.join(", "))
         };
-        Some(format!(
-            "{} ; {} ; {}",
-            part(&totals[..KERNELS], "lectures"),
-            part(&totals[KERNELS..], "pas du décodeur"),
-            self.batches()
-        ))
+        Some(format!("{} ; {}", part(&totals[..KERNELS], "lectures"), part(&totals[KERNELS..], "pas du décodeur")))
     }
 }
 
@@ -1328,6 +1429,8 @@ pub struct Shared {
     pub encoder: Encoder,
     queue: Mutex<Queue>,
     ready: std::sync::Condvar,
+    /// Tours (un fil emporte les demandes en attente et les calcule) et leur durée cumulée (ns).
+    turns: [std::sync::atomic::AtomicU64; 2],
 }
 
 enum Job {
@@ -1353,7 +1456,32 @@ struct Queue {
 
 impl Shared {
     pub fn new(encoder: Encoder) -> Shared {
-        Shared { encoder, queue: Mutex::default(), ready: std::sync::Condvar::new() }
+        Shared { encoder, queue: Mutex::default(), ready: std::sync::Condvar::new(), turns: Default::default() }
+    }
+
+    /// Les compteurs bruts : tours et leur durée (ns), puis ceux du moteur (`Encoder::stats`).
+    pub fn counters(&self) -> [f64; 10] {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut out = [0.0; 10];
+        out[0] = self.turns[0].load(Relaxed) as f64;
+        out[1] = self.turns[1].load(Relaxed) as f64;
+        for (o, x) in out[2..].iter_mut().zip(&self.encoder.stats) {
+            *o = x.load(Relaxed) as f64;
+        }
+        out
+    }
+
+    /// Les tours et la part du temps où un fil fait calculer le GPU (le reste : aucune demande en
+    /// attente), puis les lots du moteur (`Encoder::batches`).
+    pub fn report(&self) -> String {
+        use std::sync::atomic::Ordering::Relaxed;
+        let (turns, ns) = (self.turns[0].load(Relaxed) as f64, self.turns[1].load(Relaxed) as f64);
+        format!(
+            "{turns:.0} tours de {:.2} ms, {:.0} % du temps ; {}",
+            ns / 1e6 / turns.max(1.0),
+            100.0 * ns / 1e9 / self.encoder.born.elapsed().as_secs_f64(),
+            self.encoder.batches()
+        )
     }
 
     fn submit(&self, job: Job) -> Done {
@@ -1371,6 +1499,7 @@ impl Shared {
             }
             // ce fil calcule pour tous ceux qui attendent
             q.running = true;
+            let turn = std::time::Instant::now();
             let taken = std::mem::take(&mut q.pending);
             drop(q);
             let (mut reads, mut steps, mut host) = (Vec::new(), Vec::new(), Vec::new());
@@ -1390,22 +1519,21 @@ impl Shared {
                     results.push((*id, Done::Memories(mems.by_ref().take(v.len()).collect())));
                 }
             }
-            if !reads.is_empty() {
-                let flat: Vec<(&Encoded, &[u8])> =
-                    reads.iter().flat_map(|(_, v, _)| v.iter().map(|(e, d)| (e, &d[..]))).collect();
-                let slots: Vec<u32> = reads.iter().flat_map(|(_, _, s)| s.iter().copied()).collect();
-                let mut heads = self.encoder.read_slots(&flat, &slots).expect("lecture sur le GPU").into_iter();
-                for (id, v, _) in &reads {
-                    results.push((*id, Done::Heads(heads.by_ref().take(v.len()).collect())));
-                }
+            // les lectures et les pas en une soumission (`Encoder::turn`)
+            let flat: Vec<(&Encoded, &[u8])> =
+                reads.iter().flat_map(|(_, v, _)| v.iter().map(|(e, d)| (e, &d[..]))).collect();
+            let slots: Vec<u32> = reads.iter().flat_map(|(_, _, s)| s.iter().copied()).collect();
+            let lanes: Vec<LaneIn> = steps.iter().flat_map(|(_, l)| l.iter().copied()).collect();
+            let (heads, logits) = self.encoder.turn(&flat, &slots, &lanes).expect("calcul sur le GPU");
+            let (mut heads, mut logits) = (heads.into_iter(), logits.into_iter());
+            for (id, v, _) in &reads {
+                results.push((*id, Done::Heads(heads.by_ref().take(v.len()).collect())));
             }
-            if !steps.is_empty() {
-                let flat: Vec<LaneIn> = steps.iter().flat_map(|(_, l)| l.iter().copied()).collect();
-                let mut logits = self.encoder.steps(&flat).expect("pas sur le GPU").into_iter();
-                for (id, l) in &steps {
-                    results.push((*id, Done::Logits(logits.by_ref().take(l.len()).collect())));
-                }
+            for (id, l) in &steps {
+                results.push((*id, Done::Logits(logits.by_ref().take(l.len()).collect())));
             }
+            self.turns[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.turns[1].fetch_add(turn.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
             q = self.queue.lock().expect("file du GPU");
             q.done.extend(results);
             q.running = false;

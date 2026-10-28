@@ -235,8 +235,9 @@ fn selfplay_games_split_into_plans() {
         search: search::Config::parse("k=4,m=2,mods=2").unwrap(),
         beta: 10.0,
         explore: 1,
+        seconds: 0.0,
     };
-    selfplay::run(&cfg, &Cpu(&net), &dir).unwrap();
+    selfplay::run(&cfg, &[Cpu(&net)], &dir).unwrap();
     let prefix = dir.join("s5-00");
     let f: Vec<Vec<u8>> = EXTENSIONS.iter().map(|e| read(&prefix, e)).collect();
     let [games, _, _, seg, .., owner, step, legal] = &f[..] else { panic!() };

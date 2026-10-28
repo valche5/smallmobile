@@ -186,3 +186,48 @@ Essai à blanc (200 parties, 200 lots, 24 donnes, deux pas) : la chaîne tourne 
 parties, un duel ~9 s par donne. Un pas réel : ~1 h de parties, ~5 min d'apprentissage, 15 à 70 min de
 duel. Après la boucle : le dernier réseau en phase 5 (contre c130 à n = 400, graine 82002), appariée
 avec h1 en phase 5 (à mesurer aussi) et i2.
+
+## Où passe le temps du selfplay (28 octobre, mesuré)
+
+La boucle p1, lancée à 01 h 48, s'est arrêtée à la fin de son premier cycle (« Too many open files » :
+1 024 fichiers ouverts au plus sous systemd, 200 fils × 11 fichiers ; 108 fils sont morts au départ,
+les 92 autres ont joué les 5 000 parties à 72,5 par minute). Parties gardées (`data/p1/c001`), `ulimit`
+relevé, fichiers du selfplay ouverts avant de jouer ; relancée à 09 h 59 puis arrêtée à la demande de
+l'utilisateur (machine sous-employée), c001 appris, son duel en cours.
+
+Instrumentation (`selfplay --seconds S`, un bilan toutes les 30 s sur l'intervalle seul ; temps des
+fils, des tours du partage du GPU, préparation et relecture des lots, cœurs occupés). Les mesures
+d'hier (lots de 50 à 160, 70 à 100 W) étaient faussées : essais trop courts, dont la fin traîne (les
+derniers fils jouent seuls), et profil des kernels activé. En régime (h1, 200 fils, k = 8, m = 2,
+après la première minute) :
+
+| Mesure | Valeur |
+| --- | --- |
+| Débit | **215 recherches/s** (~150 parties/min), 31 000 lectures/s, 110 000 pas/s |
+| GPU | calcule 90 % du temps, **270 à 278 W** (~300 au plus) ; lots de 250 lectures et 870 voies |
+| Fils | 98 % du temps à attendre le GPU (lectures 35 %, pas 63 %) ; calcul de la recherche 0,1 % |
+| Processeur | **0,9 cœur** sur 20 |
+| Hors calcul du GPU | préparation des lots 4 %, relecture 3,3 % (le GPU attend) |
+
+Le GPU est saturé ; le processeur est inemployé. Répartition du temps du GPU (profil, 90 s) : lectures
+75 % (`gemm` 48, `neighbours` 8, `layernorm` 7, `store` 6, `attention` 5), pas du décodeur 25 % (`gemm`
+10, `dec_out` 8, `dec_cross` 4, `dec_self` 2). Une lecture coûte ~386 MFLOP de produits, à ~28 TFLOPS
+(hipBLASLt : 28 à 47 sur ces formes, lab8). 141 lectures et 500 pas par recherche.
+
+Essais (banc de 3 min, moyenne des intervalles après 60 s ; `lab9 bench-gpu` pour `neighbours`) :
+
+| Changement | Effet |
+| --- | --- |
+| `neighbours` sur 4 groupes par position | aucun (885 → 925 ms) : limité par la mémoire (~1 To/s ; il recopie `a` et la partie) |
+| Lectures et pas d'un tour en une soumission (`Encoder::turn`) | 215 → 215 recherches/s (gardé : un peu moins de temps de GPU par tour) |
+| Deux moteurs (deux files de lots en parallèle) | 205 recherches/s : moins bien, la carte est déjà pleine |
+
+Pistes, non faites :
+- moteur (mêmes résultats) : ne pas calculer les jetons absents (~25 % des lignes des produits : 37,5
+  régions en moyenne sur 48, joueurs et cartes absents), `dec_out` et la relecture limités aux coups
+  possibles, `store` depuis du bf16, `neighbours` fondu dans le produit, `gemm` réglé : ×1,3 à ×1,6 au
+  mieux, pour une journée de travail ;
+- recherche : moins de lectures par recherche (141) : fins simulées jouées par un réseau plus petit
+  (h2 : lectures deux fois moins chères), ou sans fins simulées (`mix=0`, la seconde étape prévue de la
+  phase 6) ;
+- processeur : h1 y lit une position en 8,6 ms, 19 cœurs n'ajouteraient que ~7 % de lectures.

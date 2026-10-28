@@ -3,7 +3,7 @@
 //! lab9 record --games N --out DIR [--agent az:net=lab7/nets/c130.bin,n=400] [--players 2,3,4,5]
 //!     [--seed S] [--threads N] [--device vulkan] [--raw true]   (parties d'imitation découpées en plans,
 //!     `record` ; `--raw` : aussi les entrées pleines, pour vérifier la forme compacte)
-//! lab9 selfplay --net poids.bin --games N --out DIR [--search k=16,m=4] [--beta (50+m)/10] [--explore 2]
+//! lab9 selfplay --net poids.bin --games N --out DIR [--search k=16,m=4] [--beta (50+m)/10] [--explore 2] [--engines 1] [--seconds S]
 //!     [--players 2,3,4,5] [--seed S] [--threads N] [--device vulkan]   (phase 6 : tous les joueurs
 //!     cherchent leurs plans, chaque plan cherché enregistré comme les parties d'imitation)
 //! lab9 arena --hero A --field B [--players 2,3,4,5] [--deals N] [--seed S] [--stop D] [--out F] [--device vulkan]
@@ -141,6 +141,7 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
             |b| b.parse().unwrap_or_else(|_| usage()),
         ),
         explore: get(opts, "explore", 2),
+        seconds: get(opts, "seconds", 0.0),
     };
     let dir = PathBuf::from(opts.get("out").unwrap_or_else(|| usage()));
     let net = Net::load(Path::new(&path)).unwrap_or_else(|e| panic!("{path} : {e}"));
@@ -153,22 +154,89 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
         #[cfg(feature = "vulkan")]
         Some(_) => {
             use smallmobile_lab9::vulkan::{Encoder, Gpu, Shared};
-            let encoder = Encoder::new(Path::new(&path), 1024).unwrap_or_else(|e| panic!("GPU : {e}"));
-            eprintln!("encodeur de lab9 : {}", encoder.describe());
-            let gpu = Gpu(std::sync::Arc::new(Shared::new(encoder)));
-            let done = selfplay::run(&cfg, &gpu, &dir);
-            if let Some(p) = gpu.0.encoder.profile() {
-                eprintln!("GPU : {p}");
+            // plusieurs moteurs sur la carte, les fils répartis entre eux ; à chacun ses places et caches,
+            // 64 par fil (une recherche en k = 8, m = 2 en tient moins de 50)
+            let engines: usize = get(opts, "engines", 1);
+            let each = (64 * cfg.threads.div_ceil(engines)).min(16384);
+            let gpus: Vec<Gpu> = (0..engines)
+                .map(|_| {
+                    let encoder =
+                        Encoder::sized(Path::new(&path), 1024, each, each).unwrap_or_else(|e| panic!("GPU : {e}"));
+                    Gpu(std::sync::Arc::new(Shared::new(encoder)))
+                })
+                .collect();
+            eprintln!("encodeur de lab9 : {}, {engines} moteurs ({each} places et caches chacun)", gpus[0].0.encoder.describe());
+            // un bilan toutes les 30 s, sur l'intervalle seul : le régime s'installe quand les parties,
+            // parties ensemble, se sont désynchronisées
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            let done = std::thread::scope(|scope| {
+                scope.spawn(|| interval_reports(&gpus, &stop));
+                let done = selfplay::run(&cfg, &gpus, &dir);
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                done
+            });
+            for (i, gpu) in gpus.iter().enumerate() {
+                eprintln!("moteur {i} : {}", gpu.0.report());
+                if let Some(p) = gpu.0.encoder.profile() {
+                    eprintln!("kernels du moteur {i} : {p}");
+                }
             }
             done
         }
-        _ => selfplay::run(&cfg, &search::Cpu(&net), &dir),
+        _ => selfplay::run(&cfg, &[search::Cpu(&net)], &dir),
     };
     done.unwrap_or_else(|e| {
         eprintln!("échec : {e}");
         std::process::exit(1)
     });
     eprintln!("{} parties en {:.0} s", cfg.games, start.elapsed().as_secs_f64());
+}
+
+/// Toutes les 30 s, jusqu'à `stop` : sur l'intervalle, recherches, lectures et pas par seconde, cœurs
+/// occupés, attente des fils, et pour chaque moteur la taille des lots et l'occupation du GPU.
+#[cfg(feature = "vulkan")]
+fn interval_reports(gpus: &[smallmobile_lab9::vulkan::Gpu], stop: &std::sync::atomic::AtomicBool) {
+    let every = 30.0;
+    let (mut last, mut t) = (selfplay::snapshot(), Instant::now());
+    let mut engines: Vec<[f64; 10]> = gpus.iter().map(|g| g.0.counters()).collect();
+    let mut elapsed = 0.0;
+    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let dt = t.elapsed().as_secs_f64();
+        if dt < every {
+            continue;
+        }
+        elapsed += dt;
+        let now = selfplay::snapshot();
+        let d: Vec<f64> = now.iter().zip(&last).map(|(a, b)| a - b).collect();
+        let search = d[4].max(1e-9);
+        let mut line = format!(
+            "[{elapsed:.0} s] {:.1} recherches/s, {:.0} lectures/s, {:.0} pas/s, {:.1} cœurs ; dans les recherches : \
+             lectures {:.0} %, pas {:.0} %",
+            d[0] / dt,
+            d[1] / dt,
+            d[2] / dt,
+            d[3] / dt,
+            100.0 * d[5] / search,
+            100.0 * d[6] / search
+        );
+        for (i, g) in gpus.iter().enumerate() {
+            let c = g.0.counters();
+            let e: Vec<f64> = c.iter().zip(&engines[i]).map(|(a, b)| a - b).collect();
+            line += &format!(
+                " ; moteur {i} : lots {:.0} lectures × {:.0}, {:.0} pas × {:.0}, GPU {:.0} %, tours {:.0} %",
+                e[2] / dt,
+                e[3] / e[2].max(1.0),
+                e[4] / dt,
+                e[5] / e[4].max(1.0),
+                100.0 * (e[6] + e[7]) / 1e9 / dt,
+                100.0 * e[1] / 1e9 / dt
+            );
+            engines[i] = c;
+        }
+        eprintln!("{line}");
+        (last, t) = (now, Instant::now());
+    }
 }
 
 fn record_cmd(opts: &HashMap<String, String>) {

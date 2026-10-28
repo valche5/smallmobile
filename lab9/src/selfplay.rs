@@ -14,7 +14,7 @@
 
 use std::collections::VecDeque;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use smallmobile_kernel::Phase;
@@ -40,6 +40,9 @@ pub struct Config {
     pub beta: f32,
     /// Manches où le plan joué est tiré plutôt que le meilleur.
     pub explore: i32,
+    /// Arrêt au bout de ce temps (secondes ; 0 : aucun) : les parties en cours sont abandonnées (bancs
+    /// de vitesse).
+    pub seconds: f64,
 }
 
 /// Ce que comptent les fils : plans cherchés, décisions, et la somme de l'entropie croisée de la
@@ -47,9 +50,44 @@ pub struct Config {
 static PLANS: AtomicUsize = AtomicUsize::new(0);
 static DECISIONS: AtomicUsize = AtomicUsize::new(0);
 static KL: AtomicUsize = AtomicUsize::new(0);
+/// Temps cumulés des fils (ns) : dans les parties, et dans les recherches.
+static IN_GAMES: AtomicU64 = AtomicU64::new(0);
+static IN_SEARCH: AtomicU64 = AtomicU64::new(0);
 
-/// Une partie où tous les joueurs cherchent leurs plans avec `engine`, découpée en plans.
-fn play<E: Engine>(engine: &E, cfg: &Config, table: &Table, seed: u32, rng: &mut Rng) -> Vec<Segment> {
+/// Les compteurs du selfplay à cet instant : recherches, lectures, pas, temps processeur (s), temps
+/// des fils dans les recherches et dans l'attente des lectures et des pas (s).
+pub fn snapshot() -> [f64; 7] {
+    use search::{N_READS, N_STEPS, T_READ, T_STEP, TIMES};
+    let t = |i: usize| TIMES[i].load(Ordering::Relaxed) as f64;
+    [
+        PLANS.load(Ordering::Relaxed) as f64,
+        t(N_READS),
+        t(N_STEPS),
+        cpu_seconds(),
+        IN_SEARCH.load(Ordering::Relaxed) as f64 / 1e9,
+        t(T_READ) / 1e9,
+        t(T_STEP) / 1e9,
+    ]
+}
+
+/// Le temps processeur du programme (s), d'après /proc/self/stat (utime + stime).
+fn cpu_seconds() -> f64 {
+    let stat = std::fs::read_to_string("/proc/self/stat").unwrap_or_default();
+    let fields: Vec<&str> = stat.rsplit_once(')').map_or("", |r| r.1).split_whitespace().collect();
+    let ticks = |i: usize| fields.get(i).and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0);
+    (ticks(11) + ticks(12)) / 100.0
+}
+
+/// Une partie où tous les joueurs cherchent leurs plans avec `engine`, découpée en plans ; `None` si
+/// `deadline` passe avant la fin.
+fn play<E: Engine>(
+    engine: &E,
+    cfg: &Config,
+    table: &Table,
+    seed: u32,
+    rng: &mut Rng,
+    deadline: Option<Instant>,
+) -> Option<Vec<Segment>> {
     let mut g = table.game(seed);
     let mut k = Knowledge::default();
     let n = table.players;
@@ -66,6 +104,9 @@ fn play<E: Engine>(engine: &E, cfg: &Config, table: &Table, seed: u32, rng: &mut
                 if legal.len() == 1 {
                     legal[0].mv
                 } else {
+                    if deadline.is_some_and(|d| Instant::now() >= d) {
+                        return None;
+                    }
                     let plan = searched(engine, cfg, &g, &k, n, &adj, turn, &mut segments, rng);
                     rest.extend(plan);
                     rest.pop_front().expect("un plan non vide")
@@ -83,7 +124,7 @@ fn play<E: Engine>(engine: &E, cfg: &Config, table: &Table, seed: u32, rng: &mut
         }
     }
     finish(&mut segments, &g);
-    segments
+    Some(segments)
 }
 
 /// Une recherche au début d'un plan : le plan joué, et son enregistrement (`segments`).
@@ -99,7 +140,9 @@ fn searched<E: Engine>(
     segments: &mut Vec<Segment>,
     rng: &mut Rng,
 ) -> Vec<moves::Move> {
+    let t0 = Instant::now();
     let s = search::search(engine, &cfg.search, g, k, rng);
+    IN_SEARCH.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
     let actor = g.state.actor().expect("un joueur doit agir");
     let value = s.root.0.win;
     // la première décision du prochain tour des joueurs qui l'attendaient
@@ -167,8 +210,10 @@ fn searched<E: Engine>(
 }
 
 /// Les parties de selfplay, en parallèle, un jeu de fichiers par fil dans `dir` (`s{graine}-{fil}.*`).
-/// Les fils partagent le moteur `engine` (le GPU rassemble leurs lectures).
-pub fn run<E: Engine>(cfg: &Config, engine: &E, dir: &Path) -> std::io::Result<()> {
+/// Les fils se répartissent les moteurs `engines` (le fil t prend le moteur t % nombre) ; ceux d'un même
+/// moteur partagent ses lots. Plusieurs moteurs GPU calculent en même temps : la carte, qu'un seul ne
+/// remplit pas (lots trop petits), travaille alors à pleine puissance.
+pub fn run<E: Engine>(cfg: &Config, engines: &[E], dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     // les fichiers de tous les fils d'abord : une erreur (trop de fichiers ouverts) arrête tout de suite
     let files: Vec<Files> = (0..cfg.threads)
@@ -176,10 +221,13 @@ pub fn run<E: Engine>(cfg: &Config, engine: &E, dir: &Path) -> std::io::Result<(
         .collect::<std::io::Result<_>>()?;
     let (next, finished) = (AtomicUsize::new(0), AtomicUsize::new(0));
     let start = Instant::now();
+    let deadline = (cfg.seconds > 0.0).then(|| start + std::time::Duration::from_secs_f64(cfg.seconds));
+    let cpu0 = cpu_seconds();
     std::thread::scope(|scope| -> std::io::Result<()> {
         let mut handles = Vec::new();
-        for mut files in files {
+        for (t, mut files) in files.into_iter().enumerate() {
             let (next, finished) = (&next, &finished);
+            let engine = &engines[t % engines.len()];
             handles.push(scope.spawn(move || -> std::io::Result<()> {
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
@@ -191,7 +239,10 @@ pub fn run<E: Engine>(cfg: &Config, engine: &E, dir: &Path) -> std::io::Result<(
                     let (map_seed, seed) = (deal % 1_000_000_007, mix(deal, 1) as u32);
                     let table = Table::new(players, map_seed);
                     let mut rng = Rng::new(mix(deal, 99));
-                    let segments = play(engine, cfg, &table, seed, &mut rng);
+                    let t0 = Instant::now();
+                    let played = play(engine, cfg, &table, seed, &mut rng, deadline);
+                    IN_GAMES.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    let Some(segments) = played else { break };
                     files.write(&Game_ { deal, map_seed, seed, players }, &segments)?;
                     let count = finished.fetch_add(1, Ordering::Relaxed) + 1;
                     if count % 20 == 0 || count == cfg.games {
@@ -212,6 +263,39 @@ pub fn run<E: Engine>(cfg: &Config, engine: &E, dir: &Path) -> std::io::Result<(
         for h in handles {
             h.join().expect("fil du selfplay")?;
         }
+        report(cfg, start, cpu0, finished.load(Ordering::Relaxed));
         Ok(())
     })
+}
+
+/// Le bilan : débit, où passe le temps des fils, le processeur.
+fn report(cfg: &Config, start: Instant, cpu0: f64, finished: usize) {
+    use search::{N_READS, N_STEPS, T_OTHER, T_READ, T_STEP, TIMES};
+    let secs = start.elapsed().as_secs_f64();
+    let all = secs * cfg.threads as f64;
+    let ns = |a: &AtomicU64| a.load(Ordering::Relaxed) as f64 / 1e9;
+    let t = |i: usize| TIMES[i].load(Ordering::Relaxed) as f64 / 1e9;
+    let pc = |x: f64| 100.0 * x / all;
+    let (games, search) = (ns(&IN_GAMES), ns(&IN_SEARCH));
+    let plans = PLANS.load(Ordering::Relaxed);
+    eprintln!(
+        "bilan : {secs:.1} s, {finished} parties finies, {plans} recherches ({:.1}/s), {} lectures ({:.0}/s), {} pas ({:.0}/s)",
+        plans as f64 / secs,
+        TIMES[N_READS].load(Ordering::Relaxed),
+        TIMES[N_READS].load(Ordering::Relaxed) as f64 / secs,
+        TIMES[N_STEPS].load(Ordering::Relaxed),
+        TIMES[N_STEPS].load(Ordering::Relaxed) as f64 / secs
+    );
+    eprintln!(
+        "fils ({} × {secs:.1} s) : recherches {:.1} % (attente des lectures {:.1}, des pas {:.1}, calcul {:.1}), \
+         parties hors recherches {:.1} %, ailleurs {:.1} %",
+        cfg.threads,
+        pc(search),
+        pc(t(T_READ)),
+        pc(t(T_STEP)),
+        pc(t(T_OTHER)),
+        pc(games - search),
+        pc(all - games)
+    );
+    eprintln!("processeur : {:.1} cœurs occupés en moyenne", (cpu_seconds() - cpu0) / secs);
 }
