@@ -18,6 +18,8 @@
 # DUEL_SEARCH (k=8,m=2), DEALS (460), STOP (3), SEED_BASE (90 000 000), PY (le python de PyTorch).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# 11 fichiers par fil du selfplay (200 fils) : la limite de 1 024 d'un service systemd ne suffit pas
+ulimit -n 65536
 LAST=${1:?le dernier pas}
 RUN=${RUN:?le nom de l’essai}
 START=${START:-lab9/runs/h1/h1-150000.bin}

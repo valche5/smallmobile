@@ -170,14 +170,17 @@ fn searched<E: Engine>(
 /// Les fils partagent le moteur `engine` (le GPU rassemble leurs lectures).
 pub fn run<E: Engine>(cfg: &Config, engine: &E, dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
+    // les fichiers de tous les fils d'abord : une erreur (trop de fichiers ouverts) arrête tout de suite
+    let files: Vec<Files> = (0..cfg.threads)
+        .map(|t| Files::create(&dir.join(format!("s{:x}-{t:02}", cfg.seed)), false))
+        .collect::<std::io::Result<_>>()?;
     let (next, finished) = (AtomicUsize::new(0), AtomicUsize::new(0));
     let start = Instant::now();
     std::thread::scope(|scope| -> std::io::Result<()> {
         let mut handles = Vec::new();
-        for t in 0..cfg.threads {
+        for mut files in files {
             let (next, finished) = (&next, &finished);
             handles.push(scope.spawn(move || -> std::io::Result<()> {
-                let mut files = Files::create(&dir.join(format!("s{:x}-{t:02}", cfg.seed)), false)?;
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     if i >= cfg.games {
