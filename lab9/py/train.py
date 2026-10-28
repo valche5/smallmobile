@@ -49,7 +49,7 @@ GAIN_WEIGHT = 0.25
 OWN_WEIGHT = 0.5
 # plans de validation mesurés (les premiers des parties mises de côté)
 VAL_PLANS = 50000
-# moyenne glissante des poids : demi-vie ~ 3 500 lots
+# moyenne glissante des poids : demi-vie ~ 1 700 lots (`--ema`)
 EMA = 0.9996
 EMA_EVERY = 4
 WORKERS = 4
@@ -155,6 +155,7 @@ def main():
     ap.add_argument("--value-every", type=int, default=1, help="victoire finale apprise sur un plan sur K")
     ap.add_argument("--imitation", help="parties d'imitation mêlées à `--data` (dossiers, virgules)")
     ap.add_argument("--imitation-share", type=float, default=0.25, help="part de chaque lot tirée de `--imitation`")
+    ap.add_argument("--ema", type=float, default=EMA, help="moyenne glissante des poids, par lot (0 : aucune)")
     a = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -222,7 +223,7 @@ def main():
         sched.step()
         if i % EMA_EVERY == EMA_EVERY - 1:
             with torch.no_grad():
-                torch._foreach_lerp_(ema, params, 1 - EMA**EMA_EVERY)
+                torch._foreach_lerp_(ema, params, 1 - a.ema**EMA_EVERY)
         for k, v in m.items():
             sums[k] = sums.get(k, 0.0) + v.detach().float().mean()
         count += 1

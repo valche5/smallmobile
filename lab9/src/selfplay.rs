@@ -36,7 +36,7 @@ pub struct Config {
     pub threads: usize,
     pub seed: u64,
     pub search: search::Config,
-    /// Échelle des valeurs dans la politique améliorée (`search::improved`).
+    /// Échelle des valeurs, ramenées entre 0 et 1, dans la politique améliorée (`search::improved`).
     pub beta: f32,
     /// Manches où le plan joué est tiré plutôt que le meilleur.
     pub explore: i32,

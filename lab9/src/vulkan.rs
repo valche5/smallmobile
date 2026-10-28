@@ -511,7 +511,17 @@ pub struct Encoder {
     /// (nanosecondes, nombre), affichée à la fin.
     profile: Option<(vk::QueryPool, f64, Mutex<KernelTimes>)>,
     marks: Mutex<Vec<usize>>,
+    /// Lots de lectures et positions lues, lots de pas et voies, temps passé à attendre le GPU (ns),
+    /// depuis `born` (`profile`).
+    stats: [std::sync::atomic::AtomicU64; 5],
+    born: std::time::Instant,
 }
+
+const S_READS: usize = 0;
+const S_READ_ITEMS: usize = 1;
+const S_STEPS: usize = 2;
+const S_STEP_ITEMS: usize = 3;
+const S_WAIT: usize = 4;
 
 // SAFETY : les pointeurs sont ceux de la mémoire projetée, qui vit autant que l'`Encoder` ; un seul
 // lot à la fois les touche (`lock`).
@@ -622,6 +632,8 @@ impl Encoder {
                 lock: Mutex::new(()),
                 profile: None,
                 marks: Mutex::new(Vec::new()),
+                stats: Default::default(),
+                born: std::time::Instant::now(),
             };
             e.build(&memory, family)?;
             if std::env::var_os("LAB9_GPU_PROFILE").is_some() {
@@ -1102,7 +1114,7 @@ impl Encoder {
             unsafe {
                 self.write_inputs(chunk, Some(s));
                 self.record(chunk.len(), true)?;
-                self.submit_and_wait()?;
+                self.timed_submit(S_READS, chunk.len())?;
                 self.collect_profile(false)?;
                 for i in 0..chunk.len() {
                     let f = std::slice::from_raw_parts(self.outf.add(i * 20), 20);
@@ -1134,7 +1146,7 @@ impl Encoder {
                     }
                 }
                 self.record_steps(chunk.len())?;
-                self.submit_and_wait()?;
+                self.timed_submit(S_STEPS, chunk.len())?;
                 self.collect_profile(true)?;
                 for i in 0..chunk.len() {
                     out.push(std::slice::from_raw_parts(self.logits.add(i * KEYS), KEYS).to_vec());
@@ -1201,6 +1213,32 @@ impl Encoder {
         Ok(())
     }
 
+    /// `submit_and_wait`, compté dans `stats` (`what` : S_READS ou S_STEPS, `items` positions ou voies).
+    unsafe fn timed_submit(&self, what: usize, items: usize) -> Result<(), String> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let t0 = std::time::Instant::now();
+        // SAFETY : voir `submit_and_wait`
+        unsafe { self.submit_and_wait()? };
+        self.stats[S_WAIT].fetch_add(t0.elapsed().as_nanos() as u64, Relaxed);
+        self.stats[what].fetch_add(1, Relaxed);
+        self.stats[what + 1].fetch_add(items as u64, Relaxed);
+        Ok(())
+    }
+
+    /// La taille moyenne des lots, et la part du temps passée à attendre le GPU (`LAB9_GPU_PROFILE`).
+    pub fn batches(&self) -> String {
+        use std::sync::atomic::Ordering::Relaxed;
+        let s: Vec<f64> = self.stats.iter().map(|x| x.load(Relaxed) as f64).collect();
+        format!(
+            "{:.0} lots de lectures ({:.1} positions en moyenne), {:.0} lots de pas ({:.1} voies) ; GPU attendu {:.0} % du temps",
+            s[S_READS],
+            s[S_READ_ITEMS] / s[S_READS].max(1.0),
+            s[S_STEPS],
+            s[S_STEP_ITEMS] / s[S_STEPS].max(1.0),
+            100.0 * s[S_WAIT] / 1e9 / self.born.elapsed().as_secs_f64()
+        )
+    }
+
     /// La durée cumulée de chaque sorte de kernel (`LAB9_GPU_PROFILE`).
     pub fn profile(&self) -> Option<String> {
         let (_, _, totals) = self.profile.as_ref()?;
@@ -1232,7 +1270,12 @@ impl Encoder {
                 .collect();
             format!("{what} {:.0} ms : {}", sum / 1e6, each.join(", "))
         };
-        Some(format!("{} ; {}", part(&totals[..KERNELS], "lectures"), part(&totals[KERNELS..], "pas du décodeur")))
+        Some(format!(
+            "{} ; {} ; {}",
+            part(&totals[..KERNELS], "lectures"),
+            part(&totals[KERNELS..], "pas du décodeur"),
+            self.batches()
+        ))
     }
 }
 

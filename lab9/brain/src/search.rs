@@ -133,9 +133,24 @@ pub struct Decision {
     pub chosen: usize,
 }
 
+/// Les valeurs des candidats ramenées entre 0 et 1 (min-max sur les candidats, comme les valeurs des
+/// coups à la racine de lab7 et de mctx), puis multipliées par `beta`.
+fn scaled(s: &Searched, beta: f32) -> Vec<f64> {
+    let lo = s.candidates.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
+    let hi = s.candidates.iter().map(|c| c.1).fold(f32::NEG_INFINITY, f32::max);
+    s.candidates.iter().map(|c| beta as f64 * ((c.1 - lo) / (hi - lo).max(1e-8)) as f64).collect()
+}
+
+/// L'échelle de la politique améliorée selon mctx (et lab7) : `(50 + visites du coup le plus vu) × 0,1`,
+/// un candidat étant « visité » une fois par monde.
+pub fn default_beta(cfg: &Config) -> f32 {
+    (50.0 + cfg.worlds as f32) * 0.1
+}
+
 /// La politique améliorée par la recherche le long du candidat `chosen`, pour l'apprentissage
 /// (`lab9 selfplay`) : à chaque décision, pour chaque coup `a` possible,
-/// `π'(a) ∝ π(a) · exp(X(a))`, où `exp(X(a))` est la moyenne de `exp(beta · valeur)` sur les candidats
+/// `π'(a) ∝ π(a) · exp(X(a))`, où `exp(X(a))` est la moyenne de `exp(beta · valeur)` (valeurs ramenées
+/// entre 0 et 1 sur les candidats, `scaled`) sur les candidats
 /// qui partagent les décisions précédentes et prennent `a`, pondérée par leur probabilité selon le
 /// décodeur (leur ensemble est sans doublon) ; un coup qu'aucun candidat ne prend reçoit la moyenne de
 /// tous ceux qui partagent les décisions précédentes. Après le dernier embranchement, la cible est
@@ -144,13 +159,14 @@ pub fn improved(s: &Searched, chosen: usize, beta: f32) -> Vec<Vec<(Key, f32, f3
     let logp: Vec<f64> =
         s.traces.iter().map(|t| t.iter().map(|d| (d.probs[d.chosen].max(1e-30) as f64).ln()).sum()).collect();
     let key_at = |c: usize, j: usize| s.traces[c].get(j).map(|d| d.keys[d.chosen]);
+    let q = scaled(s, beta);
     // log de la moyenne pondérée de exp(beta · valeur) sur les candidats `group`
     let mean = |group: &[usize]| -> f64 {
         let top = group.iter().map(|&c| logp[c]).fold(f64::NEG_INFINITY, f64::max);
         let (mut num, mut den) = (0.0, 0.0);
         for &c in group {
             let w = (logp[c] - top).exp();
-            num += w * (beta as f64 * s.candidates[c].1 as f64).exp();
+            num += w * q[c].exp();
             den += w;
         }
         (num / den).ln()
@@ -178,15 +194,14 @@ pub fn improved(s: &Searched, chosen: usize, beta: f32) -> Vec<Vec<(Key, f32, f3
 }
 
 /// Un candidat tiré selon la politique améliorée sur l'ensemble des candidats,
-/// `∝ π(c) · exp(beta · valeur)` (exploration du selfplay).
+/// `∝ π(c) · exp(beta · valeur)` (valeurs ramenées entre 0 et 1, `scaled` ; exploration du selfplay).
 pub fn sample(s: &Searched, beta: f32, rng: &mut Rng) -> usize {
+    let q = scaled(s, beta);
     let logw: Vec<f64> = s
         .traces
         .iter()
-        .zip(&s.candidates)
-        .map(|(t, c)| {
-            t.iter().map(|d| (d.probs[d.chosen].max(1e-30) as f64).ln()).sum::<f64>() + beta as f64 * c.1 as f64
-        })
+        .zip(&q)
+        .map(|(t, q)| t.iter().map(|d| (d.probs[d.chosen].max(1e-30) as f64).ln()).sum::<f64>() + q)
         .collect();
     let top = logw.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let w: Vec<f64> = logw.iter().map(|l| (l - top).exp()).collect();

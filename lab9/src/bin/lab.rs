@@ -3,10 +3,10 @@
 //! lab9 record --games N --out DIR [--agent az:net=lab7/nets/c130.bin,n=400] [--players 2,3,4,5]
 //!     [--seed S] [--threads N] [--device vulkan] [--raw true]   (parties d'imitation découpées en plans,
 //!     `record` ; `--raw` : aussi les entrées pleines, pour vérifier la forme compacte)
-//! lab9 selfplay --net poids.bin --games N --out DIR [--search k=16,m=4] [--beta 10] [--explore 2]
+//! lab9 selfplay --net poids.bin --games N --out DIR [--search k=16,m=4] [--beta (50+m)/10] [--explore 2]
 //!     [--players 2,3,4,5] [--seed S] [--threads N] [--device vulkan]   (phase 6 : tous les joueurs
 //!     cherchent leurs plans, chaque plan cherché enregistré comme les parties d'imitation)
-//! lab9 arena --hero A --field B [--players 2,3,4,5] [--deals N] [--seed S] [--out F] [--device vulkan]
+//! lab9 arena --hero A --field B [--players 2,3,4,5] [--deals N] [--seed S] [--stop D] [--out F] [--device vulkan]
 //!     (l'arène de lab7 ; joueurs de lab7, `plan:net=…[,t=…]` : le décodeur de lab9 sans recherche,
 //!     `plans:net=…[,k=16,m=4,…]` : la recherche sur des plans, `search::Config`)
 //! lab9 fixture --out DIR [--games N] [--seed S] [--every K]   (un plan sur K de parties au hasard, pour
@@ -136,7 +136,10 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
         threads: get(opts, "threads", threads()),
         seed: get(opts, "seed", 86_000_000),
         search: search.unwrap_or_else(|| usage()),
-        beta: get(opts, "beta", 10.0),
+        beta: opts.get("beta").map_or_else(
+            || search::default_beta(&search.unwrap_or_default()),
+            |b| b.parse().unwrap_or_else(|_| usage()),
+        ),
         explore: get(opts, "explore", 2),
     };
     let dir = PathBuf::from(opts.get("out").unwrap_or_else(|| usage()));
@@ -211,11 +214,16 @@ fn record_cmd(opts: &HashMap<String, String>) {
 }
 
 fn arena_cmd(opts: &HashMap<String, String>) {
+    // --stop D : le joueur testé gagne-t-il D points ou rien ? Regard toutes les 23 donnes par taille
+    // (comme lab7)
+    let stop = opts
+        .get("stop")
+        .map(|d| arena::Sequential { role: 0, delta: d.parse().unwrap_or_else(|_| usage()), look: 23 });
     let cfg = Config {
         deals: get(opts, "deals", 100),
         threads: get(opts, "threads", threads()),
         seed: get(opts, "seed", 1),
-        stop: None,
+        stop,
     };
     let specs: Vec<String> =
         ["hero", "field"].iter().map(|k| opts.get(*k).cloned().unwrap_or_else(|| usage())).collect();
@@ -242,6 +250,21 @@ fn arena_cmd(opts: &HashMap<String, String>) {
     let names: Vec<String> = agents.iter().map(|a| a.name()).collect();
     print!("{}", arena::describe(&arena::report(&run, 0), &names[0], &names[1]));
     println!("temps par décision : {}", arena::describe_times(&run.times[0]));
+    if let Some(stop) = cfg.stop {
+        let shown = arena::score(&arena::deal_values(&run.results, 0))
+            .map_or(String::new(), |(s, se)| format!(" ; score {s:+.1} ± {:.1} points", 1.96 * se));
+        let delta = stop.delta;
+        match run.verdict {
+            Some(true) => println!(
+                "arrêt après {} donnes sur {} : gain de {delta} points plutôt que 0{shown}",
+                run.deals, cfg.deals
+            ),
+            Some(false) => {
+                println!("arrêt après {} donnes sur {} : 0 plutôt que {delta} points{shown}", run.deals, cfg.deals)
+            }
+            None => println!("test séquentiel sans conclusion après {} donnes{shown}", run.deals),
+        }
+    }
     println!("durée : {:.1} s", start.elapsed().as_secs_f64());
     {
         use smallmobile_lab9::search::{N_READS, N_STEPS, T_OTHER, T_READ, T_STEP, TIMES};

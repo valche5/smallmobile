@@ -131,3 +131,58 @@ donnes, graine 9, les quatre l'un après l'autre (s1 avait fait 136 ms le 27 oct
   par groupe dans les petits lots de la recherche) ; lectures en partie : h1 27 600/s, i2 24 900/s
   (1,1 fois seulement).
 - Tous restent loin de c130 : h2 lit encore ~13 fois moins vite.
+
+## Le GPU manque de travail (28 octobre)
+
+Remarque de l'utilisateur : la carte n'est pas bridée, elle n'a pas assez de travail. Mesuré avec h1
+(`LAB9_GPU_PROFILE` affiche maintenant la taille moyenne des lots et la part du temps passée à attendre
+le GPU) :
+
+| Travail | Lectures par lot | Voies par pas | GPU occupé | Puissance | Débit |
+| --- | --- | --- | --- | --- | --- |
+| Arène (20 fils, k = 16, m = 4) | 73 | 234 | 88 % | 100 à 155 W, 2,3 à 3,3 GHz | 290 ms par décision |
+| Selfplay, 60 fils, k = 8, m = 2 | 52 | 175 | 88 % | 70 à 78 W | 50 parties/min |
+| Selfplay, 200 fils | 156 | 525 | 85 % | 87 à 108 W | **82 parties/min** |
+| Selfplay, 400 fils | — | — | — | 92 à 95 W | 21 parties en 10 min (arrêté) |
+| `bench-gpu`, lots de 256 | 256 | — | — | 100 à 127 W | 43 000 lectures/s |
+
+- Le GPU calcule ~85 % du temps, mais sur des lots de 50 à 150 positions : une recherche ne demande
+  que quelques lectures à la fois, et les fils partagent le GPU un lot à la fois (`vulkan::Shared` :
+  le fil qui le trouve libre emporte toutes les demandes, lectures puis pas, et attend chacun).
+  Chaque kernel attend le précédent (une barrière après chacun) : sur de petits lots, la carte reste
+  à moitié vide, d'où la puissance faible.
+- Plus de parties en vol : ×1,6 à 200 fils ; à 400, tout se bloque (le partage sature : 85 % du
+  processeur inoccupé). Deux bancs en même temps (deux processus) ne font que +15 % au total.
+- Pour le selfplay : 200 fils. Pistes pour aller plus loin, non faites : plusieurs lots en vol sur le
+  GPU dans un même processus (activations et commandes par flux), un `gemm` à tuiles plus petites pour
+  les petits lots, `neighbours` fondu dans le produit qui le suit.
+
+### La cible du selfplay
+
+La cible de lab8 multipliait les valeurs brutes des candidats par `beta` = 10 : des écarts de quelques
+centièmes ne pesaient rien (KL 0,005 nat par décision, la cible était l'a priori). Comme les racines de
+lab7 et mctx : valeurs ramenées entre 0 et 1 sur les candidats, puis multipliées par
+`(50 + m) × 0,1` (5,2 pour m = 2, 5,4 pour m = 4).
+
+Avec la cible normalisée (h1, 200 fils) : k = 8, m = 2 : **84 parties/min**, KL 0,143 nat par
+décision (0,005 avant) ; k = 16, m = 4 : ~13 parties/min, KL 0,140. La recherche plus large coûte 6
+fois plus pour une cible aussi informative : le selfplay se fait en k = 8, m = 2. (Un premier essai
+en k = 16, m = 4 a été arrêté à tort, cru bloqué : les fichiers `.games` ne s'écrivent sur le disque
+qu'à la fin, et mon filtre cachait les lignes de progrès ; l'essai à 400 fils a pu être jugé de même.)
+
+## Phase 6 : la boucle (protocole, fixé le 28 octobre avant le calcul)
+
+Demandé par l'utilisateur : entraîner h1 par auto-apprentissage, comme dans les anciens labos.
+`lab9/loop.sh` (sur le modèle de `lab7/loop.sh`), essai `p1`, depuis c000 = `h1-150000.bin` ; au pas k :
+1. 5 000 parties jouées par le réseau k−1 (`lab9 selfplay`, k = 8, m = 2, `beta` de mctx 5,2, plan
+   joué tiré aux 2 premières manches, 200 parties ensemble, graine 90 000 000 + k) ;
+2. le réseau k appris depuis k−1 : 4 000 lots de 256, AdamW neuf, taux 1e-4 (montée, cosinus),
+   moyenne glissante 0,998, victoire finale sur un plan sur quatre ; sur les 4 derniers cycles, un
+   quart de chaque lot tiré des parties d'imitation (`lab8/data/c130`) ;
+3. duel du réseau k contre c000, la recherche sur plans des deux côtés (k = 8, m = 2), 460 donnes au
+   plus (graine 1004, les mêmes à chaque pas), arrêt séquentiel à 3 points.
+
+Essai à blanc (200 parties, 200 lots, 24 donnes, deux pas) : la chaîne tourne ; 154 s pour 200
+parties, un duel ~9 s par donne. Un pas réel : ~1 h de parties, ~5 min d'apprentissage, 15 à 70 min de
+duel. Après la boucle : le dernier réseau en phase 5 (contre c130 à n = 400, graine 82002), appariée
+avec h1 en phase 5 (à mesurer aussi) et i2.
