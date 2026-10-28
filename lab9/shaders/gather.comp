@@ -1,0 +1,33 @@
+#version 450
+// Les lignes des jetons présents, rangées à la suite (`dir` = 0 : de X, 60 lignes par position, vers
+// Xp, qui commence à `row_start` pour chaque position), ou remises à leur place (`dir` = 1 : de Xp vers
+// X). Les blocs de l'encodeur ne calculent que les lignes présentes (~48 sur 60).
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant) uniform Params {
+    uint src, dst, d, dir;
+} p;
+
+shared uint packed[TOKENS]; // rang de chaque jeton parmi les présents ; TOKENS s'il est absent
+
+void main() {
+    uint pos = gl_WorkGroupID.x;
+    uint t = gl_LocalInvocationID.x;
+    if (t == 0u) {
+        uint n = 0u;
+        for (uint j = 0u; j < TOKENS; j++) {
+            packed[j] = token_valid(pos, j) ? n++ : TOKENS;
+        }
+    }
+    barrier();
+    uint start = row_start(pos);
+    for (uint idx = t; idx < TOKENS * p.d; idx += 256u) {
+        uint j = idx / p.d, c = idx % p.d;
+        if (packed[j] == TOKENS) continue;
+        uint full = (pos * TOKENS + j) * p.d + c, kept = (start + packed[j]) * p.d + c;
+        if (p.dir == 0u) act[p.dst + kept] = act[p.src + full];
+        else act[p.dst + full] = act[p.src + kept];
+    }
+}

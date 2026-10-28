@@ -22,11 +22,12 @@ use smallmobile_brain9::tokens::{DYN, GAME_IN, MARKET_IN, PLAYER_IN, PLAYERS, RE
 
 use crate::encode::{Encoded, GLOBAL, NODE, REGIONS};
 
-/// Octets d'une position dans le tampon des entrées (`common.glsl`).
-const POS_BYTES: usize = REGIONS * NODE + GLOBAL + REGIONS * REGIONS + 4;
+/// Octets d'une position dans le tampon des entrées (`common.glsl`) : régions, partie, distances, 4 octets
+/// (régions, joueurs, place), puis sa première ligne parmi les jetons présents (u32).
+const POS_BYTES: usize = REGIONS * NODE + GLOBAL + REGIONS * REGIONS + 8;
 const _: () = assert!(POS_BYTES.is_multiple_of(4) && TOKENS == 60);
 
-const KERNELS: usize = 13;
+const KERNELS: usize = 14;
 const SPV: [&[u8]; KERNELS] = [
     include_bytes!(concat!(env!("OUT_DIR"), "/embed.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/gemm.spv")),
@@ -41,6 +42,7 @@ const SPV: [&[u8]; KERNELS] = [
     include_bytes!(concat!(env!("OUT_DIR"), "/dec_cross.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/dec_out.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/neighbours.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/gather.spv")),
 ];
 const EMBED: usize = 0;
 const GEMM: usize = 1;
@@ -55,6 +57,7 @@ const DEC_SELF: usize = 9;
 const DEC_CROSS: usize = 10;
 const DEC_OUT: usize = 11;
 const NEIGHBOURS: usize = 12;
+const GATHER: usize = 13;
 /// Groupes de `neighbours` par position (chacun une part des jetons).
 const NEIGHBOUR_PARTS: u32 = 1;
 /// Places de lecture et caches de voie dans la mémoire du GPU par défaut (`Encoder::sized` pour d'autres
@@ -391,6 +394,8 @@ struct Acts {
     market: u32,
     game: u32,
     x: u32,
+    /// Les lignes des seuls jetons présents, à la suite (`gather.comp`) : les blocs de l'encodeur.
+    xp: u32,
     qkv: u32,
     o: u32,
     pool: u32,
@@ -435,6 +440,7 @@ impl Acts {
             market: take(max * 6 * 48),
             game: take(max * 80),
             x: take(rows * d),
+            xp: take(rows * d),
             qkv: take(rows * 3 * d),
             o: take(rows * d),
             pool: take(max * 2 * d),
@@ -955,17 +961,18 @@ impl Encoder {
 
     /// Enregistre le calcul de `b` positions, seul ; leurs sorties vont à l'hôte (`pack`), ou dans leurs
     /// places de la mémoire du GPU (`store`).
-    unsafe fn record(&self, b: usize, to_slots: bool) -> Result<(), String> {
+    unsafe fn record(&self, b: usize, kept: usize, to_slots: bool) -> Result<(), String> {
         // SAFETY : voir `new`
         unsafe {
             self.begin_commands()?;
-            self.record_reads(b, to_slots);
+            self.record_reads(b, kept, to_slots);
             self.end_commands()
         }
     }
 
-    /// Les commandes du calcul de `b` positions (`record`).
-    unsafe fn record_reads(&self, b: usize, to_slots: bool) {
+    /// Les commandes du calcul de `b` positions (`record`), dont `kept` jetons présents en tout
+    /// (`write_inputs`) : les blocs ne calculent que leurs lignes.
+    unsafe fn record_reads(&self, b: usize, kept: usize, to_slots: bool) {
         let w = &self.weights;
         let a = &self.acts;
         let d = w.d as u32;
@@ -998,28 +1005,33 @@ impl Encoder {
             self.dispatch(FIXUP, &[a.x, d, w.player_pos, w.market_pos], (bu, 1));
             let rows = b * TOKENS;
             let norm_groups = (rows.div_ceil(8) as u32, 1);
+            // les blocs sur les seules lignes des jetons présents (`kept`), rangées à la suite dans Xp
+            self.dispatch(GATHER, &[a.x, a.xp, d, 0], (bu, 1));
+            let (k, x) = (kept, a.xp);
+            let kept_groups = (k.div_ceil(8) as u32, 1);
             for block in &w.layers {
                 let l = match block {
                     Block::T(l) => l,
                     Block::R(c) => {
                         // a = ln1 x ; z = gelu(conv1 [a, voisines, partie]) ; x += conv2 [ln2 z, voisines]
-                        self.dispatch(LAYERNORM, &[rows as u32, d, a.x, 0, c.ln1.g, c.ln1.b, 2, a.n16], norm_groups);
+                        self.dispatch(LAYERNORM, &[k as u32, d, x, 0, c.ln1.g, c.ln1.b, 2, a.n16], kept_groups);
                         self.dispatch(NEIGHBOURS, &[a.n16, a.cat16, d, 3], (bu, NEIGHBOUR_PARTS));
-                        self.gemm(rows, c.conv1, (a.cat16, 3 * d, one, 0), (a.o, d, one, 0), 8 | 1);
-                        self.dispatch(LAYERNORM, &[rows as u32, d, a.o, 0, c.ln2.g, c.ln2.b, 2, a.n16], norm_groups);
+                        self.gemm(k, c.conv1, (a.cat16, 3 * d, one, 0), (a.o, d, one, 0), 8 | 1);
+                        self.dispatch(LAYERNORM, &[k as u32, d, a.o, 0, c.ln2.g, c.ln2.b, 2, a.n16], kept_groups);
                         self.dispatch(NEIGHBOURS, &[a.n16, a.cat16, d, 2], (bu, NEIGHBOUR_PARTS));
-                        self.gemm(rows, c.conv2, (a.cat16, 2 * d, one, 0), (a.x, d, one, 0), 8 | 4);
+                        self.gemm(k, c.conv2, (a.cat16, 2 * d, one, 0), (x, d, one, 0), 8 | 4);
                         continue;
                     }
                 };
-                self.dispatch(LAYERNORM, &[rows as u32, d, a.x, 0, l.ln1.g, l.ln1.b, 2, a.n16], norm_groups);
-                self.gemm(rows, l.qkv, (a.n16, d, one, 0), (a.qkv, 3 * d, one, 0), 8);
+                self.dispatch(LAYERNORM, &[k as u32, d, x, 0, l.ln1.g, l.ln1.b, 2, a.n16], kept_groups);
+                self.gemm(k, l.qkv, (a.n16, d, one, 0), (a.qkv, 3 * d, one, 0), 8);
                 self.dispatch(ATTENTION, &[a.qkv, a.att16, d, w.heads as u32, l.rel], (bu, w.heads as u32));
-                self.gemm(rows, l.o, (a.att16, d, one, 0), (a.x, d, one, 0), 8 | 4);
-                self.dispatch(LAYERNORM, &[rows as u32, d, a.x, 0, l.ln2.g, l.ln2.b, 2, a.n16], norm_groups);
-                self.gemm(rows, l.a, (a.n16, d, one, 0), (a.h16, 4 * d, one, 0), 8 | 16 | 1);
-                self.gemm(rows, l.b, (a.h16, 4 * d, one, 0), (a.x, d, one, 0), 8 | 4);
+                self.gemm(k, l.o, (a.att16, d, one, 0), (x, d, one, 0), 8 | 4);
+                self.dispatch(LAYERNORM, &[k as u32, d, x, 0, l.ln2.g, l.ln2.b, 2, a.n16], kept_groups);
+                self.gemm(k, l.a, (a.n16, d, one, 0), (a.h16, 4 * d, one, 0), 8 | 16 | 1);
+                self.gemm(k, l.b, (a.h16, 4 * d, one, 0), (x, d, one, 0), 8 | 4);
             }
+            self.dispatch(GATHER, &[a.xp, a.x, d, 1], (bu, 1));
             self.dispatch(LAYERNORM, &[rows as u32, d, a.x, a.o, w.enc_ln.g, w.enc_ln.b, 3, a.o16], norm_groups);
             self.dispatch(POOL, &[a.o, a.pool, d], (bu, 1));
             self.gemm(b, w.val.0, (a.pool, 2 * d, one, 0), (a.v1, d, one, 0), 2);
@@ -1048,9 +1060,9 @@ impl Encoder {
         let b = items.len();
         // SAFETY : la mémoire projetée a `max` positions ; un seul lot à la fois (`lock`)
         unsafe {
-            self.write_inputs(items, None);
+            let kept = self.write_inputs(items, None);
             let t0 = std::time::Instant::now();
-            self.record(b, false)?;
+            self.record(b, kept, false)?;
             self.submit_and_wait()?;
             let t1 = std::time::Instant::now();
             self.collect_profile()?;
@@ -1090,7 +1102,10 @@ impl Encoder {
     ///
     /// # Safety
     /// Sous `lock`, `items` au plus `max`.
-    unsafe fn write_inputs(&self, items: &[(&Encoded, &[u8])], slots: Option<&[u32]>) {
+    /// Écrit les entrées des positions `items` ; rend le nombre de jetons présents en tout (leurs lignes,
+    /// à la suite, dans Xp).
+    unsafe fn write_inputs(&self, items: &[(&Encoded, &[u8])], slots: Option<&[u32]>) -> usize {
+        let mut kept = 0usize;
         for (i, (e, dist)) in items.iter().enumerate() {
             // SAFETY : la mémoire projetée a `max` positions (voir l'appelant)
             let bytes = unsafe { std::slice::from_raw_parts_mut(self.input.add(i * POS_BYTES), POS_BYTES) };
@@ -1104,7 +1119,10 @@ impl Encoder {
             let slot = slots.map_or(0, |s| s[i]) as u16;
             let [lo, hi] = slot.to_le_bytes();
             bytes[at..at + 4].copy_from_slice(&[e.regions as u8, e.players as u8, lo, hi]);
+            bytes[at + 4..at + 8].copy_from_slice(&(kept as u32).to_le_bytes());
+            kept += smallmobile_brain9::tokens::valid(e).iter().filter(|&&v| v).count();
         }
+        kept
     }
 
     /// Ajoute les horodatages du dernier calcul aux durées par kernel (`LAB9_GPU_PROFILE`).
@@ -1158,8 +1176,8 @@ impl Encoder {
             // SAFETY : sous `lock`, `chunk` au plus `max`
             unsafe {
                 let t0 = std::time::Instant::now();
-                self.write_inputs(chunk, Some(s));
-                self.record(chunk.len(), true)?;
+                let kept = self.write_inputs(chunk, Some(s));
+                self.record(chunk.len(), kept, true)?;
                 self.add(S_PREP, t0);
                 self.timed_submit(S_READS, chunk.len())?;
                 self.collect_profile()?;
@@ -1232,10 +1250,10 @@ impl Encoder {
         // SAFETY : sous `lock`, au plus un lot de chaque
         unsafe {
             let t0 = std::time::Instant::now();
-            self.write_inputs(items, Some(slots));
+            let kept = self.write_inputs(items, Some(slots));
             self.write_lanes(lanes);
             self.begin_commands()?;
-            self.record_reads(items.len(), true);
+            self.record_reads(items.len(), kept, true);
             self.record_step_kernels(lanes.len());
             self.end_commands()?;
             self.add(S_PREP, t0);
@@ -1367,6 +1385,7 @@ impl Encoder {
             "dec_cross",
             "dec_out",
             "neighbours",
+            "gather",
         ];
         // les kernels jamais passés sont omis ; les lectures, puis les pas du décodeur
         let part = |times: &[(f64, u64)], what: &str| {

@@ -1,5 +1,6 @@
 // Commun aux shaders de lab9 (`lab9/src/vulkan.rs`) : les tampons, une position = ses octets
-// d'entrée (`POS_BYTES` : régions 48 × 77, partie 820, distances 48 × 48, nombre de régions).
+// d'entrée (`POS_BYTES` : régions 48 × 77, partie 820, distances 48 × 48, nombre de régions et de
+// joueurs, place ; puis la première ligne de la position parmi les lignes des seuls jetons présents).
 #extension GL_KHR_memory_scope_semantics : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
@@ -26,7 +27,8 @@ const uint IN_NODE = 0u;
 const uint IN_GLOB = R * NODE;
 const uint IN_DIST = IN_GLOB + GLOBAL;
 const uint IN_REGIONS = IN_DIST + R * R;
-const uint POS_BYTES = IN_REGIONS + 4u;
+const uint IN_ROWS = IN_REGIONS + 4u;
+const uint POS_BYTES = IN_ROWS + 4u;
 const uint G_PLAYER = 67u;
 const uint P = 81u;
 const uint G_MARKET = 472u;
@@ -38,6 +40,10 @@ uint byte_at(uint pos, uint at) {
 }
 
 uint regions_of(uint pos) { return byte_at(pos, IN_REGIONS); }
+
+// la première ligne de la position parmi les lignes des jetons présents (les blocs de l'encodeur ne
+// calculent que celles-là ; `gather.comp`)
+uint row_start(uint pos) { return inp[(pos * POS_BYTES + IN_ROWS) >> 2]; }
 
 // le jeton `t` de la position est-il présent ?
 bool token_valid(uint pos, uint t) {

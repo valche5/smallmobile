@@ -1,8 +1,9 @@
 #version 450
 // Le bloc R (`net::Conv`) : l'entrée de chacun de ses deux produits, pour chaque jeton,
 // [a, moyenne des a des régions voisines (distance 1), a de la partie] (`parts` = 3) ou [a, moyenne]
-// (`parts` = 2), en bf16 (act16). La moyenne est nulle hors carte et pour une région sans voisine.
-// Groupes : (position, part des jetons) ; chacun refait les voisines de la position (peu de travail).
+// (`parts` = 2), en bf16 (act16). La moyenne est nulle hors carte et pour une région sans voisine. Les
+// lignes sont celles des seuls jetons présents, à la suite (`gather.comp`) : les régions d'abord, la
+// partie en dernier. Groupes : (position, part des jetons) ; chacun refait les voisines de la position.
 #include "common.glsl"
 
 layout(local_size_x = 256) in;
@@ -34,17 +35,20 @@ void main() {
         count[t] = n;
     }
     barrier();
-    uint row0 = pos * TOKENS;
+    uint row0 = row_start(pos);
+    uint present = 0u;
+    for (uint j = 0u; j < TOKENS; j++) present += token_valid(pos, j) ? 1u : 0u;
+    uint game = present - 1u;
     uint width = p.parts * p.d;
-    uint per = (TOKENS + gl_NumWorkGroups.y - 1u) / gl_NumWorkGroups.y;
+    uint per = (present + gl_NumWorkGroups.y - 1u) / gl_NumWorkGroups.y;
     uint first = gl_WorkGroupID.y * per;
-    uint mine = min(per, TOKENS - min(first, TOKENS));
+    uint mine = min(per, present - min(first, present));
     for (uint idx = t; idx < mine * p.d; idx += 256u) {
         uint i = first + idx / p.d, c = idx % p.d;
         uint out_ = p.dst + (row0 + i) * width + c;
         act16[out_] = act16[p.src + (row0 + i) * p.d + c];
         float m = 0.0;
-        if (i < R && count[i] > 0u) {
+        if (i < regions && count[i] > 0u) {
             for (uint half_ = 0u; half_ < 2u; half_++) {
                 uint bits = hood[2u * i + half_];
                 while (bits != 0u) {
@@ -56,6 +60,6 @@ void main() {
             m /= float(count[i]);
         }
         act16[out_ + p.d] = bfloat16_t(m);
-        if (p.parts == 3u) act16[out_ + 2u * p.d] = act16[p.src + (row0 + T_GAME) * p.d + c];
+        if (p.parts == 3u) act16[out_ + 2u * p.d] = act16[p.src + (row0 + game) * p.d + c];
     }
 }

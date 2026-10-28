@@ -1,8 +1,9 @@
 #version 450
 // L'attention de l'encodeur : un groupe par (position, tête), un fil par jeton qui regarde. Scores
 // q·k / √dh + biais de la relation (tokens::relations, calculée ici d'après les distances et les
-// occupants des régions) ; les jetons absents ne sont pas regardés. qkv : lignes [q | k | v] ; la
-// sortie en bf16 (act16), entrée du produit qui suit.
+// occupants des régions) ; les jetons absents ne sont pas regardés. qkv : lignes [q | k | v] des seuls
+// jetons présents, à la suite (`gather.comp`) ; la sortie de même, en bf16 (act16), entrée du produit qui
+// suit.
 #include "common.glsl"
 
 layout(local_size_x = 64) in;
@@ -16,6 +17,7 @@ shared float ks[TOKENS * DH];
 shared float vs[TOKENS * DH];
 shared uint owner[R]; // 0 : aucun ; 1 + joueur relatif ; + 8 si le peuple est en déclin
 shared uint valid[TOKENS];
+shared uint packed[TOKENS]; // rang de chaque jeton présent parmi les présents
 
 uint relation(uint pos, uint i, uint j, uint regions) {
     if (i < regions && j < regions) return 1u + byte_at(pos, IN_DIST + i * R + j);
@@ -36,12 +38,23 @@ void main() {
     uint pos = gl_WorkGroupID.x, head = gl_WorkGroupID.y;
     uint t = gl_LocalInvocationID.x;
     uint regions = regions_of(pos);
-    uint row0 = pos * TOKENS;
+    uint row0 = row_start(pos);
     uint d3 = 3u * p.d;
+    if (t < TOKENS) valid[t] = token_valid(pos, t) ? 1u : 0u;
+    barrier();
+    if (t == 0u) {
+        uint n = 0u;
+        for (uint j = 0u; j < TOKENS; j++) {
+            packed[j] = n;
+            n += valid[j];
+        }
+    }
+    barrier();
     for (uint idx = t; idx < TOKENS * DH; idx += 64u) {
         uint j = idx / DH, c = idx % DH;
-        ks[idx] = act[p.qkv_off + (row0 + j) * d3 + p.d + head * DH + c];
-        vs[idx] = act[p.qkv_off + (row0 + j) * d3 + 2u * p.d + head * DH + c];
+        if (valid[j] == 0u) continue;
+        ks[idx] = act[p.qkv_off + (row0 + packed[j]) * d3 + p.d + head * DH + c];
+        vs[idx] = act[p.qkv_off + (row0 + packed[j]) * d3 + 2u * p.d + head * DH + c];
     }
     if (t < R) {
         uint o = 0u;
@@ -53,18 +66,13 @@ void main() {
         }
         owner[t] = o;
     }
-    if (t < TOKENS) valid[t] = token_valid(pos, t) ? 1u : 0u;
     barrier();
-    if (t >= TOKENS) return;
+    if (t >= TOKENS || valid[t] == 0u) return;
     float out_[DH];
     for (uint c = 0u; c < DH; c++) out_[c] = 0.0;
-    uint at = p.out_off + (row0 + t) * p.d + head * DH;
-    if (valid[t] == 0u) {
-        for (uint c = 0u; c < DH; c++) act16[at + c] = bfloat16_t(0.0);
-        return;
-    }
+    uint at = p.out_off + (row0 + packed[t]) * p.d + head * DH;
     float q[DH];
-    for (uint c = 0u; c < DH; c++) q[c] = act[p.qkv_off + (row0 + t) * d3 + head * DH + c];
+    for (uint c = 0u; c < DH; c++) q[c] = act[p.qkv_off + (row0 + packed[t]) * d3 + head * DH + c];
     float scale = inversesqrt(float(DH));
     float top = -1e30, sum = 0.0;
     for (uint j = 0u; j < TOKENS; j++) {
