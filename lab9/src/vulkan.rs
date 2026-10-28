@@ -100,6 +100,9 @@ fn vk_err(what: &str) -> impl Fn(vk::Result) -> String + '_ {
 /// Temps et nombre de passages de chaque kernel : ceux des lectures, puis ceux des pas du décodeur.
 type KernelTimes = [(f64, u64); 2 * KERNELS];
 
+/// Ce que rend un tour (`Encoder::turn`) : les 20 têtes de chaque lecture, les logits de chaque voie.
+type Turned = (Vec<[f32; 20]>, Vec<Vec<f32>>);
+
 /// Des positions à lire : encodage et distances de la carte.
 type Items = Vec<(Encoded, Vec<u8>)>;
 
@@ -1221,7 +1224,7 @@ impl Encoder {
         items: &[(&Encoded, &[u8])],
         slots: &[u32],
         lanes: &[LaneIn],
-    ) -> Result<(Vec<[f32; 20]>, Vec<Vec<f32>>), String> {
+    ) -> Result<Turned, String> {
         if items.len() > self.max || lanes.len() > MAX_LANES || items.is_empty() || lanes.is_empty() {
             return Ok((self.read_slots(items, slots)?, self.steps(lanes)?));
         }
