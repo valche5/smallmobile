@@ -231,3 +231,27 @@ Pistes, non faites :
   (h2 : lectures deux fois moins chères), ou sans fins simulées (`mix=0`, la seconde étape prévue de la
   phase 6) ;
 - processeur : h1 y lit une position en 8,6 ms, 19 cœurs n'ajouteraient que ~7 % de lectures.
+
+### Optimisations mesurées (28 octobre, fin de matinée)
+
+Bancs propres seulement (la boucle suspendue, ou arrêtée) : le GPU partagé avec un autre programme fausse
+tout (36 000 pas/s au lieu de 110 000). Et une erreur à ne pas refaire : **suspendre un programme ne
+libère pas sa mémoire du GPU**.
+
+| Changement | Selfplay (recherches/s) | Remarque |
+| --- | --- | --- |
+| Départ (régime, 200 fils) | 215 | |
+| Les blocs de l'encodeur sur les seuls jetons présents (47,9 sur 60 ; `gather.comp`) | | lectures +12 % (banc, mêmes sorties au chiffre près) |
+| `dec_out` : requêtes et régions de la voie en mémoire partagée, un sous-groupe par logit | **242** (+13 %) | `dec_out` −19 % à −40 % selon la mesure |
+
+**Mémoire du GPU.** Le duel de la boucle ouvrait deux moteurs aux réserves par défaut (16 384 places, 12 288
+caches : celles des grosses recherches de lab8), 14,5 Go de la carte et 6,6 Go de la mémoire du PC : il
+tournait en partie hors de la carte, et rendait faux tout banc lancé à côté. Le moteur note maintenant le
+pic de places et de caches pris : 200 fils de selfplay en k = 8, m = 2 en prennent au plus 3 800 et 3 400,
+un duel à 100 fils 1 650. Réserves : 32 par fil pour le selfplay (10,6 → ~5,5 Go), 4 096 pour un joueur
+`plans:` (`slots=` pour plus).
+
+**Duels.** 20 parties ensemble (un fil par cœur) : lots de 9 lectures, 8,6 s par donne ; 100 fils : 3,2 s.
+La boucle mène ses duels à 150 fils.
+
+Boucle reprise à 11 h 50 au duel de c001, avec ce programme (`d6e0fea`).
