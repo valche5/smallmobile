@@ -107,6 +107,19 @@ différences ; seul le nombre de donnes compte (~1 000 par taille pour ±1 point
   105001, 920 donnes. Il donne un témoin sur le même moteur que 4b, et avec 4a, 1 840 donnes de mctx
   à 16× au total.
 
+### Phase 5 : l'ancrage avec les fins simulées à n = 400 (29 octobre, avant tout calcul)
+
+À n = 100, l'ancrage n'ajoute rien de net aux fins simulées (+1,6 ± 2,0) ; à n = 400 il ne faisait
+rien seul. Reste le seul gros budget non essayé : `n=400,roll=1,mix=0.5` (lab7 : +8,9 ± 2,3, graine
+71002, 400 donnes, CUDA, 23,8 s par décision). Sur le PC (Vulkan), graine 71002, 400 donnes, l'un après
+l'autre :
+
+- **5a** : `n=400,roll=1,mix=0.5,anchor=raw,lambda=0.005` ;
+- **5b** : `n=400,roll=1,mix=0.5`, témoin sur le même moteur.
+
+Règle : si 5a bat le témoin (5b et lab7 réunis, 800 donnes) de plus de 3 points, confirmation de 5a et
+de son témoin sur 920 donnes neuves ; sinon, l'ancrage ne s'ajoute pas aux fins simulées.
+
 Coût estimé : une arène de 400 donnes à n = 400 ≈ 10 min sur RTX 5080 (lab7 : 0,85 s par décision) ;
 à n = 6 400 ≈ 27 min (lab6) ; 920 donnes à n = 400 ≈ 20 min. Campagne entière ≈ 2 h 30, ~1 $.
 
