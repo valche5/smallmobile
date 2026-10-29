@@ -89,3 +89,12 @@ décision sur l'arène GPU (attentes comprises), 40 min. `lab10/runs/r5-16x-conf
 **Confirmé** : à poids fixes, l'ancrage à λ fixe fait rapporter au calcul ce que mctx laissait perdre
 (16× : +1,8 ± 2,2 dans lab6). C'est le deuxième levier à la décision après les fins simulées, et il ne
 coûte rien de plus que la recherche longue elle-même.
+
+### Avec les fins simulées de lab7 (graine 72002, 920 donnes)
+
+`n=100,roll=1,mix=0.5,anchor=raw,lambda=0.005` contre c130 à n = 400 : **+7,0 ± 1,6** (2 j. +4,2, 3 j. +6,9,
+4 j. +7,8, 5 j. +9,0), 7,3 s par décision, 52 min. Apparié avec la confirmation de lab7 sans ancrage
+(`lab7/runs/a1-confirm.tsv`, +5,4 ± 1,5) : **+1,6 ± 2,0, indécis**. À n = 100 l'ancrage ne change pas
+grand-chose, comme à n = 400 en phase 1 : son effet est celui des grands budgets. Les deux leviers ne
+s'excluent pas (le gain ne baisse pas), sans qu'on puisse dire qu'ils s'additionnent.
+`lab10/runs/r5-roll-confirm.tsv`.
