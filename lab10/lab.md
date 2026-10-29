@@ -100,6 +100,10 @@ différences ; seul le nombre de donnes compte (~1 000 par taille pour ±1 point
   arènes ne sont comparées qu'entre elles (même moteur). R5 refait ici sert de raccord avec la phase 3
   sur CUDA. Règle : un λ qui bat 0,005 de plus de 3 points passe en confirmation (920 donnes neuves) ;
   sinon, on garde 0,005.
+- **4c, témoin sur le PC** (ajouté après 4b, avant 4a) : le PC fait une arène 16× de 400 donnes en
+  7 à 8 min, contre 18 min pour la RTX 5080. Même joueur que 4a, `n=6400` (mctx), Vulkan, graine
+  105001, 920 donnes. Il donne un témoin sur le même moteur que 4b, et avec 4a, 1 840 donnes de mctx
+  à 16× au total.
 
 Coût estimé : une arène de 400 donnes à n = 400 ≈ 10 min sur RTX 5080 (lab7 : 0,85 s par décision) ;
 à n = 6 400 ≈ 27 min (lab6) ; 920 donnes à n = 400 ≈ 20 min. Campagne entière ≈ 2 h 30, ~1 $.
