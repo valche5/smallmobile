@@ -69,6 +69,10 @@ Ces trois étapes et le lancement de la boucle s'enchaînent seuls dès la fin d
 
 ## Commandes
 
+Pilotage de p1 (`lab11/p1.sh`) : `status` ; `stop`, arrêt propre avant le pas suivant ; `kill`, arrêt
+immédiat (l'étape en cours est refaite à la reprise) ; `start`, reprise détachée avec les réglages du
+lancement.
+
 Tests sur le PC, processeur seul :
 
 ```sh

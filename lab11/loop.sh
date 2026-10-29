@@ -14,6 +14,10 @@
 #
 #   RUN=nom lab11/loop.sh N        jusqu'au pas N ; une étape déjà faite est sautée (reprise)
 #
+# Arrêt : le fichier lab11/runs/RUN/stop arrête la boucle avant le pas suivant ; tuée en cours de
+# route, elle refait à la reprise l'étape interrompue (parties, apprentissage ou duel), rien d'autre.
+# Pour p1 : lab11/p1.sh.
+#
 # Après le dernier pas : la mesure finale, le dernier réseau contre c000 à n = 400 des deux côtés,
 # FINAL donnes sans arrêt (graine 112101), `final-cNNN.tsv`.
 #
@@ -125,6 +129,12 @@ while [ "$(python "from data import filled; print('oui' if filled('../data/$RUN'
 done
 for k in $(seq "$first" "$LAST"); do
   c=$(name "$k")
+  # arrêt propre entre deux pas : `touch lab11/runs/RUN/stop` (lab11/p1.sh stop) ; relancer reprend ici
+  if [ -f "$OUT/stop" ]; then
+    rm -f "$OUT/stop"
+    log "arrêt demandé, avant $c"
+    exit 0
+  fi
   if [ "$k" -le "$first" ]; then prev=c000; else prev=$(name $((k - 1))); fi
   # le cycle k par le dernier réseau appris (celui du premier pas : déjà joué par c000)
   games "$c" "$prev" "$GAMES" "$SIMS" "$AGENT" "$NOISY"
