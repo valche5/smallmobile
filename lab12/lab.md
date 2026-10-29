@@ -57,7 +57,7 @@ Sur vast.ai, depuis mini :
 
 ```sh
 LAB=lab12 labtools/vast.sh up OFFRE
-labtools/vast.sh run r4 7200 'target/release/lab12 arena --hero az:net=lab12/nets/c130.bin,n=100,roll=1,mix=0.5,reply=4 \
+labtools/vast.sh run r4 7200 'mkdir -p lab12/runs && target/release/lab12 arena --hero az:net=lab12/nets/c130.bin,n=100,roll=1,mix=0.5,reply=4 \
   --field az:net=lab12/nets/c130.bin,n=400 --players 2,3,4,5 --deals 400 --seed 71002 --device cuda \
   --out lab12/runs/r4.tsv'
 labtools/vast.sh wait r4 600
