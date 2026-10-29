@@ -42,11 +42,17 @@ Avant le premier pas :
 
 1. **Essai à blanc** (`LAB11_WINDOW_MIN=50000 GAMES=200 FILL_GAMES=1000 DEALS=40 FINAL=0`, 2 pas) :
    selfplay Vulkan, apprentissage ROCm, duel. Rien n'en est gardé.
-2. **Débit du professeur** : 500 parties de selfplay avec la recette ci-dessus. Si le débit est sous
+2. **Débit du professeur** : 1 000 parties de selfplay avec la recette ci-dessus, sur le PC libre (500
+   prévues d'abord ; mais la boucle mène 320 parties à la fois, 20 fils × 16). Si le débit est sous
    2 parties/s (cycle de plus de 1 h 45), les cycles passent à 6 250 parties (fenêtre inchangée).
    Estimation : ~2,5 parties/s (une recherche de 5a pour ~20 décisions enregistrées par partie,
    ~50 recherches de 5a par seconde dans l'arène de lab10), soit ~85 min de parties et ~95 min par pas,
    **~65 h pour 40 pas**.
+3. **Le professeur** : avec ancrage si `score.py lab10/runs/p5c.tsv lab10/runs/p5d.tsv` conclut « A
+   meilleur » (intervalle au-dessus de 0), sans sinon.
+
+Ces trois étapes et le lancement de la boucle s'enchaînent seuls dès la fin de 5d
+(`lab11/runs/start-p1.sh`, hors Git, recopié dans le journal).
 
 ## Mesures
 
