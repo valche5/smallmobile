@@ -85,6 +85,22 @@ combinaison avec les fins simulées de lab7 (`roll=1,mix=0.5`) sur les donnes de
 (graine 72002, 920 donnes : `n=100,roll=1,mix=0.5` +5,4 ± 1,5), pour voir si les deux gains
 s'additionnent ou corrigent le même défaut.
 
+### Phase 4 : témoin de mctx à 16× et balayage de λ (29 octobre, avant tout calcul)
+
+Constat sur les phases 1 à 3 (`score.py`, colonne « corrélation ») : d'une arène à l'autre, les donnes
+d'une même graine ne sont pas corrélées (−0,16 à +0,15). L'appariement ne resserre pas les
+différences ; seul le nombre de donnes compte (~1 000 par taille pour ±1 point sur une différence).
+
+- **4a, témoin** (vast, même machine et CUDA que la phase 3) : `az:net=lab10/nets/c130.bin,n=6400`
+  (mctx) sur la graine 102001, 920 donnes. Gain dû à l'ancrage = phase 3 − 4a. Aujourd'hui, la seule
+  référence est lab6 (+1,8 ± 2,2 sur 400 donnes).
+- **4b, balayage de λ à 16×** (PC, RX 9070 XT, `--device vulkan` ; `check-gpu` : victoire 0,0021,
+  pièces 0,069, logits 0,575, comme dans lab8) : `n=6400,anchor=raw,lambda=L` pour L = 0,0025, 0,005
+  et 0,01 (KL étalonnée à n = 400 : entre 0,27 et 0,53, 0,27 et 0,17), graine 104001, 400 donnes chacun. Les trois
+  arènes ne sont comparées qu'entre elles (même moteur). R5 refait ici sert de raccord avec la phase 3
+  sur CUDA. Règle : un λ qui bat 0,005 de plus de 3 points passe en confirmation (920 donnes neuves) ;
+  sinon, on garde 0,005.
+
 Coût estimé : une arène de 400 donnes à n = 400 ≈ 10 min sur RTX 5080 (lab7 : 0,85 s par décision) ;
 à n = 6 400 ≈ 27 min (lab6) ; 920 donnes à n = 400 ≈ 20 min. Campagne entière ≈ 2 h 30, ~1 $.
 
