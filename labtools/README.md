@@ -34,7 +34,7 @@ Labos :
 | `lab9` | Le réseau hybride de ResTNet (blocs de graphe à la c130 et blocs transformer alternés) dans le cadre de lab8 : plans, décodeur, recherche sur plans ; parties d'imitation de lab8 | Figé de fait le 28 octobre 2026 : h1 meilleur réseau d'imitation, boucle p1 arrêtée après quatre pas sans progrès (`lab9/journal.md`) |
 | `lab10` | L'ancrage piKL de la recherche de c130 sur sa politique (`anchor=fixed`, `anchor=raw`), à poids fixes, depuis lab7 ; arènes sur vast.ai | Figé le 30 octobre 2026 : à 16×, ancrage +2,9 ± 1,4 sur mctx ; avec les fins simulées, rien d'établi (+1,7 ± 1,8 à n = 400) ; `lab10/journal.md` |
 | `lab11` | Une boucle d'apprentissage depuis c130 dont le professeur est la meilleure recherche de lab10 (fins simulées à n = 400 et ancrage piKL), sur le PC ; boucle de lab7 | Ouvert le 29 octobre 2026 ; plan `lab11/lab.md` |
-| `lab12` | La riposte du rival dans les fins simulées (`reply=K`, d'après Best Reply Search), à poids fixes, depuis lab10 ; arènes sur vast.ai | Ouvert le 29 octobre 2026 ; plan `lab12/lab.md` |
+| `lab12` | La riposte du rival dans les fins simulées (`reply=K`, d'après Best Reply Search), à poids fixes, depuis lab10 ; arènes sur vast.ai | Figé le 30 octobre 2026 : `reply=4` −0,4 ± 2,8 sur les fins simulées à n = 100, pour deux fois le calcul ; `lab12/journal.md` |
 
 Outils communs (ce dossier) :
 
