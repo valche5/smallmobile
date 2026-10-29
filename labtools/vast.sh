@@ -89,6 +89,18 @@ rsync_e() { echo "ssh ${SSHOPT[*]} -p $(st port)"; }
 
 info() { timeout 30 "$VAST" show instance "$(st id)" --raw 2>/dev/null; }
 
+# destroy ID : détruit le contrat et attend qu'il disparaisse de la liste (60 s), sinon s'arrête
+destroy() {
+  local id=$1 i
+  timeout 60 "$VAST" destroy instance "$id" -y 2>&1 | note || true
+  for i in $(seq 12); do
+    timeout 30 "$VAST" show instances --raw | json "print(any(x['id'] == $id for x in d))" | grep -q False && break
+    sleep 5
+  done
+  timeout 30 "$VAST" show instances --raw | json "assert not any(x['id'] == $id for x in d)" ||
+    die "la machine $id existe encore : vérifier sur cloud.vast.ai"
+}
+
 find_cmd() {
   say "recherche d'offres (au plus $MAX_PRICE \$/h)"
   timeout 60 "$VAST" search offers "cpu_cores_effective>=24 num_gpus=1 reliability>0.985 rentable=true \
@@ -144,7 +156,16 @@ up_cmd() {
     --label "$LAB" --onstart-cmd "$ONSTART" --raw 2>&1) || true
   echo "$out" | note
   id=$(echo "$out" | json 'print(d["new_contract"] if d.get("success") else "")' 2>/dev/null) || true
-  [ -n "$id" ] || die "location refusée"
+  if [ -z "$id" ]; then
+    # vast peut refuser la location et créer quand même le contrat (29 octobre : 58280590, resté
+    # « loading » 4 h) : le détruire, sinon il peut démarrer plus tard et être facturé
+    id=$(echo "$out" | json 'print(d.get("new_contract") or "")' 2>/dev/null) || true
+    if [ -n "$id" ]; then
+      say "location refusée, mais contrat $id créé : destruction"
+      destroy "$id"
+    fi
+    die "location refusée"
+  fi
   echo "$id" > "$ST/id"
   date +%s > "$ST/start"
   trap up_failed EXIT
@@ -325,20 +346,14 @@ ssh_cmd() {
 }
 
 down_cmd() {
-  local id i cost
+  local id cost
   id=$(st id)
   [ -n "$id" ] || { say "aucune machine louée"; status_cmd; return; }
   if [ -f "$ST/pushed" ]; then
     rget 60 "$REMOTE/vast-jobs/" "$ST/jobs/$id/" || true
   fi
   say "destruction de la machine $id"
-  timeout 60 "$VAST" destroy instance "$id" -y 2>&1 | note || true
-  for i in $(seq 12); do
-    timeout 30 "$VAST" show instances --raw | json "print(any(x['id'] == $id for x in d))" | grep -q False && break
-    sleep 5
-  done
-  timeout 30 "$VAST" show instances --raw | json "assert not any(x['id'] == $id for x in d)" ||
-    die "la machine $id existe encore : vérifier sur cloud.vast.ai"
+  destroy "$id"
   if [ -n "$(st dph)" ]; then
     cost=$(python3 -I -c "print(f'{$(st dph) * ($(date +%s) - $(st start)) / 3600:.2f}')")
     say "machine $id détruite après $((($(date +%s) - $(st start)) / 60)) min, environ $cost \$"
