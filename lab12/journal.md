@@ -37,7 +37,7 @@ arrêt en 0 s, relancée.
 Face au témoin sur les mêmes donnes (`lab7/runs/a1-n-100_roll-1_mix-0p5.tsv`, +5,7) : −0,5 ± 3,1 ; face
 au témoin réuni (+5,5 sur 1 320 donnes) : **−0,4 ± 2,8**. Seuil de +3 loin : pas de confirmation.
 
-**La riposte du rival n'apporte rien**, pour deux fois le calcul. Modéliser un adversaire qui cherche
-à nuire au joueur, dans les fins simulées, ne change pas ce qu'elles mesurent : le jeu de c130 à n = 400
-qu'affronte le joueur ne contient pas de telles ripostes, et le coup préféré du réseau en est déjà un
-bon modèle. Machine détruite après 47 min, 0,28 $ ; crédit restant 4,89 $.
+**La riposte du rival n'apporte rien**, pour deux fois le calcul. Hypothèse, non mesurée : le champ de
+c130 à n = 400 ne cherche pas à nuire au joueur testé, et le coup préféré du réseau modélise déjà bien
+ces adversaires-là ; contre des joueurs qui ripostent (humains, Expert plus fort), la mesure pourrait
+différer. Machine détruite après 47 min, 0,28 $ ; crédit restant 4,89 $.

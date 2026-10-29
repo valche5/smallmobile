@@ -21,3 +21,13 @@ boucle de lab7 (`loop.sh`, `py/`). Plan et protocole : [lab.md](lab.md).
   29 s ; la fenêtre glisse (c002…c004 au dernier pas). **Professeur : 200 parties en 395 à 444 s,
   ~0,5 partie/s**, cinq fois sous l'estimation de `lab.md` (PC partagé, et 200 parties ne remplissent
   pas les 320 places de la boucle). Mesure propre avant le lancement.
+
+## Lancement de p1 (29–30 octobre, PC ; `lab11/runs/start-p1.sh`)
+
+- **Professeur** : 5c − 5d de lab10 +1,0 ± 2,1, indécis : selon la règle, `n=400,roll=1,mix=0.5`, sans
+  ancrage (+8,9 ± 1,2 contre c130 à n = 400, toutes arènes de lab7 et lab10 réunies).
+- **Débit**, PC libre : 1 000 parties en 386 s, **2,59 parties/s** (l'essai à blanc, PC partagé et 200
+  parties, sous-estimait) : cycles de **12 500 parties** (~80 min).
+- Remplissage par c130 : c001 et c002, 25 000 parties chacun en 387 s (65 parties/s), 1,73 million de
+  positions. Premier pas (c002, sur la fenêtre de c130 seule) : 91 s d'apprentissage ; duel −1,3 ± 2,8
+  (arrêt après 276 donnes : 0 plutôt que 3 points). Le professeur joue à partir de c003.
