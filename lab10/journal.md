@@ -98,3 +98,29 @@ coûte rien de plus que la recherche longue elle-même.
 grand-chose, comme à n = 400 en phase 1 : son effet est celui des grands budgets. Les deux leviers ne
 s'excluent pas (le gain ne baisse pas), sans qu'on puisse dire qu'ils s'additionnent.
 `lab10/runs/r5-roll-confirm.tsv`.
+
+## Phase 4b : balayage de λ à 16× (PC, graine 104001, 400 donnes, 29 octobre)
+
+PC (RX 9070 XT, Vulkan bf16 ; `check-gpu` : victoire 0,0021, pièces 0,069, logits 0,575, comme dans
+lab8). Une arène 16× de 400 donnes en 7 à 8 min (1,5 à 1,7 s par décision), contre 18 à 21 min pour la
+RTX 5080 en CUDA. `lab10/runs/sweep-{l25,l50,l100}.tsv`.
+
+| λ | Score | 2 j. | 3 j. | 4 j. | 5 j. |
+| --- | --- | --- | --- | --- | --- |
+| 0,0025 | +4,8 ± 2,3 | +3,0 | +6,7 | +6,2 | +3,2 |
+| 0,005 (R5) | +5,6 ± 2,4 | +7,2 | +4,2 | +7,8 | +3,0 |
+| 0,01 | +5,4 ± 2,3 | +4,5 | +5,3 | +8,4 | +3,4 |
+
+Face à 0,005 : 0,0025 −0,8 ± 3,0, 0,01 −0,2 ± 3,1. Le score est plat sur un facteur 4 de λ : la règle
+garde **λ = 0,005**. L'effet ne demande pas de réglage fin. R5 sur le PC (+5,6) rejoint R5 en CUDA
+(+7,9 et +6,1).
+
+## Phase 4c : témoin mctx à 16× sur le PC (graine 105001, 920 donnes, 29 octobre)
+
+`az:net=lab10/nets/c130.bin,n=6400` (mctx) contre c130 à n = 400 : **+2,9 ± 1,5** (2 j. +3,5, 3 j. +4,1,
+4 j. +3,1, 5 j. +1,0), 2,2 s par décision (1,5 s avec l'ancrage), 22 min. `lab10/runs/mctx-16x-pc.tsv`.
+
+Sur le même moteur, chaque λ de 4b fait mieux que ce témoin de +1,9 à +2,6 (± 2,8 chacun). Les trois
+λ réunis (1 200 donnes, +5,3) le battent de **+2,4 ± 2,0**. mctx à 16× gagne un peu plus que lab6 ne le
+laissait croire (+1,8 ± 2,2 sur 400 donnes) : le gain dû à l'ancrage est plus petit qu'estimé en
+phase 2 (+6,1 ± 3,1 face à lab6).
