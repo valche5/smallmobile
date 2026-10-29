@@ -179,3 +179,27 @@ Contre c130 à n = 400. `lab10/runs/p5{a,b}.tsv`, 21 et 20 min (5,1 et 4,7 s par
 et 5 joueurs : +5,6, +6,3). Face au témoin réuni (5b et lab7, 800 donnes, +9,1) : **+3,6 ± 2,9**, au-dessus du
 seuil de +3. Le score de 5a est le plus haut jamais mesuré contre c130. Selon la règle, confirmation sur
 920 donnes neuves (5c, 5d).
+
+## Phase 5 : confirmation (PC, graine 107001, 920 donnes neuves, 29 octobre)
+
+`lab10/runs/p5{c,d}.tsv`, 54 et 43 min (6,1 et 4,8 s par décision).
+
+| Joueur testé | Score | 2 j. | 3 j. | 4 j. | 5 j. |
+| --- | --- | --- | --- | --- | --- |
+| 5c `n=400,roll=1,mix=0.5,anchor=raw,lambda=0.005` | +9,7 ± 1,6 | +3,8 | +10,9 | +12,9 | +11,0 |
+| 5d `n=400,roll=1,mix=0.5` | +8,7 ± 1,6 | +5,8 | +9,6 | +10,4 | +9,0 |
+
+5c − 5d : **+1,0 ± 2,1, indécis**. Non confirmé : les +12,7 de 5a tenaient en partie de la chance.
+Toutes les arènes réunies, à n = 400 avec fins simulées : avec ancrage +10,6 ± 1,3 (1 320 donnes), sans
++8,9 ± 1,2 (1 720 donnes, avec lab7), écart **+1,7 ± 1,8**.
+
+## Bilan du labo 10
+
+- L'ancrage piKL (λ fixe) fait payer la recherche longue : à 16×, +6,4 ± 1,1 contre +3,5 ± 0,8 pour
+  mctx, **+2,9 ± 1,4**. Sans effet à n = 400 ; plat de λ = 0,002 à 0,01.
+- Avec les fins simulées, il n'ajoute rien d'établi (n = 100 : +1,6 ± 2,0 ; n = 400 : +1,7 ± 1,8) : les
+  fins simulées corrigent déjà une bonne part du même défaut.
+- Meilleure décision mesurée : les fins simulées à n = 400 (+8,9 sans ancrage, +10,6 avec), ~5 s par
+  décision sur l'arène. Professeur de la boucle de lab11, sans ancrage (règle de `lab11/lab.md`).
+- Outils : l'appariement des arènes par graine ne resserre rien (corrélation ≈ 0) ; le PC fait les
+  arènes 2 à 3 fois plus vite que la RTX 5080 en CUDA.
