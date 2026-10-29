@@ -33,6 +33,7 @@ Labos :
 | `lab8` | Recherche sur des plans de tour écrits par un décodeur, transformer neuf qui commence par imiter c130, fins simulées par plans ; calcul sur le PC fixe (RX 9070 XT, Vulkan) | Figé le 27 octobre 2026 : i2 imite c130 mieux que son propre réseau (politiques seules à parité) ; recherche sur plans +3,6 ± 1,5 contre c130 à n = 400 en 134 ms par décision, −6,1 ± 2,1 face au meilleur de lab7 ; selfplay écrit, non lancé ; journal `lab8/journal.md` |
 | `lab9` | Le réseau hybride de ResTNet (blocs de graphe à la c130 et blocs transformer alternés) dans le cadre de lab8 : plans, décodeur, recherche sur plans ; parties d'imitation de lab8 | Figé de fait le 28 octobre 2026 : h1 meilleur réseau d'imitation, boucle p1 arrêtée après quatre pas sans progrès (`lab9/journal.md`) |
 | `lab10` | L'ancrage piKL de la recherche de c130 sur sa politique (`anchor=fixed`, `anchor=raw`), à poids fixes, depuis lab7 ; arènes sur vast.ai | Ouvert le 29 octobre 2026 ; plan `lab10/lab.md` |
+| `lab11` | Une boucle d'apprentissage depuis c130 dont le professeur est la meilleure recherche de lab10 (fins simulées à n = 400 et ancrage piKL), sur le PC ; boucle de lab7 | Ouvert le 29 octobre 2026 ; plan `lab11/lab.md` |
 
 Outils communs (ce dossier) :
 
