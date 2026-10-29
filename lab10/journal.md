@@ -79,3 +79,13 @@ R5 face à F10 (apparié) : +1,7 ± 3,3, indécis.
   un peu devant, sans que la différence soit établie.
 - Ordre de grandeur : les fins simulées de lab7 à n = 400 (`roll=1`) donnaient +8,9 ± 2,3 pour 24 s par
   décision ; R5 à 16× donne +7,9 ± 2,2 pour 5,3 s.
+
+## Phase 3 : confirmation de R5 à 16× (graine 102001, 920 donnes neuves, 29 octobre)
+
+`az:net=lab10/nets/c130.bin,n=6400,anchor=raw,lambda=0.005` contre c130 à n = 400 : **+6,1 ± 1,5 points**
+(2 j. +3,7 ± 3,1, 3 j. +9,6 ± 3,5, 4 j. +6,6 ± 3,1, 5 j. +4,7 ± 2,5), positif à toutes les tailles ; 5,5 s par
+décision sur l'arène GPU (attentes comprises), 40 min. `lab10/runs/r5-16x-confirm.tsv`.
+
+**Confirmé** : à poids fixes, l'ancrage à λ fixe fait rapporter au calcul ce que mctx laissait perdre
+(16× : +1,8 ± 2,2 dans lab6). C'est le deuxième levier à la décision après les fins simulées, et il ne
+coûte rien de plus que la recherche longue elle-même.

@@ -130,6 +130,10 @@ src/ui/              interface Preact (accueil, salon, vues, carte SVG zoomable)
 tests/               bun test
 ```
 
+## Auteur
+
+Valentin.
+
 ---
 
 Projet de fan non officiel. *Small World* est un jeu de Philippe Keyaerts édité
