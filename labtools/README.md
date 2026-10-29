@@ -43,7 +43,9 @@ Outils communs (ce dossier) :
 - `games.ts` : résumé des parties archivées par le serveur (`data/games/`) ;
 - `export-room.ts` : une salle du serveur au format du noyau, pour l'analyser dans un labo ;
 - `biblio.md` : bibliographie commentée des IA de jeux proches (Diplomacy, jeux à plusieurs
-  actions par tour, Catan, Risk, Small World).
+  actions par tour, Catan, Risk, Small World) ;
+- `bilan.md` : bilan des labos 1 à 9 au 29 octobre 2026 (ce qui a marché ou non, pistes
+  inexplorées, recommandation pour reprendre l'apprentissage).
 
 Le jeu propose l'Expert de chaque labo listé dans `src/shared/experts.ts` (le dernier par
 défaut) ; `bun run kernel:build` construit le programme `labN-expert` de chaque labo.
