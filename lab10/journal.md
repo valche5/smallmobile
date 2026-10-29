@@ -164,3 +164,18 @@ sous-estimait). **Gain dû à l'ancrage à 16× : +2,9 ± 1,4 (λ = 0,005), +2,4
 sur chaque moteur, mais deux fois plus petit que l'estimation de la phase 2 (+6,1 ± 3,1) et à peine
 au-dessus du bruit sur un seul moteur. La phase 2 avait de la chance (R5 +7,9) et lab6 n'en avait pas
 (mctx +1,8).
+
+## Phase 5 : l'ancrage avec les fins simulées à n = 400 (PC, graine 71002, 400 donnes, 29 octobre)
+
+Contre c130 à n = 400. `lab10/runs/p5{a,b}.tsv`, 21 et 20 min (5,1 et 4,7 s par décision).
+
+| Joueur testé | Score | 2 j. | 3 j. | 4 j. | 5 j. |
+| --- | --- | --- | --- | --- | --- |
+| 5a `n=400,roll=1,mix=0.5,anchor=raw,lambda=0.005` | **+12,7 ± 2,4** | +6,0 | +13,7 | +16,5 | +14,5 |
+| 5b `n=400,roll=1,mix=0.5` (témoin, PC) | +9,3 ± 2,5 | +4,0 | +14,2 | +10,9 | +8,2 |
+| lab7 `a1-n400` (même joueur que 5b, CUDA) | +8,9 ± 2,3 | +7,0 | +12,5 | +8,2 | +8,0 |
+
+5b rejoint lab7 (+0,4 ± 3,3) : le PC reproduit les fins simulées de lab7. 5a − 5b : **+3,4 ± 3,2** (gain à 4
+et 5 joueurs : +5,6, +6,3). Face au témoin réuni (5b et lab7, 800 donnes, +9,1) : **+3,6 ± 2,9**, au-dessus du
+seuil de +3. Le score de 5a est le plus haut jamais mesuré contre c130. Selon la règle, confirmation sur
+920 donnes neuves (5c, 5d).

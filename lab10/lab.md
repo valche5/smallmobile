@@ -120,6 +120,10 @@ l'autre :
 Règle : si 5a bat le témoin (5b et lab7 réunis, 800 donnes) de plus de 3 points, confirmation de 5a et
 de son témoin sur 920 donnes neuves ; sinon, l'ancrage ne s'ajoute pas aux fins simulées.
 
+Résultat (journal) : 5a − témoin réuni +3,6 ± 2,9, au-dessus du seuil. **Confirmation** sur le PC, graine
+107001, 920 donnes, l'une après l'autre : **5c** = joueur de 5a, **5d** = joueur de 5b. Verdict : 5c − 5d
+(attendu ±2,1 ; décisif si l'intervalle exclut 0).
+
 Coût estimé : une arène de 400 donnes à n = 400 ≈ 10 min sur RTX 5080 (lab7 : 0,85 s par décision) ;
 à n = 6 400 ≈ 27 min (lab6) ; 920 donnes à n = 400 ≈ 20 min. Campagne entière ≈ 2 h 30, ~1 $.
 
