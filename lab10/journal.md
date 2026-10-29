@@ -124,3 +124,15 @@ Sur le même moteur, chaque λ de 4b fait mieux que ce témoin de +1,9 à +2,6 (
 λ réunis (1 200 donnes, +5,3) le battent de **+2,4 ± 2,0**. mctx à 16× gagne un peu plus que lab6 ne le
 laissait croire (+1,8 ± 2,2 sur 400 donnes) : le gain dû à l'ancrage est plus petit qu'estimé en
 phase 2 (+6,1 ± 3,1 face à lab6).
+
+## p4 : λ à 16× en CUDA (graine 62001, 400 donnes, 29 octobre ; hors protocole)
+
+Lancé sur vast par la session précédente avant que la phase 4 soit écrite. Mêmes donnes que la phase 2.
+`lab10/runs/{r2,r10}-16x.tsv`, 36 min pour les deux.
+
+| λ | Score | 2 j. | 3 j. | 4 j. | 5 j. | Face à R5 (phase 2) |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0,002 | +5,1 ± 2,2 | +6,2 | +8,7 | +5,8 | −0,3 | −2,8 ± 3,1 |
+| 0,01 | +6,3 ± 2,4 | +8,0 | +7,2 | +7,2 | +2,8 | −1,6 ± 3,2 |
+
+Même conclusion qu'en 4b, sur l'autre moteur : de λ = 0,002 à 0,01, le score à 16× est plat.
