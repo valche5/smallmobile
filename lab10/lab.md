@@ -93,7 +93,9 @@ différences ; seul le nombre de donnes compte (~1 000 par taille pour ±1 point
 
 - **4a, témoin** (vast, même machine et CUDA que la phase 3) : `az:net=lab10/nets/c130.bin,n=6400`
   (mctx) sur la graine 102001, 920 donnes. Gain dû à l'ancrage = phase 3 − 4a. Aujourd'hui, la seule
-  référence est lab6 (+1,8 ± 2,2 sur 400 donnes).
+  référence est lab6 (+1,8 ± 2,2 sur 400 donnes). Lancé sur les deux moteurs à 21:17 : sur vast
+  (`mctx-16x-confirm.tsv` rapatrié sous `mctx-16x-confirm-cuda.tsv`) et sur le PC en Vulkan
+  (`mctx-16x-confirm.tsv`), plus rapide.
 - **4b, balayage de λ à 16×** (PC, RX 9070 XT, `--device vulkan` ; `check-gpu` : victoire 0,0021,
   pièces 0,069, logits 0,575, comme dans lab8) : `n=6400,anchor=raw,lambda=L` pour L = 0,0025, 0,005
   et 0,01 (KL étalonnée à n = 400 : entre 0,27 et 0,53, 0,27 et 0,17), graine 104001, 400 donnes chacun. Les trois
