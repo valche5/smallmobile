@@ -143,14 +143,24 @@ Lancé sur les deux moteurs. **PC (Vulkan)** : `az:net=lab10/nets/c130.bin,n=640
 **+3,6 ± 1,5** (2 j. +4,3, 3 j. +5,6, 4 j. +2,3, 5 j. +2,0), 2,2 s par décision, 22 min.
 `lab10/runs/mctx-16x-confirm.tsv`. Face à R5 sur les mêmes donnes (phase 3, CUDA) : R5 **+2,6 ± 2,1**.
 
-Bilan à 16× (toutes les arènes, moteurs réunis) :
+**vast (CUDA, même machine que la phase 3)** : **+4,9 ± 1,5** (2 j. +6,5, 3 j. +6,5, 4 j. +3,2, 5 j. +3,5),
+6,3 s par décision, 45 min. `lab10/runs/mctx-16x-confirm-cuda.tsv` (rapatrié sous ce nom). Face à R5
+sur les mêmes donnes et le même moteur : R5 **+1,2 ± 2,0, indécis**. Les deux moteurs entre eux :
+−1,4 ± 2,1.
+
+Bilan à 16× (toutes les arènes ; écart-type de chaque arène, pondération par les donnes) :
 
 | Recherche à 16× | Donnes | Score |
 | --- | --- | --- |
-| mctx (lab6, 4c, 4a PC) | 2 240 | +3,0 ± 1,0 |
+| mctx (lab6, 4c, 4a PC, 4a CUDA) | 3 160 | +3,5 ± 0,8 |
 | ancrage `raw`, λ = 0,005 (phases 2, 3, 4b) | 1 720 | +6,4 ± 1,1 |
 | ancrage `raw`, λ de 0,002 à 0,01 (avec 4b et p4) | 3 320 | +5,9 ± 0,8 |
 
-Chercher seize fois plus rapporte déjà environ +3 points avec mctx (lab6 le sous-estimait) ; l'ancrage
-le double. **Gain dû à l'ancrage à 16× : +3,4 ± 1,5 (λ = 0,005), +2,9 ± 1,3 (tous les λ)**, plus petit
-que l'estimation de la phase 2 (+6,1 ± 3,1), mais établi.
+Par moteur : CUDA, R5 +6,7 contre mctx +4,0 (1 320 donnes chacun), **+2,7 ± 1,8** ; PC, les trois λ
++5,3 contre mctx +3,3 (1 200 et 1 840 donnes), **+2,0 ± 1,7**.
+
+Chercher seize fois plus rapporte déjà environ +3,5 points avec mctx (lab6, sur 400 donnes, le
+sous-estimait). **Gain dû à l'ancrage à 16× : +2,9 ± 1,4 (λ = 0,005), +2,4 ± 1,1 (tous les λ)** : positif
+sur chaque moteur, mais deux fois plus petit que l'estimation de la phase 2 (+6,1 ± 3,1) et à peine
+au-dessus du bruit sur un seul moteur. La phase 2 avait de la chance (R5 +7,9) et lab6 n'en avait pas
+(mctx +1,8).
