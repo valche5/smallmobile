@@ -1,0 +1,17 @@
+[package]
+name = "smallmobile-brain12"
+version = "0.1.0"
+edition = "2024"
+description = "L'IA Expert du labo 10 : la recherche de lab7 (c130) avec un ancrage réglable sur la politique du réseau (piKL), pour le jeu et pour le labo."
+publish = false
+
+[[bin]]
+name = "lab12-expert"
+path = "src/bin/expert.rs"
+
+[dependencies]
+smallmobile-kernel = { path = "../../kernel" }
+
+[dev-dependencies]
+# la recherche de lab7, témoin des tests : sans option d'ancrage, celle de lab12 doit lui être identique
+smallmobile-brain7 = { path = "../../lab7/brain" }
