@@ -136,3 +136,21 @@ Lancé sur vast par la session précédente avant que la phase 4 soit écrite. M
 | 0,01 | +6,3 ± 2,4 | +8,0 | +7,2 | +7,2 | +2,8 | −1,6 ± 3,2 |
 
 Même conclusion qu'en 4b, sur l'autre moteur : de λ = 0,002 à 0,01, le score à 16× est plat.
+
+## Phase 4a : témoin mctx à 16× sur les donnes de la confirmation (graine 102001, 920 donnes, 29 octobre)
+
+Lancé sur les deux moteurs. **PC (Vulkan)** : `az:net=lab10/nets/c130.bin,n=6400` contre c130 à n = 400 :
+**+3,6 ± 1,5** (2 j. +4,3, 3 j. +5,6, 4 j. +2,3, 5 j. +2,0), 2,2 s par décision, 22 min.
+`lab10/runs/mctx-16x-confirm.tsv`. Face à R5 sur les mêmes donnes (phase 3, CUDA) : R5 **+2,6 ± 2,1**.
+
+Bilan à 16× (toutes les arènes, moteurs réunis) :
+
+| Recherche à 16× | Donnes | Score |
+| --- | --- | --- |
+| mctx (lab6, 4c, 4a PC) | 2 240 | +3,0 ± 1,0 |
+| ancrage `raw`, λ = 0,005 (phases 2, 3, 4b) | 1 720 | +6,4 ± 1,1 |
+| ancrage `raw`, λ de 0,002 à 0,01 (avec 4b et p4) | 3 320 | +5,9 ± 0,8 |
+
+Chercher seize fois plus rapporte déjà environ +3 points avec mctx (lab6 le sous-estimait) ; l'ancrage
+le double. **Gain dû à l'ancrage à 16× : +3,4 ± 1,5 (λ = 0,005), +2,9 ± 1,3 (tous les λ)**, plus petit
+que l'estimation de la phase 2 (+6,1 ± 3,1), mais établi.
