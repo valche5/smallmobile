@@ -242,10 +242,11 @@ print(d["dph_total"])' > "$ST/conn"
     rsh 20 "cat $REMOTE/vast-jobs/check-$dev.txt" | tee "$ST/check-$dev" | note
     say "$dev : $(paste -sd ';' "$ST/check-$dev")"
   done
-  # juste : victoire à moins de 0,01 du processeur
+  # juste : victoire à moins de 0,01 du processeur. Le nombre est suivi d'une virgule (« 0.0004, ») :
+  # converti par `+ 0`, sinon mawk le compare en texte, selon la locale (29 octobre : CUDA juste refusé)
   local good=""
   for dev in cuda vulkan; do
-    awk '/écart maximal/ { for (i = 1; i < NF; i++) if ($i == "victoire") ok = $(i + 1) < 0.01 } END { exit !ok }' \
+    LC_ALL=C awk '/écart maximal/ { for (i = 1; i < NF; i++) if ($i == "victoire") ok = ($(i + 1) + 0) < 0.01 } END { exit !ok }' \
       "$ST/check-$dev" && good="$good $dev"
   done
   [ -n "$good" ] || die "aucun moteur GPU juste (journal : $LOG)"
