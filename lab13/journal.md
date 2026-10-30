@@ -231,3 +231,21 @@ cible de politique. Le budget de recherche peut aussi s'y concentrer.
 Correction d'une piste proposée avant D9 : la tête « prochain tour » existe déjà. La tête des
 propriétaires apprend à qui appartient chaque région **au début du prochain tour** du joueur qui agit
 (`selfplay::owners`, poids 1,5 dans `train.py`), et non à la fin de la partie.
+
+## La tête des propriétaires sait la riposte (30 octobre)
+
+Question de l'utilisateur : la tête « prochain tour » (propriétaires au début du prochain tour du joueur
+qui agit) ne sert qu'à l'apprentissage ; les moteurs de jeu ne la calculent pas. Ce qu'elle vaut, c130
+sur `anc-test`, régions à moi au moment de la décision (`runs/owners-check.txt`) :
+
+| Décisions | Régions | Perdues avant mon prochain tour | AUC | Prédit perdu | Perdues dans le décile le plus menacé |
+| --- | --- | --- | --- | --- | --- |
+| toutes | 199 788 | 19,1 % | **0,848** | 19,0 % | **65,9 %** |
+| déclin possible | 23 922 | 29,3 % | 0,849 | 28,7 % | 85,8 % |
+| conquête | 52 653 | 20,2 % | 0,830 | 20,1 % | 65,6 % |
+| jetons | 110 221 | 16,8 % | 0,849 | 16,8 % | 60,1 % |
+
+Bien classée et calibrée : le tronc de c130 contient ce que les fins simulées vont chercher (qui me
+reprend quoi d'ici mon tour), que sa politique et sa valeur exploitent mal. Piste notée : s'en servir
+en jeu (moteurs à compléter), par exemple comme évaluation bon marché à la place d'une part des fins
+simulées.
