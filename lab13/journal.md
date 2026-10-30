@@ -249,3 +249,25 @@ Bien classée et calibrée : le tronc de c130 contient ce que les fins simulées
 reprend quoi d'ici mon tour), que sa politique et sa valeur exploitent mal. Piste notée : s'en servir
 en jeu (moteurs à compléter), par exemple comme évaluation bon marché à la place d'une part des fins
 simulées.
+
+## D10 : la recherche courte hors des décisions stratégiques (30 octobre)
+
+`light=N` : au redéploiement et à la défense, N itérations sans fins simulées. Temps de l'Expert du
+jeu, un cœur du PC, parties entières (`runs/d10-time.txt`) ; arènes contre c130 à n = 400, graine
+72002, 920 donnes, Vulkan, ~8 min chacune ; témoin `lab7/runs/a1-confirm.tsv` (mêmes donnes, sans
+`light`).
+
+| Joueur | 4 j. : moyenne / max | 5 j. : moyenne / max | Score contre c130 | Différence au témoin |
+| --- | --- | --- | --- | --- |
+| `n=100,roll=1,mix=0.5` (Expert actuel, témoin) | 1,8 s / 9,7 s | 2,2 s / 13,3 s | +5,4 ± 1,5 | |
+| `…,light=16` | 0,8 s / 1,6 s | 1,25 s / 2,4 s | +4,3 ± 1,5 | −1,1 ± 2,1 |
+| `…,light=1` | 0,8 s / 1,6 s | 1,2 s / 2,4 s | **+4,7 ± 1,5** | **−0,6 ± 2,1** |
+
+- Les deux passent le critère (au-dessus de −1,5, borne basse au-dessus de −3,5) et coûtent pareil :
+  tout le temps restant est au peuple, au déclin et à la conquête. Le pire cas est divisé par 5,5, la
+  moyenne par ~2 : les longues décisions étaient les redéploiements, une recherche entière avec fins
+  simulées par jeton posé.
+- **Retenu : `light=1`**, meilleur score des deux. L'Expert du jeu (`src/shared/experts.ts`) passe à
+  `n=100,roll=1,mix=0.5,light=1`.
+- Comme le laissait penser D9, presque toute la force des fins simulées est dans les décisions
+  stratégiques ; au redéploiement et à la défense, le coup préféré du réseau suffit.
