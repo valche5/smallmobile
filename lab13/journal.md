@@ -53,3 +53,27 @@ la recette de la boucle (taux 1,5e-4 en un cycle, ~4 passages par position), c13
 prédictible des cibles du professeur. Deux causes restent : la recette (des cibles très bruitées,
 qu'un apprentissage court ne moyenne pas) ou la capacité de c130 (ce que calcule le professeur n'est
 pas lisible d'un seul regard). Elles se séparent hors ligne, sur les parties de lab11 déjà jouées.
+
+## D3 : la recette (30 octobre)
+
+c130 réentraîné hors ligne (`py/fit.py`) sur les parties du professeur de lab11 encore gardées (c004 à
+c011 : 3 446 887 positions, 99 998 parties), 4 passages moyens (26 928 lots de 512), ~6,5 min par taux.
+`lab13/runs/d3-lr*.txt`.
+
+| Taux maximal | Apprentissage (politique, fin) | `prof` : politique (meilleure / fin) | `prof` : coup de la cible (fin) | `ord` : politique (fin) |
+| --- | --- | --- | --- | --- |
+| c130, départ | | 1,307 | 46,5 % | 1,248 |
+| 1,5e-4 | 1,458 | 1,319 / 1,319 | 46,0 % | 1,295 |
+| 5e-5 | 1,469 | 1,313 / 1,314 | 46,5 % | 1,288 |
+| 1,5e-5 | 1,479 | 1,313 / 1,313 | 46,8 % | 1,284 |
+
+- **Le critère n'est pas atteint, à aucun taux** : la perte de politique sur les parties neuves du
+  professeur ne descend jamais sous celle de c130 (1,307). Elle monte dès les 2 000 premiers lots,
+  même au taux le plus bas, puis ne bouge presque plus ; la valeur fait de même (1,011 → 1,011 à 1,016).
+- Le réseau apprend ses lots (1,50 → 1,46 au taux de la boucle), mais ce qu'il en tire ne se transpose
+  pas aux cibles du professeur sur d'autres parties, et l'éloigne de la recherche ordinaire (`ord`
+  1,248 → 1,284 à 1,295).
+- **Réserve** : les cibles apprises viennent du professeur mené par les réseaux de la boucle (c003 à
+  c010, qui jouent déjà 70 à 80 % des coups de c130) ; celles du juge, du professeur mené par c130. Une
+  part du décalage peut venir de là. Le test sans ce biais demande des parties du professeur mené par
+  c130 pour apprendre (~10 h pour autant de positions).
