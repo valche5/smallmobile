@@ -50,3 +50,14 @@ l'a priori que celles de c130 à n = 400. La valeur reste stable (1,04 à 1,07).
 **Point d'étape au pas 10** (c010 contre c130, n = 400 des deux côtés, graine 111001, 400 donnes,
 4,5 min) : **−0,7 ± 2,2** (2 j. −0,2, 3 j. −2,5, 4 j. +0,8, 5 j. −0,7). Rien de gagné ni de perdu ; au-dessus
 du seuil d'arrêt (−3, au pas 20). `lab11/runs/p1/step-c010.tsv`.
+
+## Arrêt de p1 (30 octobre, 11 h 50)
+
+Pas 11 : duel −1,7 ± 3,1. Boucle arrêtée à la demande de l'utilisateur pendant les parties de c012
+(cycle inachevé effacé), avant le point d'étape du pas 20 : dix pas de suite sans progrès (duels de
+−0,8 à −2,7, point d'étape c010 −0,7 ± 2,2), et la précision de la politique sur les cibles du professeur
+ne monte plus depuis que la fenêtre ne contient que lui (46,6 % à c006, 45,7 % à c011).
+
+**Bilan** : un professeur à ~+9 points (fins simulées à n = 400), deux fois plus fort que celui de T3,
+ne fait pas progresser c130 en neuf pas de professeur. Réseaux c000 à c011 et parties c001 à c011
+gardés (`lab11/runs/p1`, `lab11/data/p1`) pour le diagnostic de lab13.
