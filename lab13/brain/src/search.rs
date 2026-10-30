@@ -1279,7 +1279,8 @@ mod tests {
 
     #[test]
     fn options_are_read_and_written_back() {
-        let text = "n=400,win=0.75,roll=1,mix=0.5,market=late,crn=1,explore=1,history=0,anchor=fixed,scale=10";
+        let text =
+            "n=400,win=0.75,roll=1,mix=0.5,market=late,crn=1,explore=1,history=0,anchor=fixed,scale=10,light=8,place=1";
         let c = Config::parse(text).expect("réglages");
         let expected = Config {
             iterations: 400,
@@ -1291,6 +1292,8 @@ mod tests {
             explore: true,
             history: false,
             anchor: Anchor::Fixed { scale: 10.0 },
+            light: 8,
+            place: true,
         };
         assert_eq!(c, expected);
         assert_eq!(format!("n=400{}", c.options()).replace(", ", ","), text);
