@@ -2,8 +2,11 @@
 //! demandes de décision une à une (voir `src/server/expert.ts`).
 //!
 //! ```text
-//! lab13-expert --net lab13/nets/gen11.bin
+//! lab13-expert --net lab13/nets/c130.bin [--search roll=1,mix=0.5]
 //! ```
+//!
+//! `--search` : les réglages de la recherche (`search::Config::parse`) ; les itérations viennent de
+//! chaque demande.
 //!
 //! Messages sur l'entrée et la sortie standard : un nombre de mots, puis les mots (32 bits,
 //! petit-boutiste).
@@ -19,6 +22,7 @@ use std::time::Instant;
 
 use smallmobile_brain13::expert::Expert;
 use smallmobile_brain13::net::Net;
+use smallmobile_brain13::search::Config;
 use smallmobile_kernel::Game;
 use smallmobile_kernel::wire::{self, Writer};
 
@@ -26,12 +30,16 @@ const REFUSED: i32 = -1;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let net = match args.as_slice() {
-        [flag, path] if flag == "--net" => path.clone(),
-        _ => {
-            eprintln!("usage : expert --net poids.bin");
-            std::process::exit(2)
+    let usage = || -> ! {
+        eprintln!("usage : expert --net poids.bin [--search réglages]");
+        std::process::exit(2)
+    };
+    let (net, cfg) = match args.as_slice() {
+        [flag, path] if flag == "--net" => (path.clone(), Config::default()),
+        [flag, path, s, text] if flag == "--net" && s == "--search" => {
+            (path.clone(), Config::parse(text).unwrap_or_else(|| usage()))
         }
+        _ => usage(),
     };
     let net = Arc::new(Net::load(Path::new(&net)).unwrap_or_else(|e| {
         eprintln!("réseau illisible ({net}) : {e}");
@@ -41,15 +49,15 @@ fn main() {
     let mut output = BufWriter::new(io::stdout().lock());
     // une fin de l'entrée (serveur arrêté) termine le processus
     while let Some(request) = read_message(&mut input) {
-        let reply = answer(&net, &request);
+        let reply = answer(&net, cfg, &request);
         if write_message(&mut output, &reply).is_err() {
             break;
         }
     }
 }
 
-fn answer(net: &Arc<Net>, request: &[u32]) -> Vec<u32> {
-    match decide(net, request) {
+fn answer(net: &Arc<Net>, cfg: Config, request: &[u32]) -> Vec<u32> {
+    match decide(net, cfg, request) {
         Ok(words) => words,
         Err(why) => {
             let mut out = vec![REFUSED as u32, why.len() as u32];
@@ -63,13 +71,13 @@ fn answer(net: &Arc<Net>, request: &[u32]) -> Vec<u32> {
     }
 }
 
-fn decide(net: &Arc<Net>, request: &[u32]) -> Result<Vec<u32>, String> {
+fn decide(net: &Arc<Net>, cfg: Config, request: &[u32]) -> Result<Vec<u32>, String> {
     let [iterations, seed_lo, seed_hi, game @ ..] = request else {
         return Err("demande trop courte".into());
     };
     let (map, state) = wire::decode_game(game).map_err(|e| format!("partie illisible : {}", e.0))?;
     let start = Instant::now();
-    let expert = Expert::new(net.clone(), (*iterations as usize).max(1));
+    let expert = Expert::new(net.clone(), Config { iterations: (*iterations as usize).max(1), ..cfg });
     let seed = *seed_lo as u64 | (*seed_hi as u64) << 32;
     let d = expert.decide(&Game::new(&map, state), seed).map_err(|r| format!("aucun coup : {r:?}"))?;
     let micros = start.elapsed().as_micros().min(u32::MAX as u128) as u32;

@@ -39,13 +39,21 @@ export interface ExpertOptions {
   net: string;
   /** Itérations de recherche par décision. */
   iterations: number;
+  /** Autres réglages de la recherche (`ExpertLab.search`). */
+  search?: string;
   /** Au-delà, la décision est abandonnée et le processus relancé (ms). */
   timeoutMs?: number;
 }
 
 /** Le programme et le réseau de l'Expert d'un labo. */
 export function expertOptions(lab: ExpertLab): ExpertOptions {
-  return { lab: lab.id, binary: `./target/release/${lab.id}-expert`, net: `./${lab.id}/nets/${lab.net}.bin`, iterations: lab.iterations };
+  return {
+    lab: lab.id,
+    binary: `./target/release/${lab.id}-expert`,
+    net: `./${lab.id}/nets/${lab.net}.bin`,
+    iterations: lab.iterations,
+    search: lab.search,
+  };
 }
 
 /** Un processus par labo dont le programme et le réseau sont là ; `warn` signale les autres. */
@@ -109,7 +117,8 @@ export class ExpertProcess implements Expert {
 
   private spawn() {
     if (this.proc) return this.proc;
-    const proc = Bun.spawn([this.opts.binary, '--net', this.opts.net], { stdin: 'pipe', stdout: 'pipe', stderr: 'inherit' });
+    const args = [this.opts.binary, '--net', this.opts.net, ...(this.opts.search ? ['--search', this.opts.search] : [])];
+    const proc = Bun.spawn(args, { stdin: 'pipe', stdout: 'pipe', stderr: 'inherit' });
     this.proc = proc;
     this.chunks = [];
     this.buffered = 0;

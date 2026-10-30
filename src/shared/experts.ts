@@ -11,6 +11,8 @@ export interface ExpertLab {
   net: string;
   /** Itérations de recherche par décision. */
   iterations: number;
+  /** Autres réglages de la recherche, passés au programme (`--search roll=1,mix=0.5`) ; défaut : ceux du labo. */
+  search?: string;
 }
 
 export const EXPERT_LABS: readonly ExpertLab[] = [
@@ -22,6 +24,10 @@ export const EXPERT_LABS: readonly ExpertLab[] = [
   // c130, 128x7 : face au c060 de lab2 à n=800, +10,1 ± 1,6 à n=400 et +9,6 ± 1,6 à n=800 (920 donnes,
   // lab3/journal.md) ; n=400 : 63 ms par recherche sur un cœur du PC, contre 72 pour lab2 à n=800
   { id: 'lab3', label: 'Labo 3', net: 'c130', iterations: 400 },
+  // c130 et fins simulées (lab7) : +5,4 ± 1,5 contre c130 à n=400 (920 donnes, lab7/journal.md) ; sur un
+  // cœur du PC, 1,8 s en moyenne par décision à 4 joueurs, 2,2 s à 5 (p95 7,8 s, max 13 s), contre 0,1 s
+  // pour lab3 (lab13/journal.md)
+  { id: 'lab13', label: 'Labo 13', net: 'c130', iterations: 100, search: 'roll=1,mix=0.5' },
 ];
 
 export const DEFAULT_EXPERT_LAB = EXPERT_LABS[EXPERT_LABS.length - 1]!.id;

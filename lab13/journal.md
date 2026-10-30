@@ -173,3 +173,22 @@ sait de plus que c130 ne passe pas dans le réseau.
 
 **Conclusion de D7** : rendre les cibles reproductibles ne suffit pas. Pas de boucle à professeur ancré
 sur cette seule base.
+
+## L'Expert du jeu passe aux fins simulées (30 octobre)
+
+Hors du diagnostic, à la demande de l'utilisateur : le seul progrès établi depuis lab3, les fins
+simulées à la décision (lab7, +5,4 ± 1,5 à n = 100, confirmé), entre dans le jeu. `lab13-expert` prend
+les réglages de la recherche (`--search roll=1,mix=0.5`, `search::Config::parse`) ; variante `lab13` de
+`src/shared/experts.ts` (c130, n = 100), désormais proposée par défaut.
+
+Temps de calcul par décision dans le processus de l'Expert, sur un cœur du PC, parties entières où
+tous les sièges sont l'Expert (une partie par cas) :
+
+| Joueurs | lab3 (n = 400) : moyenne / p95 / max | lab13 (n = 100, fins simulées) : moyenne / p95 / max |
+| --- | --- | --- |
+| 2 | 63 ms / 178 / 372 | 359 ms / 915 / 2 183 |
+| 4 | 91 ms / 201 / 462 | 1 768 ms / 7 207 / 9 681 |
+| 5 | 112 ms / 292 / 484 | 2 239 ms / 7 810 / 13 314 |
+
+n = 400 avec fins simulées (+8,9) coûterait environ quatre fois plus, jusqu'à ~50 s au pire à 5
+joueurs, trop près de la limite de 60 s du serveur : écarté.

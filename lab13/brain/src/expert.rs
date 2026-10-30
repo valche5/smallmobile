@@ -1,5 +1,5 @@
-//! L'IA Expert telle que le jeu l'emploie : la recherche guidée par le réseau (réglages fixes de
-//! `search`), sur la partie telle que la voit le joueur qui doit agir.
+//! L'IA Expert telle que le jeu l'emploie : la recherche guidée par le réseau (réglages de
+//! `search`, ceux de lab6 par défaut), sur la partie telle que la voit le joueur qui doit agir.
 
 use std::sync::Arc;
 
@@ -28,8 +28,9 @@ pub struct Decision {
 }
 
 impl Expert {
-    pub fn new(net: Arc<Net>, iterations: usize) -> Expert {
-        Expert { search: Az::new(Config { iterations, ..Config::default() }, net, "expert".into()) }
+    /// `cfg` : les réglages de la recherche (`Config::parse`), dont ses itérations.
+    pub fn new(net: Arc<Net>, cfg: Config) -> Expert {
+        Expert { search: Az::new(cfg, net, "expert".into()) }
     }
 
     /// La prochaine décision du joueur qui doit agir, en actions du noyau : un coup, ou toute une
