@@ -87,6 +87,21 @@ la cible. Lecture, fixée d'avance (± ~0,01 sur les gros types, plus sur les pe
   pas avec ces entrées et cette sortie ;
 - **un type monte sur les neuves** pendant que d'autres baissent : l'apprentissage déplace l'erreur.
 
+**D10, la recherche courte hors des décisions stratégiques** (ajouté le 30 octobre après D9, avant
+tout calcul). Option `light=N` de la recherche : au redéploiement et à la défense (jetons, pouvoirs,
+fin de tour ; 53 % des positions, où D9 trouve la cible la plus incertaine), N itérations sans fins
+simulées ; ailleurs (peuple, déclin, conquête), la recherche entière. Joueurs :
+`n=100,roll=1,mix=0.5,light=16` et `…,light=1` (le coup préféré du réseau). Mesures :
+
+1. **le temps** de l'Expert du jeu (`lab13-expert`, un cœur du PC, sans GPU comme sur mini), parties
+   entières de 4 et 5 joueurs où tous les sièges sont l'Expert, comme pour sa mise en service ;
+2. **la force** : arène contre c130 à n = 400, graine 72002, 920 donnes (celles de la confirmation de
+   lab7, `lab7/runs/a1-confirm.tsv` : +5,4 ± 1,5 sans `light`), Vulkan ; différence appariée au témoin.
+
+**Retenu** pour l'Expert du jeu : la variante la plus rapide dont la différence au témoin est
+au-dessus de **−1,5** point, borne basse de l'intervalle au-dessus de **−3,5**. Alors elle remplace
+l'Expert actuel, et le selfplay ciblé (piste B) s'en sert.
+
 ## Commandes
 
 ```sh

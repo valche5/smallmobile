@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use smallmobile_kernel::{Action, Game, Reason};
+use smallmobile_kernel::{Action, Game, Phase, Reason};
 
 use crate::know::Knowledge;
 use crate::moves;
@@ -46,7 +46,8 @@ impl Expert {
             let found = self.search.search(w, kw, &mut rng, false, &mut evals);
             if !found.value.is_nan() {
                 value = found.value;
-                iterations += self.search.cfg.iterations;
+                let light = self.search.cfg.light > 0 && matches!(w.state.phase, Phase::Redeploy | Phase::Defend);
+                iterations += if light { self.search.cfg.light } else { self.search.cfg.iterations };
             }
             found.mv
         })?;

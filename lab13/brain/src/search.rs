@@ -102,6 +102,9 @@ pub struct Config {
     pub history: bool,
     /// L'ancrage de la recherche sur la politique du réseau (`anchor=`, `scale=`, `lambda=`).
     pub anchor: Anchor,
+    /// Au redéploiement et à la défense (`light=N`, lab13/journal.md, D9) : N itérations, sans fins
+    /// simulées ; 0 : la recherche entière partout.
+    pub light: usize,
 }
 
 /// Comment les valeurs des coups d'un nœud s'ajoutent à ses logits (`Node::completed_into`).
@@ -141,6 +144,7 @@ impl Default for Config {
             explore: false,
             history: true,
             anchor: Anchor::Mctx,
+            light: 0,
         }
     }
 }
@@ -178,6 +182,7 @@ impl Config {
                 "anchor" => anchor = ["mctx", "fixed", "raw"].into_iter().find(|&a| a == v)?,
                 "scale" => scale = Some(positive(v)?),
                 "lambda" => lambda = Some(positive(v)?),
+                "light" => cfg.light = v.parse().ok()?,
                 _ => return None,
             }
         }
@@ -219,6 +224,9 @@ impl Config {
             Anchor::Mctx => {}
             Anchor::Fixed { scale } => out += &format!(", anchor=fixed, scale={scale}"),
             Anchor::Raw { lambda } => out += &format!(", anchor=raw, lambda={lambda}"),
+        }
+        if self.light > 0 {
+            out += &format!(", light={}", self.light);
         }
         out
     }
@@ -877,6 +885,9 @@ impl Az {
         oracle: &impl Oracle,
     ) -> Searched {
         let legal = moves::legal(root, k);
+        // `light` : une recherche courte, sans fins simulées, au redéploiement et à la défense
+        let light = self.cfg.light > 0 && matches!(root.state.phase, Phase::Redeploy | Phase::Defend);
+        let iterations = if light { self.cfg.light } else { iterations };
         if legal.len() == 1 {
             return Searched {
                 mv: legal[0].mv,
@@ -905,7 +916,7 @@ impl Az {
         self.expand(&mut tree, &seat, &legal, evals.judged(fp), root_total);
         let mut root_visits = 1u32;
         // l'horizon des fins simulées (`roll`)
-        let horizon = (self.cfg.roll > 0).then(|| self.horizon(root));
+        let horizon = (self.cfg.roll > 0 && !light).then(|| self.horizon(root));
         let noise: Vec<f32> = legal.iter().map(|_| if explore { gumbel(rng) } else { 0.0 }).collect();
         let schedule = considered_visits(CONSIDERED.min(legal.len()), iterations);
         // le score d'un coup de la racine (`root_pick`, `root_picks`)
