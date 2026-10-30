@@ -52,6 +52,14 @@ saurait la cible moyenne), entropie de la cible (le plancher). **Plafond bas** s
 recherches du professeur dépasse celui de l'a priori de moins de 5 points : ses cibles sont alors
 surtout du bruit autour de c130.
 
+**D6, des cibles ancrées** (ajouté le 30 octobre après D5, avant tout calcul). D5 refait sur les mêmes
+positions (graine 151001) avec l'ancrage piKL de lab10 (`anchor=raw,lambda=0.005`) : le professeur
+(`n=400,roll=1,mix=0.5,anchor=raw,lambda=0.005`, sur `data/prof`) et la recherche ordinaire
+(`n=400,anchor=raw,lambda=0.005`, sur `data/ord`). Mesure clé : **la marge apprenable**, CE à l'a priori
+moins CE à la moyenne des autres recherches (D5 : professeur sans ancrage 0,004, recherche ordinaire
+0,219). **Les cibles ancrées sont apprenables** si la marge du professeur ancré atteint **0,10**. Alors :
+une boucle dont le professeur est ancré.
+
 ## Commandes
 
 ```sh
