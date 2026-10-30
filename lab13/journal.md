@@ -77,3 +77,42 @@ c011 : 3 446 887 positions, 99 998 parties), 4 passages moyens (26 928 lots de 5
   c010, qui jouent déjà 70 à 80 % des coups de c130) ; celles du juge, du professeur mené par c130. Une
   part du décalage peut venir de là. Le test sans ce biais demande des parties du professeur mené par
   c130 pour apprendre (~10 h pour autant de positions).
+
+## D5 : le plafond des cibles (graine 151001, 1 500 positions, 4 recherches chacune, 30 octobre)
+
+`lab13 consistency` sur 1 500 positions rejouées de `data/ord` et de `data/prof` (c130, bruit de Gumbel
+à la racine comme dans le selfplay). Recherche ordinaire 40 s ; professeur 1 622 s (20 fils).
+`lab13/runs/d5-*.{txt,tsv}`.
+
+| Recherche | Même coup entre deux recherches | Coup de l'a priori de c130 | CE à l'a priori | CE à la moyenne des 3 autres | Entropie de la cible |
+| --- | --- | --- | --- | --- | --- |
+| ordinaire, `n=400` | 66,2 % | 49,4 % | 1,264 | 1,045 | 0,410 |
+| professeur, `n=400,roll=1,mix=0.5` | 55,4 % | 46,9 % | 1,294 | 1,290 | 0,369 |
+
+Par nombre de joueurs, le professeur s'accorde avec lui-même à 63 % à 2 joueurs, 52 à 55 % à 3 à 5.
+
+- **Le seuil de `lab.md` n'est pas franchi** (8,5 points au-dessus de l'a priori, plus que 5) : les coups
+  du professeur ne sont pas du bruit. Mais, comme l'a fait remarquer l'utilisateur, ce seuil ne suffisait
+  pas à conclure : un professeur qui gagne ~9 points ne peut pas n'être que du bruit ; la question est
+  ce qu'une cible porte, position par position.
+- **En perte, ses cibles ne portent presque rien d'apprenable** : la moyenne de trois autres recherches
+  du professeur ne prédit pas mieux une de ses cibles que l'a priori de c130 (1,290 contre 1,294).
+  Ses cibles sont **trop sûres d'elles** : plus pointues que celles de la recherche ordinaire (entropie
+  0,369 contre 0,410) et pourtant moins reproductibles (55 % contre 66 %). La recherche ordinaire, elle,
+  laisse une vraie marge (1,264 → 1,045). C'est ce que voyaient D2 et D3 : l'entropie croisée sur une
+  cible aussi bruitée ne peut presque rien apprendre, quelle que soit la recette.
+
+**Leçons nettes** : positions où les 4 recherches s'accordent et contredisent l'a priori de c130.
+
+| Leçons de… | Positions | c002 s'écarte de c130 / joue le coup | c010 s'écarte de c130 / joue le coup |
+| --- | --- | --- | --- |
+| professeur (`prof`) | 148 (9,9 %) | 23,0 % / 12,8 % | 36,5 % / 20,3 % |
+| recherche ordinaire (`ord`) | 231 (15,4 %) | 27,3 % / 13,0 % | 44,2 % / 19,9 % |
+
+c010 gagne autant de leçons de la recherche ordinaire, qu'il n'a jamais apprises, que de leçons du
+professeur (+6,9 et +7,5 points sur c002, ± ~6,5 sur si peu de positions) : là encore de la dérive, aux
+positions où l'a priori de c130 hésite, pas un apprentissage du professeur.
+
+**Conclusion de D5** : le professeur choisit mieux que c130, mais ses cibles de politique, une recherche
+à la fois, sont trop bruitées et trop pointues pour qu'un réseau en extraie quelque chose par entropie
+croisée. Ce n'est ni la recette (D3) ni, à ce stade, la capacité : c'est la cible.
