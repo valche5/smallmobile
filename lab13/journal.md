@@ -140,3 +140,36 @@ recherches est elle-même bruitée.
 Le professeur de lab11 était sans ancrage parce que l'ancrage n'ajoutait rien d'établi au jeu (lab10,
 phase 5) ; c'est à l'apprentissage qu'il sert, comme le rapporte Diplodocus (réseaux réentraînés avec
 piKL, presque rien à l'inférence seule).
+
+## D7 : des cibles apprenables font-elles un réseau plus fort ? (30 octobre)
+
+20 000 parties du professeur ancré mené par c130 (692 973 positions, 7 644 s) et 1 000 neuves pour
+juger (`anc-test`). c130 réentraîné dessus (`py/fit.py`, 4 passages, `--value-mix 0.5`, 5 413 lots de
+512, ~76 s par taux). `lab13/runs/d7-*.{txt,tsv}`.
+
+| Taux maximal | Apprentissage (politique, fin) | `anc-test` : politique (meilleure / fin) | `anc-test` : coup de la cible (fin) | `prof` : politique (fin) | `ord` : politique (fin) |
+| --- | --- | --- | --- | --- | --- |
+| c130, départ | | 1,271 | 56,4 % | 1,307 | 1,248 |
+| 1,5e-4 | 1,352 | 1,271 (départ) / 1,286 | 53,7 % | 1,332 | 1,283 |
+| 5e-5 | | 1,271 / 1,272 | 55,1 % | | |
+| 1,5e-5 | | **1,270** / 1,270 | 55,8 % | | |
+
+Arènes du réseau de 1,5e-5 contre c130, 920 donnes, graine 172001 :
+
+| Arène | Score (tailles à poids égaux) |
+| --- | --- |
+| n = 400 des deux côtés | **+0,1 ± 1,5** |
+| n = 1 (la politique seule) | +1,2 ± 1,4 |
+
+**Échec** : l'intervalle à n = 400 contient 0. Le résultat était acquis avant les arènes : le réseau
+retenu ne s'écarte de c130 que d'un millième de perte, il le joue presque à l'identique.
+
+Comme en D3 avec les cibles sans ancrage, l'apprentissage baisse la perte sur ses propres positions
+(1,45 → 1,35 au taux fort) mais jamais sur des parties neuves, où la précision recule (56,4 % → 53,7 %
+à 55,8 %). La marge de D6 (0,156) se mesurait position par position, contre la moyenne des autres
+recherches **sur la même position** : elle dit qu'une cible reproductible existe, pas qu'un réseau sait
+la généraliser à des positions qu'il n'a pas vues. Avec 700 000 positions, ce que le professeur ancré
+sait de plus que c130 ne passe pas dans le réseau.
+
+**Conclusion de D7** : rendre les cibles reproductibles ne suffit pas. Pas de boucle à professeur ancré
+sur cette seule base.
