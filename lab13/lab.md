@@ -70,6 +70,23 @@ réseau seul change), 920 donnes, graine 172001 ; et n = 1 (la politique seule),
 **Succès** : en arène à n = 400, intervalle au-dessus de 0. Alors : une boucle dont le professeur est
 ancré, dans un nouveau labo.
 
+**D9, par type de décision** (ajouté le 30 octobre après D8 de lab14, avant tout calcul). Sans
+nouvelle partie. Chaque position de `data/anc-test` (neuves) et 40 000 de `data/anc-train` tirées au
+hasard (apprises), graine 9, rangées par type d'après la phase et les coups possibles : **peuple**
+(un choix au marché), **déclin** (décliner est possible), **conquête** (le reste de la phase de
+conquête), **pouvoirs** (héros, forteresse, campement au redéploiement), **jetons** (le reste du
+redéploiement), **défense**. Les apprentissages de D7 refaits à l'identique (1,5e-4 et 5e-5), le
+réseau de la fin gardé (`fit.py --last`). Par type, pour c130 et ces deux réseaux : part des positions
+et de la perte de politique de c130, perte de politique, entropie de la cible (le plancher), coup de
+la cible. Lecture, fixée d'avance (± ~0,01 sur les gros types, plus sur les petits) :
+
+- **un type fait l'essentiel de l'excès de c130** (perte moins entropie) : c'est là que le professeur
+  diffère, la suite s'y concentre ;
+- **l'apprentissage baisse la perte d'un type sur les apprises, pas sur les neuves** : trop peu
+  d'exemples, ou une règle qui ne se généralise pas ; **sur aucune des deux** : ce type ne s'apprend
+  pas avec ces entrées et cette sortie ;
+- **un type monte sur les neuves** pendant que d'autres baissent : l'apprentissage déplace l'erreur.
+
 ## Commandes
 
 ```sh

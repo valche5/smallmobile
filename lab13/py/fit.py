@@ -8,7 +8,7 @@ Positions de `--train` tirées avec remise en proportion de leur poids, comme `t
 `--epochs` passages moyens ; taux maximal `--lr` en un cycle (montée sur 5 % des lots). Tous les
 `--every` lots, et au départ : les mesures de `agree.measures` sur chaque dossier de `--test` (toutes
 leurs positions, en 32 bits). Le réseau de la meilleure perte de politique sur le premier `--test` est
-écrit dans `--out`.
+écrit dans `--out` ; celui de la fin dans `--last`, si demandé.
 """
 
 import argparse
@@ -34,6 +34,7 @@ def main():
     ap.add_argument("--value-mix", type=float, default=0.0, help="comme train.py")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--last", help="le réseau de la fin (.bin)")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -76,6 +77,8 @@ def main():
         if (i + 1) % args.every == 0 or i + 1 == steps:
             judge(i + 1, sums, count)
             sums, count = np.zeros(len(METRICS)), 0
+    if args.last:
+        export(net, args.last)
     print(f"fini en {time.time() - start:.0f} s ; meilleure politique sur {args.test[0]} : {best:.3f}")
 
 
