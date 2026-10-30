@@ -115,6 +115,21 @@ redéploiement (un jeton, une évaluation). Deux changements :
 - `--full P,D,C,A` (selfplay) : la part des coups cherchés à fond et enregistrés par type (peuple,
   déclin possible, conquête, autres), au lieu de 12,5 % de tous les coups. Ne change pas le professeur.
 
+**D12, des parties ciblées font-elles généraliser les décisions stratégiques ?** (ajouté le 31 octobre
+après D11, avant tout calcul). 20 000 parties du professeur ancré avec `place=1`
+(`n=400,roll=1,mix=0.5,anchor=raw,lambda=0.005,place=1`), `--full 1,1,0.125,0`, graine 181 000 000,
+`data/tgt-train` (~1,1 million de positions, dont ~170 000 choix de peuple et ~750 000 déclins
+possibles, contre ~22 000 et ~93 000 en D7). c130 réentraîné dessus comme en D7 (`fit.py`, 4 passages,
+`--value-mix 0.5`, taux 1,5e-4, 5e-5, 1,5e-5, réseau de la fin gardé), jugé par type sur
+`data/anc-test` (`d9.py`, parties neuves de D7). Le réseau retenu : celui de la fin dont la perte
+moyenne sur les positions de peuple, de déclin et de conquête de `anc-test` est la plus basse.
+
+- **Les décisions stratégiques se généralisent** si, pour ce réseau, la perte sur `anc-test` baisse au
+  peuple et au déclin (écart à c130 sous zéro de plus de deux erreurs types), là où D9 la voyait monter
+  (+0,05, +0,04).
+- **Succès** : arène du réseau retenu contre c130, n = 400 des deux côtés, graine 183001, 920 donnes,
+  intervalle au-dessus de 0 ; aussi n = 1 (politique seule), mêmes donnes.
+
 ## Commandes
 
 ```sh
