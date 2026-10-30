@@ -271,3 +271,34 @@ jeu, un cœur du PC, parties entières (`runs/d10-time.txt`) ; arènes contre c1
   `n=100,roll=1,mix=0.5,light=1`.
 - Comme le laissait penser D9, presque toute la force des fins simulées est dans les décisions
   stratégiques ; au redéploiement et à la défense, le coup préféré du réseau suffit.
+
+## D11 : un selfplay du professeur plus rapide (30-31 octobre)
+
+**Où va le calcul** (300 parties du professeur de D7, `--full` absent, PC) : GPU à 98 %, processeur à
+34 % ; les fins simulées font l'essentiel des évaluations (25 par fin simulée), dont **55 % au
+redéploiement**, 40 % à la conquête.
+
+**`place=1`** (jetons des fins simulées posés par `Game::full_deployment`) : 12,5 évaluations par fin
+simulée (conquête 81 %, redéploiement 9 %), **1,9 fois plus vite** (82 s contre 155 pour 300 parties).
+Arènes contre c130 à n = 400, graine 107001, 920 donnes, appariées à lab10 `p5c` (même professeur sans
+`place` : +9,7 ± 1,6, 54 min) :
+
+| Professeur | Score | Différence à `p5c` | Temps par décision (moyenne / p95) | Durée |
+| --- | --- | --- | --- | --- |
+| `n=400,roll=1,mix=0.5,anchor=raw,lambda=0.005` (`p5c`) | +9,7 ± 1,6 | | 6,1 s / 23,2 s | 54 min |
+| … `place=1` | **+8,4 ± 1,5** | **−1,3 ± 2,1** | 2,7 s / 10,2 s | 25 min |
+| … `place=1`, n = 200 | +5,7 ± 1,6 | −4,0 ± 2,2 | 1,3 s / 5,2 s | 14 min |
+
+**`place=1` à n = 400 est retenu** (au-dessus de −1,5, borne basse −3,4) ; à n = 200, le professeur perd
+4 points : écarté.
+
+**Le ciblage** (`--full 1,1,0.125,0` : tout choix de peuple et tout déclin possible cherchés à fond, une
+conquête sur huit, rien au redéploiement ni à la défense), avec `place=1`, 300 parties :
+
+| Recette | Temps | Positions | Peuple | Déclin possible | Conquête |
+| --- | --- | --- | --- | --- | --- |
+| D7 (12,5 % de tous les coups) | 155 s | 10 353 | 344 | 1 406 | 3 111 |
+| `place=1`, `--full 1,1,0.125,0` | 134 s | 16 879 | **2 587** | **11 190** | 3 102 |
+
+Au même débit de positions (le GPU reste la limite), **8 à 9 fois plus de choix de peuple et de déclins
+par heure**, autant de conquêtes.
