@@ -192,3 +192,42 @@ tous les sièges sont l'Expert (une partie par cas) :
 
 n = 400 avec fins simulées (+8,9) coûterait environ quatre fois plus, jusqu'à ~50 s au pire à 5
 joueurs, trop près de la limite de 60 s du serveur : écarté.
+
+## D9 : par type de décision (30 octobre)
+
+Les apprentissages de D7 refaits à l'identique (fin : 1,286 à 1,5e-4, 1,272 à 5e-5, comme D7), réseau
+de la fin gardé (`runs/d9-lr*-last.bin`). `py/d9.py`, `runs/d9.txt`. Excès : perte de politique moins
+entropie de la cible (ce qui sépare c130 de la cible, bruit de la cible compris). Écarts à c130 ± une
+erreur type.
+
+| Type | Positions | Perte de c130 | Excès de c130 (part) | Entropie | Apprises : 1,5e-4 / 5e-5 | Neuves : 1,5e-4 / 5e-5 |
+| --- | --- | --- | --- | --- | --- | --- |
+| peuple | 3,2 % | 0,721 | 0,511 (4 %) | 0,210 | −0,131 / −0,068 | **+0,052** ± 0,013 / +0,022 ± 0,007 |
+| déclin possible | 13,4 % | 1,365 | **0,657** (22 %) | 0,708 | −0,105 / −0,046 | **+0,041** ± 0,006 / +0,005 ± 0,005 |
+| conquête | 30,6 % | 1,169 | 0,424 (32 %) | 0,746 | −0,055 / −0,026 | **+0,029** ± 0,003 / +0,008 ± 0,002 |
+| pouvoirs | 2,7 % | 1,690 | 0,404 (3 %) | 1,286 | −0,022 / −0,017 | −0,002 ± 0,004 / −0,011 ± 0,003 |
+| jetons | 48,2 % | 1,327 | 0,321 (38 %) | 1,006 | −0,013 / −0,009 | −0,004 ± 0,001 / −0,006 ± 0,001 |
+| défense | 1,9 % | 1,181 | 0,259 (1 %) | 0,921 | −0,017 / −0,013 | −0,002 ± 0,004 / −0,004 ± 0,003 |
+| tous | | 1,271 | 0,404 | 0,867 | −0,042 / −0,022 | +0,014 / +0,000 |
+
+(Neuves : toutes les positions de `anc-test` ; apprises : 40 000 de `anc-train`, graine 9.)
+
+- **La moyenne cachait deux mouvements opposés.** Sur les décisions qui engagent la partie (peuple,
+  déclin, conquête : 47 % des positions, 58 % de l'excès), l'apprentissage apprend beaucoup les parties
+  vues (jusqu'à −0,13) et **empire** sur les neuves (jusqu'à +0,05) : il apprend ces cas par cœur. Sur
+  les jetons, les pouvoirs et la défense, il gagne un peu, aussi sur les neuves (−0,004 à −0,011).
+- **L'excès par position est le plus grand au déclin (0,66) et au choix du peuple (0,51)**, où le
+  professeur est très sûr de lui (entropie 0,21 au peuple) : c'est là qu'il diffère le plus de c130,
+  et là que l'apprentissage généralise le moins. Avec 20 000 parties, il n'y a que ~22 000 choix de
+  peuple et ~93 000 positions de déclin possible, pour des situations qui se répètent peu.
+- Les jetons (48 % des positions) ont la cible la plus incertaine (entropie 1,01) et l'excès par
+  position le plus faible : la recherche y départage des coups presque équivalents.
+
+**Conclusion de D9** : ce n'est pas une incapacité générale du réseau à apprendre, c'est un défaut de
+**généralisation sur les décisions stratégiques**, qui manquent d'exemples. Le remède est dans les
+données (beaucoup plus de ces décisions) ou dans ce qui les rend généralisables, pas dans une autre
+cible de politique. Le budget de recherche peut aussi s'y concentrer.
+
+Correction d'une piste proposée avant D9 : la tête « prochain tour » existe déjà. La tête des
+propriétaires apprend à qui appartient chaque région **au début du prochain tour** du joueur qui agit
+(`selfplay::owners`, poids 1,5 dans `train.py`), et non à la fin de la partie.
