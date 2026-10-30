@@ -21,6 +21,9 @@
 //! lab13 bench-gpu --net poids.bin --device vulkan|cuda [--seconds 3]   (débit du moteur seul selon la taille
 //!     des lots, deux lots en vol ; `LAB13_CUDA_PHASES=1` : la durée de chaque étape d'un calcul CUDA)
 //! lab13 analyze --game partie.smk --agent az:net=poids.bin,n=20000   (partie exportée par labtools/export-room.ts)
+//! lab13 consistency --agent az:… --games DIR [--positions 1500] [--every 61] [--repeat 4] [--explore 1]
+//!     [--seed S] [--threads N] [--out F]   (la même recherche répétée sur des positions de parties
+//!     enregistrées : le plafond de ses cibles, lab13/lab.md D5)
 //! ```
 
 use std::collections::HashMap;
@@ -46,6 +49,7 @@ fn main() {
         "check-gpu" => check_gpu_cmd(&opts),
         "bench-gpu" => bench_gpu_cmd(&opts),
         "analyze" => analyze_cmd(&opts),
+        "consistency" => consistency_cmd(&opts),
         _ => usage(),
     }
 }
@@ -66,6 +70,9 @@ fn usage() -> ! {
     eprintln!("        lab13 check-gpu --net poids.bin --device vulkan|cuda");
     eprintln!("        lab13 bench-gpu --net poids.bin --device vulkan|cuda [--seconds 3]");
     eprintln!("        lab13 analyze --game partie.smk --agent az:net=poids.bin,n=20000");
+    eprintln!(
+        "        lab13 consistency --agent az:… --games DIR [--positions N] [--every K] [--repeat R] [--explore 0|1] [--seed S] [--threads N] [--out F]"
+    );
     std::process::exit(2)
 }
 
@@ -435,6 +442,176 @@ fn speed_cmd(opts: &HashMap<String, String>) {
     );
     rollouts();
     println!("empreintes : décisions {decisions:016x}, valeurs {values:016x}");
+}
+
+/// Le plafond des cibles d'une recherche (lab13/lab.md, D5). Des positions de parties enregistrées par
+/// le selfplay (`--games DIR` : ses `.moves`), où le joueur a le choix : dans la partie i, celles dont le
+/// rang parmi ces positions vaut i modulo `--every`, jusqu'à `--positions`. Sur chacune, `--repeat`
+/// recherches de `--agent`, chacune sa graine, avec le bruit de Gumbel à la racine comme les
+/// recherches enregistrées du selfplay (`--explore 0` : sans, comme l'arène et le jeu). Pour chaque
+/// recherche r, sa cible t (la politique améliorée) comparée :
+/// - aux autres recherches de la même position : même coup préféré ;
+/// - à l'a priori p du réseau : même coup préféré, et entropie croisée −Σ t log p (la perte de
+///   politique de `train.py`) ;
+/// - à la moyenne m des autres cibles, mêlée à 5 % de l'a priori (jamais nulle) : −Σ t log m, ce
+///   qu'atteindrait un réseau qui saurait la cible moyenne (un peu pessimiste : m est bruitée) ;
+/// - à elle-même : son entropie, le plancher de toute prédiction.
+///
+/// `--out` : une ligne par recherche (position, joueurs, recherche, coup préféré, coup préféré de
+/// l'a priori, les trois entropies).
+fn consistency_cmd(opts: &HashMap<String, String>) {
+    use smallmobile_lab13::az::{Evals, Searched};
+    use smallmobile_lab13::know::Knowledge;
+    use smallmobile_lab13::moves;
+    use smallmobile_lab13::rand::{Rng, mix};
+    use smallmobile_lab13::selfplay::GameLog;
+
+    let name = opts.get("agent").unwrap_or_else(|| usage());
+    let az = agent::az_named(name).unwrap_or_else(|| {
+        eprintln!("recherche guidée par le réseau attendue (az:…) : {name}");
+        std::process::exit(2)
+    });
+    let dir = opts.get("games").unwrap_or_else(|| usage());
+    let wanted: usize = get(opts, "positions", 1500);
+    let every: usize = get(opts, "every", 61);
+    let repeat: usize = get(opts, "repeat", 4);
+    let explore = get(opts, "explore", 1u8) == 1;
+    let seed: u64 = get(opts, "seed", 1);
+    let threads: usize = get(opts, "threads", threads());
+    if repeat < 2 {
+        eprintln!("--repeat : au moins 2");
+        std::process::exit(2)
+    }
+    // les parties, dans l'ordre des fichiers
+    let mut files: Vec<_> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| {
+            eprintln!("{dir} : {e}");
+            std::process::exit(1)
+        })
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "moves"))
+        .collect();
+    files.sort();
+    let logs: Vec<GameLog> = files
+        .iter()
+        .flat_map(|f| std::fs::read_to_string(f).unwrap_or_default().lines().map(String::from).collect::<Vec<_>>())
+        .map(|line| GameLog::parse(&line).unwrap_or_else(|| panic!("ligne illisible dans {dir}")))
+        .collect();
+    let tables: Vec<Table> = logs.iter().map(GameLog::table).collect();
+    let mut positions = Vec::new();
+    for (i, (log, table)) in logs.iter().zip(&tables).enumerate() {
+        if positions.len() >= wanted {
+            break;
+        }
+        let mut choices = 0;
+        log.replay(table, |g, k| {
+            if positions.len() < wanted && moves::legal(g, k).len() > 1 {
+                if choices % every == i % every {
+                    positions.push((*g, *k));
+                }
+                choices += 1;
+            }
+        })
+        .unwrap_or_else(|e| panic!("partie {} illisible : {e}", log.deal));
+    }
+    eprintln!("{} positions de {} parties ; {repeat} recherches chacune, {threads} fils", positions.len(), logs.len());
+
+    // une recherche : sa cible et l'a priori, par clé de coup
+    type Run = (Vec<(moves::Key, f32)>, Vec<(moves::Key, f32)>);
+    let search = |g: &smallmobile_kernel::Game, k: &Knowledge, s: u64| -> Run {
+        let r: Searched = az.search(g, k, &mut Rng::new(s), explore, &mut Evals::default());
+        let prior = r.details.iter().map(|d| (d.0, d.1)).collect();
+        (r.policy, prior)
+    };
+    let start = Instant::now();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut runs: Vec<Option<Vec<Run>>> = vec![None; positions.len()];
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut mine = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some((g, k)) = positions.get(i) else { break };
+                        mine.push((i, (0..repeat).map(|r| search(g, k, mix(seed, (i * repeat + r) as u64))).collect()));
+                    }
+                    mine
+                })
+            })
+            .collect();
+        for w in workers {
+            for (i, r) in w.join().expect("fil") {
+                runs[i] = Some(r);
+            }
+        }
+    });
+    let secs = start.elapsed().as_secs_f64();
+
+    let best = |xs: &[(moves::Key, f32)]| xs.iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|x| x.0);
+    let p_of = |xs: &[(moves::Key, f32)], key| xs.iter().find(|x| x.0 == key).map_or(0.0, |x| x.1);
+    let mut out = opts.get("out").map(|path| {
+        std::io::BufWriter::new(std::fs::File::create(path).unwrap_or_else(|e| {
+            eprintln!("échec de la création de {path} : {e}");
+            std::process::exit(1)
+        }))
+    });
+    // par nombre de joueurs (index 0 : tous) : recherches, paires d'accord, accords avec l'a priori,
+    // entropies croisées à l'a priori et à la moyenne des autres, entropie
+    let mut sums = [[0.0f64; 7]; 6];
+    for (i, ((g, _), r)) in positions.iter().zip(&runs).enumerate() {
+        let r = r.as_ref().expect("recherches");
+        let n = g.state.player_count();
+        let keys: Vec<_> = r.iter().map(|(t, _)| best(t)).collect();
+        let pairs = (0..repeat).flat_map(|a| (a + 1..repeat).map(move |b| (a, b)));
+        let agree = pairs.clone().filter(|&(a, b)| keys[a] == keys[b]).count() as f64 / pairs.count() as f64;
+        for (run, (t, prior)) in r.iter().enumerate() {
+            let ce = |q: &dyn Fn(moves::Key) -> f32| -> f64 {
+                t.iter().filter(|x| x.1 > 0.0).map(|&(key, p)| -(p as f64) * (q(key).max(1e-12) as f64).ln()).sum()
+            };
+            let others = |key| {
+                let m = r.iter().enumerate().filter(|&(o, _)| o != run).map(|(_, (u, _))| p_of(u, key)).sum::<f32>()
+                    / (repeat - 1) as f32;
+                0.95 * m + 0.05 * p_of(prior, key)
+            };
+            let (ce_prior, ce_others, entropy) = (ce(&|key| p_of(prior, key)), ce(&others), ce(&|key| p_of(t, key)));
+            let same_prior = (best(prior) == keys[run]) as u8 as f64;
+            for at in [0, n] {
+                let s = &mut sums[at];
+                s[0] += 1.0;
+                s[1] += agree;
+                s[2] += same_prior;
+                s[3] += ce_prior;
+                s[4] += ce_others;
+                s[5] += entropy;
+            }
+            if let Some(f) = out.as_mut() {
+                use std::io::Write;
+                writeln!(
+                    f,
+                    "{i}\t{n}\t{run}\t{:?}\t{:?}\t{ce_prior:.4}\t{ce_others:.4}\t{entropy:.4}",
+                    keys[run],
+                    best(prior)
+                )
+                .expect("écriture");
+            }
+        }
+    }
+    println!("{} ({}) : {:.0} s", az.describe(), if explore { "bruit de Gumbel" } else { "sans bruit" }, secs);
+    println!("joueurs  recherches  même coup entre recherches  coup de l'a priori  CE a priori  CE moyenne des autres  entropie");
+    for (at, s) in sums.iter().enumerate().filter(|(_, s)| s[0] > 0.0) {
+        let c = s[0];
+        println!(
+            "{:>7}  {:>10}  {:>26.1} %  {:>16.1} %  {:>11.3}  {:>21.3}  {:>8.3}",
+            if at == 0 { "tous".to_string() } else { at.to_string() },
+            c,
+            100.0 * s[1] / c,
+            100.0 * s[2] / c,
+            s[3] / c,
+            s[4] / c,
+            s[5] / c
+        );
+    }
 }
 
 fn selfplay_cmd(opts: &HashMap<String, String>) {

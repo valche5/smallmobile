@@ -42,6 +42,16 @@ suffit** si la meilleure perte de politique sur `data/prof` passe sous **1,287**
 0,02) avec un coup de la cible à **47,5 %** au moins (c130 : 46,5 %). Alors : arènes du meilleur réseau
 contre c130 (n = 1 et n = 400). Sinon : D4, la capacité (un réseau plus large, même protocole).
 
+**D5, le plafond des cibles** (ajouté le 30 octobre après D3, avant tout calcul). `lab13 consistency` :
+1 500 positions de `data/prof` (et de `data/ord`), rejouées depuis leurs `.moves` ; sur chacune, 4
+recherches du professeur (de la recherche ordinaire `n=400`), chacune sa graine, bruit de Gumbel à la
+racine comme dans le selfplay ; graine 151001. Mesures : même coup préféré entre deux recherches (le
+plafond de la précision), coup préféré de l'a priori de c130, entropies croisées de la cible à l'a priori
+(la perte de politique) et à la moyenne des trois autres recherches (ce qu'atteindrait un réseau qui
+saurait la cible moyenne), entropie de la cible (le plancher). **Plafond bas** si l'accord entre
+recherches du professeur dépasse celui de l'a priori de moins de 5 points : ses cibles sont alors
+surtout du bruit autour de c130.
+
 ## Commandes
 
 ```sh
