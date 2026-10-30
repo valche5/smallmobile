@@ -34,6 +34,14 @@ Réseaux : c000 (c130), c002, c005, c008, c010, c011. Pour chacun : les mesures 
 professeur diffèrent (« écarts ») et là où ils s'accordent. La politique a appris le professeur si,
 aux écarts, c010 et c011 dépassent nettement c002 (de plus de 5 points de pourcentage).
 
+**D3, la recette** (ajouté le 30 octobre après D2, avant tout calcul). c130 réentraîné hors ligne
+(`py/fit.py`) sur les parties du professeur de lab11 encore gardées (cycles c004 à c011, ~3,4 millions
+de positions), 4 passages moyens, taux maximal en un cycle : **1,5e-4** (celui de la boucle), **5e-5**,
+**1,5e-5**. Mesures toutes les 2 000 lots sur `data/prof` (le juge) et `data/ord`. **La recette
+suffit** si la meilleure perte de politique sur `data/prof` passe sous **1,287** (c130 : 1,307, moins
+0,02) avec un coup de la cible à **47,5 %** au moins (c130 : 46,5 %). Alors : arènes du meilleur réseau
+contre c130 (n = 1 et n = 400). Sinon : D4, la capacité (un réseau plus large, même protocole).
+
 ## Commandes
 
 ```sh
