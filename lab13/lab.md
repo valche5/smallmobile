@@ -60,6 +60,16 @@ moins CE à la moyenne des autres recherches (D5 : professeur sans ancrage 0,004
 0,219). **Les cibles ancrées sont apprenables** si la marge du professeur ancré atteint **0,10**. Alors :
 une boucle dont le professeur est ancré.
 
+**D7, des cibles apprenables font-elles un réseau plus fort ?** (ajouté le 30 octobre après D6, avant
+tout calcul). 20 000 parties du professeur ancré mené par c130 (`n=400,roll=1,mix=0.5,anchor=raw,
+lambda=0.005`, recette du selfplay, graine 171 000 000, `data/anc-train`, ~700 000 positions) et 1 000
+neuves pour juger (graine 171 000 001, `data/anc-test`). c130 réentraîné dessus (`py/fit.py`, 4 passages,
+`--value-mix 0.5` comme la boucle de lab11) à trois taux : 1,5e-4, 5e-5, 1,5e-5. Le réseau de la
+meilleure perte de politique sur `anc-test` passe en arène contre c130, n = 400 des deux côtés (le
+réseau seul change), 920 donnes, graine 172001 ; et n = 1 (la politique seule), mêmes donnes.
+**Succès** : en arène à n = 400, intervalle au-dessus de 0. Alors : une boucle dont le professeur est
+ancré, dans un nouveau labo.
+
 ## Commandes
 
 ```sh
