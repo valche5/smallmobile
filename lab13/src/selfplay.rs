@@ -174,6 +174,10 @@ pub struct Options {
     /// (« playout cap randomization » de KataGo : plus de parties pour le même calcul). Toutes les
     /// recherches de l'auto-apprentissage tirent leurs coups de racine avec le bruit de Gumbel.
     pub full_share: f64,
+    /// Le ciblage (`--full p,d,c,a`) : la part des coups cherchés à fond selon leur type
+    /// (`Strategic`) : peuple, déclin possible, conquête, autres (redéploiement, défense) ; remplace
+    /// `full_share` (lab13/journal.md, D9 : les décisions stratégiques manquent d'exemples).
+    pub full_by: Option<[f64; 4]>,
     pub fast: usize,
     /// Les manches jouées avec le bruit de Gumbel (`--noisy-rounds`) ; ensuite, les recherches
     /// rapides n'en ont plus, et le coup d'une recherche complète (qui garde son bruit pour sa cible
@@ -194,7 +198,21 @@ pub struct Options {
 /// parties que beaucoup de positions par partie (AlphaGo n'en gardait qu'une par partie pour sa
 /// valeur).
 pub const RECIPE: Options =
-    Options { full_share: 0.125, fast: 50, noisy_rounds: i32::MAX, fast_roll: false, luck: false };
+    Options { full_share: 0.125, full_by: None, fast: 50, noisy_rounds: i32::MAX, fast_roll: false, luck: false };
+
+/// Le type d'une décision pour le ciblage (`Options::full_by`) : 0 un choix au marché, 1 décliner est
+/// possible, 2 le reste de la conquête, 3 le reste (redéploiement, défense) ; comme `py/d9.py`.
+pub fn strategic(g: &Game, legal: &[moves::Choice]) -> usize {
+    if legal.iter().any(|c| matches!(c.mv, moves::Move::Pick(_) | moves::Move::SkipPick)) {
+        0
+    } else if legal.iter().any(|c| matches!(c.mv, moves::Move::Decline)) {
+        1
+    } else if g.state.phase == Phase::Conquest {
+        2
+    } else {
+        3
+    }
+}
 
 /// Une partie jouée : son résultat, le nombre de positions écrites, les actions du noyau de chaque
 /// coup (`moves`).
@@ -244,7 +262,7 @@ pub async fn play(
         let noisy = g.state.round <= opts.noisy_rounds;
         let mv = if legal.len() == 1 {
             legal[0].mv
-        } else if rng.unit() >= opts.full_share {
+        } else if rng.unit() >= opts.full_by.map_or(opts.full_share, |by| by[strategic(&g, &legal)]) {
             fast.run(&g, &k, rng, opts.fast, noisy, &mut evals, oracle).await.mv
         } else {
             let s = az.run(&g, &k, rng, az.cfg.iterations, true, &mut evals, oracle).await;

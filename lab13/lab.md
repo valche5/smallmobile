@@ -102,6 +102,19 @@ simulées ; ailleurs (peuple, déclin, conquête), la recherche entière. Joueur
 au-dessus de **−1,5** point, borne basse de l'intervalle au-dessus de **−3,5**. Alors elle remplace
 l'Expert actuel, et le selfplay ciblé (piste B) s'en sert.
 
+**D11, un selfplay du professeur plus rapide** (ajouté le 30 octobre après D10, avant tout calcul).
+Le GPU est saturé (98 %) et les fins simulées font l'essentiel des évaluations, dont 55 % au
+redéploiement (un jeton, une évaluation). Deux changements :
+
+- `place=1` : dans les fins simulées, les jetons du redéploiement posés selon la répartition du noyau
+  (`Game::full_deployment`, d'après la menace), sans évaluation ; les pouvoirs restent au réseau. Il
+  change le professeur : arènes contre c130 à n = 400, graine 107001, 920 donnes, appariées à lab10
+  `p5c` (même professeur sans `place`, +9,7 ± 1,6), à n = 400 et à n = 200. **Retenu** si la différence
+  à `p5c` est au-dessus de **−1,5**, borne basse au-dessus de **−3,5** ; n = 200 seulement s'il passe
+  aussi (deux fois plus de parties).
+- `--full P,D,C,A` (selfplay) : la part des coups cherchés à fond et enregistrés par type (peuple,
+  déclin possible, conquête, autres), au lieu de 12,5 % de tous les coups. Ne change pas le professeur.
+
 ## Commandes
 
 ```sh

@@ -11,6 +11,7 @@
 //!     [--device cpu|vulkan|cuda]   (CPU par défaut ; Vulkan inclus à la compilation, `gpu` est un alias de `vulkan`)
 //!     [--noisy-rounds R] [--fast-roll 1] [--luck 1]   (bruit de Gumbel pour jouer seulement aux R premières
 //!     manches ; fins simulées aussi dans les recherches rapides ; part du hasard de chaque résultat, `luck`)
+//!     [--full P,D,C,A]   (part des coups cherchés à fond par type : peuple, déclin, conquête, autres)
 //!     (auto-jeu, recette `selfplay::RECIPE`)
 //! lab13 check-net --net poids.bin --data parties.pos [--count 5]   (comparaison avec lab13/py/check.py)
 //! lab13 bench-net --net poids.bin --data parties.pos [--count 5000]   (vitesse et écarts du calcul bf16)
@@ -357,6 +358,18 @@ fn rollouts() {
     let evals = ROLLOUTS[ROLLOUT_EVALS].load(std::sync::atomic::Ordering::Relaxed);
     if count > 0 {
         println!("fins simulées : {count}, {:.1} évaluations chacune en moyenne", evals as f64 / count as f64);
+        use smallmobile_lab13::az::ROLLOUT_PHASES;
+        let by: Vec<String> = ["choix", "conquête", "redéploiement", "défense", "fin"]
+            .iter()
+            .zip(&ROLLOUT_PHASES)
+            .map(|(name, c)| {
+                format!(
+                    "{name} {:.0} %",
+                    100.0 * c.load(std::sync::atomic::Ordering::Relaxed) as f64 / evals.max(1) as f64
+                )
+            })
+            .collect();
+        println!("évaluations des fins simulées par phase : {}", by.join(", "));
     }
 }
 
@@ -598,7 +611,9 @@ fn consistency_cmd(opts: &HashMap<String, String>) {
         }
     }
     println!("{} ({}) : {:.0} s", az.describe(), if explore { "bruit de Gumbel" } else { "sans bruit" }, secs);
-    println!("joueurs  recherches  même coup entre recherches  coup de l'a priori  CE a priori  CE moyenne des autres  entropie");
+    println!(
+        "joueurs  recherches  même coup entre recherches  coup de l'a priori  CE a priori  CE moyenne des autres  entropie"
+    );
     for (at, s) in sums.iter().enumerate().filter(|(_, s)| s[0] > 0.0) {
         let c = s[0];
         println!(
@@ -629,6 +644,13 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
             noisy_rounds: get(opts, "noisy-rounds", selfplay::RECIPE.noisy_rounds),
             fast_roll: get(opts, "fast-roll", 0u8) == 1,
             luck: get(opts, "luck", 0u8) == 1,
+            full_by: opts.get("full").map(|v| {
+                let xs: Vec<f64> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+                xs.try_into().unwrap_or_else(|_| {
+                    eprintln!("--full : quatre parts (peuple, déclin, conquête, autres)");
+                    std::process::exit(2)
+                })
+            }),
             ..selfplay::RECIPE
         },
         pos: get(opts, "pos", false),
@@ -653,6 +675,7 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
         std::process::exit(1)
     }
     println!("{} parties en {:.0} s", cfg.games, start.elapsed().as_secs_f64());
+    rollouts();
 }
 
 /// La durée d'un lot sur le GPU par Vulkan, selon le nombre de positions.

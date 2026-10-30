@@ -76,6 +76,8 @@ const ROLLOUT_MOVES: usize = 2000;
 pub static ROLLOUTS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 pub const ROLLOUT_COUNT: usize = 0;
 pub const ROLLOUT_EVALS: usize = 1;
+/// Évaluations des fins simulées, par phase de la position évaluée (`Phase::index`) : où va leur coût.
+pub static ROLLOUT_PHASES: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 
 /// Les réglages de la recherche ; les autres sont fixes (constantes ci-dessus). Les défauts donnent
 /// la recherche de lab7 (et de lab6, lab3/c130), au bit près.
@@ -105,6 +107,10 @@ pub struct Config {
     /// Au redéploiement et à la défense (`light=N`, lab13/journal.md, D9) : N itérations, sans fins
     /// simulées ; 0 : la recherche entière partout.
     pub light: usize,
+    /// Dans les fins simulées, les jetons du redéploiement posés selon la répartition du noyau
+    /// (`place=1`, `Game::full_deployment`, d'après la menace) plutôt qu'au coup préféré du réseau,
+    /// une évaluation par jeton (55 % des évaluations des fins simulées, lab13/journal.md).
+    pub place: bool,
 }
 
 /// Comment les valeurs des coups d'un nœud s'ajoutent à ses logits (`Node::completed_into`).
@@ -145,6 +151,7 @@ impl Default for Config {
             history: true,
             anchor: Anchor::Mctx,
             light: 0,
+            place: false,
         }
     }
 }
@@ -183,6 +190,7 @@ impl Config {
                 "scale" => scale = Some(positive(v)?),
                 "lambda" => lambda = Some(positive(v)?),
                 "light" => cfg.light = v.parse().ok()?,
+                "place" => cfg.place = flag(v)?,
                 _ => return None,
             }
         }
@@ -228,6 +236,9 @@ impl Config {
         if self.light > 0 {
             out += &format!(", light={}", self.light);
         }
+        if self.place {
+            out += ", place=1";
+        }
         out
     }
 }
@@ -239,6 +250,27 @@ const VALUE: usize = 3 * MAX_PLAYERS;
 const COINS: usize = MAX_PLAYERS;
 const WINS: usize = 2 * MAX_PLAYERS;
 type PerPlayer = [f32; MAX_PLAYERS];
+
+/// Le jeton à poser selon la répartition du noyau (`Game::full_deployment`) : sur la région la plus en
+/// dessous de son nombre visé, parmi les coups `legal` ; aucun s'il n'y a pas de jeton à poser, ou
+/// si un pouvoir peut encore être posé (héros, forteresse, campement : le réseau en décide).
+fn deployed(w: &Game, legal: &[moves::Choice]) -> Option<Move> {
+    use moves::Kind::{Camp, Fortress, Hero};
+    if legal.iter().any(|c| matches!(c.mv, Move::Region(Hero | Fortress | Camp, _))) {
+        return None;
+    }
+    let army = w.state.turn.army?;
+    let target = w.full_deployment(army);
+    let missing = |r: u8| target.0[r as usize] - w.state.regions[r as usize].tokens;
+    legal
+        .iter()
+        .filter_map(|c| match c.mv {
+            Move::Region(moves::Kind::Token, r) => Some(r),
+            _ => None,
+        })
+        .max_by_key(|&r| (missing(r), std::cmp::Reverse(r)))
+        .map(|r| Move::Region(moves::Kind::Token, r))
+}
 
 /// Pas de position : une arête jamais suivie, la fin d'une liste de `Chance`.
 const NONE: u32 = u32::MAX;
@@ -796,13 +828,24 @@ impl Az {
                         next = Some(only);
                         continue;
                     }
-                    moves::Forced::Several(known) => Some(known),
+                    moves::Forced::Several(known) => {
+                        // `place` : un jeton du redéploiement, sans évaluation
+                        if self.cfg.place
+                            && w.state.phase == Phase::Redeploy
+                            && let Some(mv) = deployed(&w, known.as_deref().unwrap_or(&moves::legal(&w, &kw)))
+                        {
+                            next = Some(mv);
+                            continue;
+                        }
+                        Some(known)
+                    }
                 }
             };
             let targets = (w.state.phase == Phase::Conquest).then(|| w.targets());
             let encoded = encode_with(&w, &kw, targets.as_deref());
             let eval = oracle.eval(&self.net, &encoded, w.map).await;
             asked += 1;
+            ROLLOUT_PHASES[w.state.phase.index()].fetch_add(1, Ordering::Relaxed);
             let Some(known) = known else { break self.judge_heads(&Seat::of(&w), &eval.win, &eval.gain) };
             let legal = known.unwrap_or_else(|| moves::legal_with(&w, &kw, targets.as_deref()));
             next = Some(preferred(&legal, |i| eval.logits[legal[i].key as usize]));
