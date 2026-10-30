@@ -116,3 +116,27 @@ positions où l'a priori de c130 hésite, pas un apprentissage du professeur.
 **Conclusion de D5** : le professeur choisit mieux que c130, mais ses cibles de politique, une recherche
 à la fois, sont trop bruitées et trop pointues pour qu'un réseau en extraie quelque chose par entropie
 croisée. Ce n'est ni la recette (D3) ni, à ce stade, la capacité : c'est la cible.
+
+## D6 : des cibles ancrées (mêmes positions que D5, 30 octobre)
+
+`anchor=raw,lambda=0.005` (lab10) ; recherche ordinaire 38 s, professeur 1 709 s.
+`lab13/runs/d6-*.{txt,tsv}`.
+
+| Recherche | Même coup entre recherches | Coup de l'a priori | CE à l'a priori | CE à la moyenne des autres | **Marge** | Entropie |
+| --- | --- | --- | --- | --- | --- | --- |
+| ordinaire (D5) | 66,2 % | 49,4 % | 1,264 | 1,045 | 0,219 | 0,410 |
+| ordinaire, ancrée | 68,9 % | 59,7 % | 1,250 | 1,126 | 0,124 | 0,938 |
+| professeur (D5) | 55,4 % | 46,9 % | 1,294 | 1,290 | 0,004 | 0,369 |
+| **professeur, ancré** | **63,6 %** | 54,6 % | 1,267 | 1,111 | **0,156** | 0,842 |
+
+Par nombre de joueurs, la marge du professeur ancré va de 0,123 (2 joueurs) à 0,175 (3 joueurs).
+
+**Le critère est atteint** (0,156 ≥ 0,10) : ancrées, les cibles du professeur deviennent apprenables.
+Elles sont deux fois moins pointues (entropie 0,84 contre 0,37) et plus reproductibles (63,6 % contre
+55,4 %) : l'ancrage garde la politique améliorée près de l'a priori là où le professeur hésite, et ne
+l'en écarte que là où ses valeurs le justifient. La marge est même sous-estimée : la moyenne de trois
+recherches est elle-même bruitée.
+
+Le professeur de lab11 était sans ancrage parce que l'ancrage n'ajoutait rien d'établi au jeu (lab10,
+phase 5) ; c'est à l'apprentissage qu'il sert, comme le rapporte Diplodocus (réseaux réentraînés avec
+piKL, presque rien à l'inférence seule).
