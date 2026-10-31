@@ -101,7 +101,7 @@ def tensors(r, device):
     policy = torch.from_numpy(r["policy"].astype(np.int32)).to(device)
     legal = policy != ILLEGAL
     policy = torch.where(legal, policy, 0).float()
-    return dict(
+    out = dict(
         node=torch.from_numpy(r["node"]).to(device),
         glob=torch.from_numpy(r["glob"]).to(device),
         adj=unpack_adj(torch.from_numpy(r["adj"].astype(np.int64)).to(device)),
@@ -117,17 +117,23 @@ def tensors(r, device):
         # la part du hasard dans `win` (`selfplay --luck`) ; 0 sans elle
         luck=torch.from_numpy(r["luck"] if "luck" in r else np.zeros_like(r["win"])).to(device),
     )
+    # la valeur par fin simulée (`selfplay --revalue`, lab13/lab.md D14), si les parties l'ont
+    if "roll_win" in r:
+        out["roll_win"] = torch.from_numpy(r["roll_win"]).to(device)
+        out["roll_gain"] = torch.from_numpy(r["roll_gain"]).to(device) / GAIN_SCALE
+    return out
 
 
 METRICS = ("politique", "valeur", "pièces", "propriétaires", "précision", "brier")
 
 
-def losses(net, b, mix=0.0, luck=False):
+def losses(net, b, mix=0.0, luck=False, roll=0.0):
     """Pertes et mesures (`METRICS`) : politique, valeur, pièces, propriétaires, précision de la
     politique, brier. La cible de la valeur : le résultat de la partie, mêlé pour une part `mix` à la
     valeur de la recherche (`--value-mix`), ou (`--luck`) sans la part du hasard (lab13/src/luck.rs :
     même espérance, de somme 1, parfois hors de [0, 1] ; le gradient de l'entropie croisée, p − cible,
-    reste celui d'une cible souple) ; le brier compare toujours au résultat."""
+    reste celui d'une cible souple), puis mêlée pour une part `roll` à la valeur par fin simulée
+    (`--roll-mix`, victoire et pièces ; lab13/lab.md D15) ; le brier compare toujours au résultat."""
     logits, value, own = net(b["node"], b["glob"], b["adj"], b["regions"])
     logits = logits.masked_fill(~b["legal"], -1e9)
     pol = -(b["policy"] * F.log_softmax(logits, 1)).sum(1).mean()
@@ -136,8 +142,12 @@ def losses(net, b, mix=0.0, luck=False):
     target = b["win"] if mix == 0 else (1 - mix) * b["win"] + mix * b["value"]
     if luck:
         target = target - b["luck"]
+    gain_target = b["gain"]
+    if roll > 0:
+        target = (1 - roll) * target + roll * b["roll_win"]
+        gain_target = (1 - roll) * gain_target + roll * b["roll_gain"]
     val = -(target * F.log_softmax(vlog, 1)).sum(1).mean()
-    gain = (((value[:, 5:] - b["gain"]) ** 2) * present).sum(1).mean()
+    gain = (((value[:, 5:] - gain_target) ** 2) * present).sum(1).mean()
     owners = F.cross_entropy(own.reshape(-1, OWNERS), b["owner"].reshape(-1), ignore_index=OFF_MAP)
     # précision : le coup préféré de la recherche est-il le préféré du réseau ?
     acc = (logits.argmax(1) == b["policy"].argmax(1)).float().mean()
@@ -146,10 +156,10 @@ def losses(net, b, mix=0.0, luck=False):
     return pol, val, gain, owners, acc, brier
 
 
-def learn(net, opt, sched, b, mix=0.0, luck=False):
+def learn(net, opt, sched, b, mix=0.0, luck=False, roll=0.0):
     """Un lot d'entraînement (en bf16) ; renvoie ses mesures (`METRICS`)."""
     with torch.autocast(b["node"].device.type, dtype=torch.bfloat16):
-        out = losses(net, b, mix, luck)
+        out = losses(net, b, mix, luck, roll)
         pol, val, gain, owners = out[:4]
         loss = pol + val + GAIN_WEIGHT * gain + OWN_WEIGHT * owners
     opt.zero_grad(set_to_none=True)

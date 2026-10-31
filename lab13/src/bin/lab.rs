@@ -12,6 +12,7 @@
 //!     [--noisy-rounds R] [--fast-roll 1] [--luck 1]   (bruit de Gumbel pour jouer seulement aux R premières
 //!     manches ; fins simulées aussi dans les recherches rapides ; part du hasard de chaque résultat, `luck`)
 //!     [--full P,D,C,A]   (part des coups cherchés à fond par type : peuple, déclin, conquête, autres)
+//!     [--revalue K]   (la valeur par fin simulée de chaque position enregistrée, moyenne de K mondes : roll_win, roll_gain)
 //!     (auto-jeu, recette `selfplay::RECIPE`)
 //! lab13 check-net --net poids.bin --data parties.pos [--count 5]   (comparaison avec lab13/py/check.py)
 //! lab13 bench-net --net poids.bin --data parties.pos [--count 5000]   (vitesse et écarts du calcul bf16)
@@ -644,6 +645,7 @@ fn selfplay_cmd(opts: &HashMap<String, String>) {
             noisy_rounds: get(opts, "noisy-rounds", selfplay::RECIPE.noisy_rounds),
             fast_roll: get(opts, "fast-roll", 0u8) == 1,
             luck: get(opts, "luck", 0u8) == 1,
+            revalue: get(opts, "revalue", 0usize),
             full_by: opts.get("full").map(|v| {
                 let xs: Vec<f64> = v.split(',').filter_map(|x| x.parse().ok()).collect();
                 xs.try_into().unwrap_or_else(|_| {

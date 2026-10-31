@@ -253,6 +253,10 @@ class Packed:
                 p["luck"] = np.zeros_like(p["win"])
         small = {k: np.concatenate([p[k] for p in parts]) for k in self.SMALL + ("nz_count", "nz_big_count", "pol_count")}
         self.__dict__.update(small)
+        # la valeur par fin simulée (`selfplay --revalue`, lab13/lab.md D14), si tous les fichiers l'ont
+        has_roll = bool(parts) and all("roll_win" in p for p in parts)
+        self.roll_win = np.concatenate([p["roll_win"] for p in parts]) if has_roll else None
+        self.roll_gain = np.concatenate([p["roll_gain"] for p in parts]) if has_roll else None
         for name in self.MAPPED:
             setattr(self, name, Parts([p[name] for p in parts]))
         self.nz_ones = Bits([p["nz_ones"] for p in parts], [int(p["nz_count"].sum(dtype=np.int64)) for p in parts])
@@ -278,6 +282,8 @@ class Packed:
         """Les champs pleins (`RECORD`) des positions `sel`."""
         n = len(sel)
         out = {k: getattr(self, k)[sel] for k in ("players", "regions", "weight", "win", "gain", "value", "luck")}
+        if self.roll_win is not None:
+            out["roll_win"], out["roll_gain"] = self.roll_win[sel], self.roll_gain[sel]
         ids, b, rank = _segments(self.rows_at, self.regions, sel)
         out["owner"] = np.full((n, REGIONS), OFF_MAP, np.uint8)
         out["owner"][b, rank] = self.owner[ids]

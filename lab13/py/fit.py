@@ -32,6 +32,8 @@ def main():
     ap.add_argument("--epochs", type=float, required=True, help="passages moyens sur les positions")
     ap.add_argument("--every", type=int, default=2000, help="lots entre deux mesures")
     ap.add_argument("--value-mix", type=float, default=0.0, help="comme train.py")
+    ap.add_argument("--roll-mix", type=float, default=0.0,
+                    help="part de la valeur par fin simulée (selfplay --revalue) dans les cibles de la valeur et des pièces")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", required=True)
     ap.add_argument("--last", help="le réseau de la fin (.bin)")
@@ -72,7 +74,7 @@ def main():
     start = time.time()
     sums, count = np.zeros(len(METRICS)), 0
     for i, b in enumerate(batches(recs, order, BATCH, device)):
-        sums += learn(net, opt, sched, b, args.value_mix)
+        sums += learn(net, opt, sched, b, args.value_mix, False, args.roll_mix)
         count += 1
         if (i + 1) % args.every == 0 or i + 1 == steps:
             judge(i + 1, sums, count)

@@ -156,6 +156,60 @@ du peuple seule (h2 sans la tête du déclin, `--no-decline`, `runs/d13-h2p.bin`
 processeur (`net::Pick`, mêmes logits que PyTorch à 1e-4 près). Contre c130, n = 1 puis n = 400 des
 deux côtés, graine 185001, 920 donnes, processeur. **Succès** : à n = 400, intervalle au-dessus de 0.
 
+**D14, la valeur est-elle le levier ?** (ajouté le 31 octobre après les arènes de D13, avant tout
+calcul). Relecture de D1 à D13 : le gain des fins simulées est, par construction, une correction des
+valeurs des feuilles (`Az::mixed`), avec le même a priori ; à n = 400 l'a priori pèse peu (lab10 :
+0,77 nat d'écart à la racine). Un élève qui apprend la politique du professeur ne retrouve donc pas sa
+recherche (gains à n = 1 : +1,2 à +3,0 ; à n = 400 : rien). Hypothèse : la valeur de c130 est apprise
+sur des parties jouées aux sept huitièmes par des recherches rapides bruitées (A3 de lab7 : −10,7 au
+jeu d'arène), des adversaires qui ne punissent pas ; la fin simulée gloutonne révèle la riposte
+(Willemsen, Baier & Kaisers 2021, A0GB : la cible d'AlphaZero n'est juste que pour un agent qui
+explore). Mesure, sans apprentissage :
+
+- **le juge** : 1 000 parties de c130 à n = 400, **sans bruit** (`--noisy-rounds 0`), toutes les
+  décisions cherchées à fond et enregistrées (`--full 1,1,1,1`), graine 191 000 001, `data/judge` : le
+  résultat de ces parties est celui du jeu d'arène, pas du selfplay bruité (sinon il porte le même
+  biais que la cible actuelle) ;
+- à chaque position enregistrée, le selfplay écrit aussi (`--revalue 4`, `roll_win.npy`,
+  `roll_gain.npy`) la **valeur par fin simulée** : depuis la position même, le coup préféré du réseau
+  pour tous jusqu'au début du prochain tour du joueur, jetons posés par le noyau (`place=1`), têtes du
+  réseau à l'horizon (ou le résultat si la partie finit), moyenne de 4 mondes possibles ; part de
+  victoire et pièces à gagner d'ici la fin, vues du joueur qui agit (comme les têtes) ;
+- `py/d14.py` : sur le juge, l'entropie croisée au résultat (et le Brier) de la **valeur du réseau**,
+  de la **valeur de la recherche ordinaire à la racine** (`value`, déjà enregistrée) et de la **valeur
+  par fin simulée**, plus leur moyenne à parts égales ; l'erreur quadratique des pièces (tête du
+  réseau, fin simulée) au gain réel ; par type de décision (`d9.py`) et par nombre de joueurs ;
+  différences appariées à c130 avec leur intervalle à 95 % (rééchantillonnage par partie).
+
+**La valeur est le levier** si l'entropie croisée au résultat de la valeur par fin simulée est sous
+celle du réseau de **0,010** au moins, intervalle sous zéro, sur toutes les positions du juge ; lecture
+secondaire : où (types) l'écart est le plus grand. Sinon, le gain des fins simulées n'est pas une
+meilleure estimation de la valeur position par position (c'est leur combinaison dans l'arbre, ou de la
+variance) et D15 n'a pas lieu.
+
+**D15, la valeur réapprise sur ce que calculent les fins simulées** (ajouté le 31 octobre avec D14,
+avant tout calcul ; conditionné à D14). La cible de valeur de D7 et D12 (`--value-mix 0.5`) mêlait la
+valeur de racine du professeur au résultat sans jamais être mesurée seule ; celle de lab4 (`--td`)
+prenait la valeur à la position suivante de la trajectoire bruitée. Ici :
+
+- **D15a** (données existantes) : c130 réentraîné sur `data/tgt-train` (D12) comme en D12 (`fit.py`,
+  4 passages, taux 5e-5 et 1,5e-5, réseau de la fin) avec **`--value-mix 1`** : la valeur de racine du
+  professeur (fins simulées, ancrage) pour seule cible de la victoire ;
+- **D15b** : les 20 000 parties de D12 rejouées avec `--revalue 4` (mêmes réglages et graine,
+  `data/tgt-roll` ; des parties équivalentes, non identiques au bit près : lab14 D8), puis c130
+  réentraîné de même avec **`--roll-mix 1`** (victoire et pièces : la valeur par fin simulée) et
+  `--roll-mix 0.5` (mêlée au résultat), aux deux taux.
+
+Mesures, pour chaque réseau : sur le **juge** (parties neuves sans bruit), l'entropie croisée de la
+valeur au résultat et au Brier, et l'erreur des pièces ; sur `anc-test`, la perte de politique par type
+(`d9.py`, qui ne doit pas monter de plus de 0,01 en moyenne). **La valeur s'apprend** si l'entropie
+croisée au résultat sur le juge baisse d'au moins **0,005** sous c130 (intervalle sous zéro). Le réseau
+retenu : la meilleure entropie croisée sur le juge parmi ceux qui passent. Arènes contre c130, n = 400
+des deux côtés puis n = 1, 920 donnes, graine 193001, Vulkan. **Succès** à n = 400 : intervalle
+au-dessus de 0. Alors : la cible de valeur par fin simulée entre dans la boucle (le selfplay ciblé
+`place=1` l'écrit déjà), avec le garde-fou de Lc0 (mélange au résultat, vérification contre le
+résultat à chaque pas).
+
 ## Commandes
 
 ```sh

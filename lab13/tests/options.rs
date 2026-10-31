@@ -217,6 +217,40 @@ fn selfplay_without_noise_after_the_first_round() {
     assert!(played.positions > 5, "{} positions", played.positions);
 }
 
+/// La valeur par fin simulée (`--revalue`) se calcule à côté de la partie, sur son propre
+/// générateur : les mêmes coups avec ou sans elle ; chaque position enregistrée a des parts de
+/// victoire de somme 1 sur les joueurs présents, et des pièces finies.
+#[test]
+fn revalue_leaves_the_games_unchanged_and_values_every_position() {
+    use smallmobile_lab13::az::Direct;
+    use smallmobile_lab13::selfplay::{self, Options};
+    let player = az("n=8");
+    let table = Table::new(3, 720);
+    let run = |revalue: usize| {
+        let opts = Options { revalue, ..selfplay::RECIPE };
+        smallmobile_lab13::az::now(selfplay::play(
+            &table,
+            5,
+            &player,
+            opts,
+            &mut Rng::new(3),
+            &mut std::io::sink(),
+            &Direct,
+        ))
+        .expect("partie")
+    };
+    let (plain, valued) = (run(0), run(2));
+    assert_eq!(plain.moves().collect::<Vec<_>>(), valued.moves().collect::<Vec<_>>());
+    assert_eq!(plain.positions, valued.positions);
+    assert!(plain.compact.roll().is_none());
+    let (win, gain) = valued.compact.roll().expect("valeurs par fin simulée");
+    assert_eq!((win.len(), gain.len()), (valued.positions, valued.positions));
+    for (w, g) in win.iter().zip(gain) {
+        assert!((w[..3].iter().sum::<f32>() - 1.0).abs() < 1e-3 && w[3..] == [0.0, 0.0], "{w:?}");
+        assert!(g.iter().all(|x| x.is_finite()) && g[3..] == [0.0, 0.0], "{g:?}");
+    }
+}
+
 /// La part du hasard (`--luck`) se calcule à côté de la partie, sur son propre générateur : les
 /// mêmes coups avec ou sans elle. Chaque correction est de somme nulle sur les joueurs (des parts de
 /// victoire), et des coups à hasard (choix de peuple, dés) en donnent.

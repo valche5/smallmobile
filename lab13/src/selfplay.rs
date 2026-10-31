@@ -120,7 +120,12 @@ struct Pending {
     wins: [f32; MAX_PLAYERS],
     /// Les coups à hasard de la partie déjà joués avant cette position (`play`, `luck`).
     chances: usize,
+    /// La valeur par fin simulée depuis la position (`Options::revalue`, `Az::revalue`) : part de
+    /// victoire et pièces à gagner, joueurs relatifs.
+    roll: Option<(PerPlayer, PerPlayer)>,
 }
+
+type PerPlayer = [f32; MAX_PLAYERS];
 
 impl Pending {
     fn new(
@@ -143,6 +148,7 @@ impl Pending {
             surprise: surprise(s),
             wins: s.wins,
             chances,
+            roll: None,
         }
     }
 
@@ -191,14 +197,27 @@ pub struct Options {
     /// (`luck.npy`) pour une cible de la valeur qui ne la garde pas (`train.py --luck`). Quelques
     /// évaluations de plus par coup à hasard, sur leur propre générateur : mêmes parties sans elle.
     pub luck: bool,
+    /// La valeur par fin simulée de chaque position enregistrée (`--revalue K`, `Az::revalue` :
+    /// coup préféré du réseau pour tous jusqu'au prochain tour du joueur, jetons posés par le noyau,
+    /// moyenne de K mondes), écrite à côté (`roll_win.npy`, `roll_gain.npy`) pour une cible de la
+    /// valeur qui voit la riposte des adversaires (lab13/lab.md, D14) ; 0 : rien. Sur son propre
+    /// générateur : mêmes parties sans elle.
+    pub revalue: usize,
 }
 
 /// La recette des données : une recherche complète (enregistrée) pour 8 coups. La valeur apprend
 /// un seul résultat par partie, quel que soit le nombre de ses positions : mieux vaut beaucoup de
 /// parties que beaucoup de positions par partie (AlphaGo n'en gardait qu'une par partie pour sa
 /// valeur).
-pub const RECIPE: Options =
-    Options { full_share: 0.125, full_by: None, fast: 50, noisy_rounds: i32::MAX, fast_roll: false, luck: false };
+pub const RECIPE: Options = Options {
+    full_share: 0.125,
+    full_by: None,
+    fast: 50,
+    noisy_rounds: i32::MAX,
+    fast_roll: false,
+    luck: false,
+    revalue: 0,
+};
 
 /// Le type d'une décision pour le ciblage (`Options::full_by`) : 0 un choix au marché, 1 décliner est
 /// possible, 2 le reste de la conquête, 3 le reste (redéploiement, défense) ; comme `py/d9.py`.
@@ -256,6 +275,11 @@ pub async fn play(
     let fast = Az::new(crate::az::Config { roll, ..az.cfg }, az.net.clone(), az.label.clone());
     // `luck` : la part du hasard de chaque coup à hasard (joueurs réels), et son générateur, à part
     let (mut chances, mut luck_rng) = (Vec::<crate::luck::Shares>::new(), Rng::new(mix(u64::from(seed), 0x1c4)));
+    // `revalue` : la valeur par fin simulée des positions enregistrées (un tour, jetons posés par le
+    // noyau), sur son propre générateur
+    let revalue = (opts.revalue > 0)
+        .then(|| Az::new(crate::az::Config { roll: 1, place: true, ..az.cfg }, az.net.clone(), az.label.clone()));
+    let mut revalue_rng = Rng::new(mix(u64::from(seed), 0x5e7a));
     while g.state.phase != Phase::GameOver {
         let actor = g.state.actor().expect("un joueur doit agir");
         let legal = moves::legal(&g, &k);
@@ -268,6 +292,10 @@ pub async fn play(
             let s = az.run(&g, &k, rng, az.cfg.iterations, true, &mut evals, oracle).await;
             let policy = s.policy.iter().map(|&(key, p)| (key, (p * PROBABILITY).round() as u16)).collect();
             pending.push(Pending::new(&encode(&g, &k), actor, coins(&g), policy, &s, chances.len()));
+            if let Some(r) = &revalue {
+                let roll = r.revalue(&g, &k, opts.revalue, &mut revalue_rng, oracle).await;
+                pending.last_mut().expect("la position").roll = Some(roll);
+            }
             SEARCHED.fetch_add(1, Ordering::Relaxed);
             if noisy { s.mv } else { s.greedy }
         };
@@ -320,6 +348,7 @@ pub async fn play(
             gain,
             value,
             luck,
+            roll: p.roll,
             owners: &owners[..p.regions as usize],
             node: &p.node,
             global: &p.global,

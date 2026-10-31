@@ -6,7 +6,8 @@
 //! ```text
 //! par position     players, regions (u8), weight (f32), win, gain, value, luck (f32 × 5),
 //!                  adj_block (u32 : son bloc d'adjacences), nz_count, nz_big_count, pol_count (u16),
-//!                  nz_glob (u8 × 103 : le masque des octets non nuls de la partie)
+//!                  nz_glob (u8 × 103 : le masque des octets non nuls de la partie) ;
+//!                  avec `selfplay --revalue` : roll_win, roll_gain (f32 × 5, la valeur par fin simulée)
 //! par région       owner (u8), nz_rows (u8 × 10 : le masque des octets non nuls de la région)
 //! par bloc         adj_count (u8 : ses régions) ; adj (u64 par région : ses voisines)
 //! par non nul      nz_ones (un bit, à la suite : vaut-il 1 ?) ; nz_big (u8 : les autres valeurs)
@@ -26,6 +27,9 @@ use smallmobile_kernel::ids::MAX_PLAYERS;
 use crate::encode::{GLOBAL, NODE};
 use crate::moves::Key;
 
+/// Une valeur par joueur (relatif).
+pub type Shares = [f32; MAX_PLAYERS];
+
 /// Octets du masque d'une région, et de celui de la partie.
 const ROW_MASK: usize = NODE.div_ceil(8);
 const GLOBAL_MASK: usize = GLOBAL.div_ceil(8);
@@ -39,6 +43,8 @@ pub struct Position<'a> {
     pub value: [f32; MAX_PLAYERS],
     /// La part du hasard dans `win` (`luck`), 0 sans `selfplay --luck`.
     pub luck: [f32; MAX_PLAYERS],
+    /// La valeur par fin simulée (`selfplay --revalue`) : part de victoire et pièces à gagner.
+    pub roll: Option<([f32; MAX_PLAYERS], [f32; MAX_PLAYERS])>,
     /// À qui appartient chaque région présente (`selfplay::owners`).
     pub owners: &'a [u8],
     /// Les entrées des régions présentes, puis de la partie (`encode`).
@@ -57,6 +63,10 @@ pub struct Compact {
     gain: Vec<[f32; MAX_PLAYERS]>,
     value: Vec<[f32; MAX_PLAYERS]>,
     luck: Vec<[f32; MAX_PLAYERS]>,
+    /// La valeur par fin simulée (`Position::roll`), zéros sans elle ; écrite si une position l'a.
+    roll_win: Vec<[f32; MAX_PLAYERS]>,
+    roll_gain: Vec<[f32; MAX_PLAYERS]>,
+    revalued: bool,
     adj_block: Vec<u32>,
     nz_count: Vec<u16>,
     nz_big_count: Vec<u16>,
@@ -87,6 +97,12 @@ impl Compact {
         &self.luck
     }
 
+    /// La valeur par fin simulée de chaque position (`Position::roll`) : parts de victoire, pièces à
+    /// gagner ; rien si aucune position ne l'a.
+    pub fn roll(&self) -> Option<(&[Shares], &[Shares])> {
+        self.revalued.then_some((&self.roll_win[..], &self.roll_gain[..]))
+    }
+
     /// Ajoute une position ; `adj` : les voisines de chaque région de sa carte (un bit par région).
     pub fn push(&mut self, p: &Position, adj: &[u64]) {
         let regions = p.node.len();
@@ -109,6 +125,10 @@ impl Compact {
         self.gain.push(p.gain);
         self.value.push(p.value);
         self.luck.push(p.luck);
+        let (roll_win, roll_gain) = p.roll.unwrap_or_default();
+        self.revalued |= p.roll.is_some();
+        self.roll_win.push(roll_win);
+        self.roll_gain.push(roll_gain);
         self.owner.extend_from_slice(p.owners);
         let (mut count, mut big) = (0u16, 0u16);
         let mut values = |bytes: &[u8], mask: &mut Vec<u8>| {
@@ -150,6 +170,9 @@ impl Compact {
         self.gain.extend(other.gain);
         self.value.extend(other.value);
         self.luck.extend(other.luck);
+        self.roll_win.extend(other.roll_win);
+        self.roll_gain.extend(other.roll_gain);
+        self.revalued |= other.revalued;
         self.nz_count.extend(other.nz_count);
         self.nz_big_count.extend(other.nz_big_count);
         self.pol_count.extend(other.pol_count);
@@ -177,7 +200,7 @@ impl Compact {
             ones[i / 8] |= 0x80 >> (i % 8);
         }
         let rows = self.owner.len();
-        let arrays: [(&str, &str, Vec<usize>, Vec<u8>); 20] = [
+        let mut arrays: Vec<(&str, &str, Vec<usize>, Vec<u8>)> = vec![
             ("players", "|u1", vec![n], bytes(&self.players)),
             ("regions", "|u1", vec![n], bytes(&self.regions)),
             ("weight", "<f4", vec![n], le(&mut self.weight.iter().map(|x| x.to_le_bytes()))),
@@ -199,6 +222,10 @@ impl Compact {
             ("pol_key", "<u2", vec![self.pol_key.len()], u16s(&self.pol_key)),
             ("pol_val", "<u2", vec![self.pol_val.len()], u16s(&self.pol_val)),
         ];
+        if self.revalued {
+            arrays.push(("roll_win", "<f4", vec![n, MAX_PLAYERS], f32s(&self.roll_win)));
+            arrays.push(("roll_gain", "<f4", vec![n, MAX_PLAYERS], f32s(&self.roll_gain)));
+        }
         for (name, descr, shape, data) in arrays {
             npy(&dir.join(format!("{name}.npy")), descr, &shape, &data)?;
         }

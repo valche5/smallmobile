@@ -515,6 +515,16 @@ fn turn_index(g: &Game) -> i64 {
     s.round as i64 * s.player_count() as i64 + s.current as i64
 }
 
+/// L'horizon d'une fin simulée de `roll` tours (`turn_index`) : le début du `roll`-ième tour suivant
+/// du joueur qui agit (en défense, hors de son tour : son prochain tour, puis les suivants).
+fn horizon_after(root: &Game, roll: u8) -> i64 {
+    let s = &root.state;
+    let n = s.player_count() as i64;
+    let (me, current) = (s.actor().expect("un joueur doit agir") as i64, s.current as i64);
+    let next = if me == current { n } else { (me - current).rem_euclid(n) };
+    turn_index(root) + next + (i64::from(roll) - 1) * n
+}
+
 /// Le coup préféré du réseau parmi `legal` : le plus grand logit (le premier à égalité). `logits` :
 /// ceux de toutes les clés (`Eval`), ou ceux des seuls coups de `legal`, dans leur ordre (`Judged`).
 fn preferred(legal: &[Choice], logit: impl Fn(usize) -> f32) -> Move {
@@ -787,11 +797,39 @@ impl Az {
     /// L'horizon des fins simulées (`turn_index`) : le début du `roll`-ième tour suivant du joueur
     /// qui agit à la racine (en défense, hors de son tour : son prochain tour, puis les suivants).
     fn horizon(&self, root: &Game) -> i64 {
-        let s = &root.state;
-        let n = s.player_count() as i64;
-        let (me, current) = (s.actor().expect("un joueur doit agir") as i64, s.current as i64);
-        let next = if me == current { n } else { (me - current).rem_euclid(n) };
-        turn_index(root) + next + (i64::from(self.cfg.roll) - 1) * n
+        horizon_after(root, self.cfg.roll)
+    }
+
+    /// La valeur d'une position par fins simulées depuis la position même (lab13/lab.md, D14) : le
+    /// coup préféré du réseau, puis `rollout` jusqu'au début du prochain tour du joueur qui agit
+    /// (`place` et le reste selon `cfg`), dans `worlds` mondes possibles tirés de `rng`, moyennés.
+    /// Renvoie, vus du joueur qui agit (joueurs relatifs, comme les têtes du réseau), la part de
+    /// victoire de chacun et les pièces qu'il gagnera d'ici la fin : une cible de valeur.
+    pub async fn revalue(
+        &self,
+        root: &Game<'_>,
+        k: &Knowledge,
+        worlds: usize,
+        rng: &mut Rng,
+        oracle: &impl Oracle,
+    ) -> (PerPlayer, PerPlayer) {
+        let legal = moves::legal(root, k);
+        let seat = Seat::of(root);
+        let eval = oracle.eval(&self.net, &encode(root, k), root.map).await;
+        let first = preferred(&legal, |i| eval.logits[legal[i].key as usize]);
+        let horizon = horizon_after(root, 1);
+        let (mut win, mut gain) = ([0.0f32; MAX_PLAYERS], [0.0f32; MAX_PLAYERS]);
+        for _ in 0..worlds.max(1) {
+            let w = determinize(root, k, rng);
+            let (v, _) = self.rollout(w, *k, first, horizon, oracle).await;
+            for r in 0..seat.n {
+                let q = (seat.me + r) % seat.n;
+                win[r] += v[WINS + q];
+                gain[r] += v[COINS + q] - seat.coins[q];
+            }
+        }
+        let count = worlds.max(1) as f32;
+        (win.map(|x| x / count), gain.map(|x| x / count))
     }
 
     /// Une fin simulée depuis une position nouvelle de l'arbre, dans le monde de sa simulation (`w`,
@@ -1235,6 +1273,28 @@ mod tests {
             }
         }
         assert!(defenses > 0 && over > 0, "{defenses} défenses, {over} parties finies");
+    }
+
+    /// La valeur par fins simulées depuis la position (`revalue`) : des parts de victoire de somme 1
+    /// sur les joueurs présents, rien au-delà, des pièces finies ; et elle diffère des têtes du réseau
+    /// sur place dans une bonne part des positions (sinon elle n'apporterait rien).
+    #[test]
+    fn revalue_gives_shares_from_rollouts() {
+        let az = Az::new(Config { iterations: 8, roll: 1, place: true, ..Config::default() }, c130(), "c130".into());
+        let (mut differ, mut count) = (0, 0);
+        for n in 2..=5 {
+            let (map, lost, rounds) = table(n, 400 + n as u64);
+            for (g, k) in positions(&map, lost, rounds, n, 9 + n as u64, 17) {
+                let (win, gain) = now(az.revalue(&g, &k, 2, &mut Rng::new(count as u64), &Direct));
+                assert!((win[..n].iter().sum::<f32>() - 1.0).abs() < 1e-3, "{win:?}");
+                assert!(win[n..].iter().all(|&w| w == 0.0) && gain[n..].iter().all(|&x| x == 0.0));
+                assert!(gain.iter().all(|x| x.is_finite()), "{gain:?}");
+                let e = az.net.eval(&encode(&g, &k), g.map);
+                differ += usize::from((e.win[0] - win[0]).abs() > 0.01);
+                count += 1;
+            }
+        }
+        assert!(count > 20 && differ > count / 4, "{differ} positions différentes sur {count}");
     }
 
     /// Sans `market_late`, chaque simulation qui choisit un peuple tire une autre carte au marché :
