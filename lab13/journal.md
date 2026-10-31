@@ -329,3 +329,27 @@ qu'un ordre de grandeur de données en plus.
 
 Acquis pour la suite : le selfplay ciblé `place=1` produit les décisions stratégiques du professeur
 neuf fois plus vite, à force quasi égale (D11).
+
+## D13 : des têtes construites pour le choix du peuple et le déclin (31 octobre)
+
+`py/heads.py` sur le tronc de c130 (corrections parties de zéro : au départ, c130 au bit près),
+236 034 paramètres ; appris sur `data/tgt-train` (D12), 8 706 lots, 78 à 140 s ; écarts de perte de
+politique à c130 sur `anc-test` (parties neuves), `runs/d13-*.txt` :
+
+| Essai | Peuple | Déclin possible | Conquête | Jetons | Tous | Coup de la cible au peuple |
+| --- | --- | --- | --- | --- | --- | --- |
+| t0 : sans têtes, tout à 1,5e-5 (témoin, D12) | +0,010 ± 0,006 | −0,001 ± 0,005 | +0,004 | +0,002 | +0,002 | 73,4 → 72,3 % |
+| h1 : têtes à 1e-3, tronc figé | −0,027 ± 0,016 | −0,002 ± 0,003 | 0 | 0 | −0,001 | 73,4 → 74,3 % |
+| **h2 : têtes à 1e-3, tronc à 1,5e-5** | **−0,048 ± 0,015** | +0,000 ± 0,005 | +0,004 | +0,003 | +0,001 | 73,4 → 74,3 % |
+| h2, autre graine (hors protocole) | −0,047 ± 0,016 | +0,000 ± 0,005 | +0,004 | +0,002 | +0,001 | 73,4 → 74,5 % |
+| h3 : têtes à 3e-4, tronc figé | −0,013 ± 0,017 | −0,004 ± 0,002 | 0 | 0 | −0,001 | 73,4 → 73,9 % |
+
+- **Le critère est atteint au choix du peuple** (h2 : −0,048, reproduit à −0,047 ; ailleurs, au plus
+  +0,004) : **pour la première fois, une décision stratégique se généralise** sur des parties neuves,
+  là où l'ancienne tête montait (t0 : +0,010 ; D9 : +0,05). La tête partagée entre les places du marché
+  et confrontée aux régions apprend ce que la sortie globale ne pouvait que retenir par cœur.
+  L'architecture de la sortie était bien une limite pour cette décision.
+- **Rien au déclin** : la tête par région regroupée ne gagne rien (au mieux −0,004). Ce qui décide le
+  déclin du professeur ne se lit pas mieux ainsi.
+- L'effet porte sur 3 % des positions (la perte moyenne ne bouge pas) ; ce que vaut en jeu un meilleur
+  choix du peuple reste à mesurer : il faut la tête dans un moteur pour les arènes.
