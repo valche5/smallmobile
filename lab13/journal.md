@@ -302,3 +302,30 @@ conquête sur huit, rien au redéploiement ni à la défense), avec `place=1`, 3
 
 Au même débit de positions (le GPU reste la limite), **8 à 9 fois plus de choix de peuple et de déclins
 par heure**, autant de conquêtes.
+
+## D12 : des parties ciblées font-elles généraliser les décisions stratégiques ? (31 octobre)
+
+20 000 parties ciblées du professeur `place=1` en 6 799 s (**164 positions/s**, contre 90 en D7) :
+1 114 401 positions, dont ~174 000 choix de peuple et ~729 000 déclins possibles (15,6 % et 65,4 %),
+contre ~22 000 et ~93 000 en D7. Apprentissages (~110 s par taux), `runs/d12-types.txt` :
+
+| Type | Neuves (`anc-test`) : 1,5e-4 / 5e-5 / 1,5e-5 | D9 (parties de D7) : 1,5e-4 / 5e-5 | Apprises : 1,5e-4 / 1,5e-5 |
+| --- | --- | --- | --- |
+| peuple | +0,015 / +0,006 / +0,010 ± 0,006 | +0,052 / +0,022 | −0,063 / −0,014 |
+| déclin possible | +0,019 / +0,003 / **−0,001** ± 0,005 | +0,041 / +0,005 | −0,063 / −0,015 |
+| conquête | +0,020 / +0,007 / +0,004 ± 0,002 | +0,029 / +0,008 | −0,017 / +0,000 |
+| jetons (absents des parties) | +0,011 / +0,005 / +0,002 | −0,004 / −0,006 | |
+
+(Écarts de perte de politique à c130.) Réseau retenu (perte stratégique la plus basse sur `anc-test`) :
+1,5e-5. Arènes contre c130, graine 183001, 920 donnes : **n = 400 +1,3 ± 1,5** ; n = 1 +3,0 ± 1,5.
+Hors protocole, mêmes réseaux sur 920 donnes neuves (graine 184001, `runs/d12-confirm-*`) : n = 1
++0,2 ± 1,4 ; n = 400 +0,2 ± 1,4. Le +3,0 était le hasard des donnes.
+
+**Échec** : avec huit fois plus de décisions stratégiques, l'apprentissage les apprend par cœur deux
+fois moins (−0,06 au lieu de −0,13 sur les apprises) et se dégrade moins sur les neuves, mais n'y gagne
+toujours rien. Le manque d'exemples n'était pas la cause : ce que le professeur choisit de plus au
+choix du peuple et au déclin ne se prédit pas depuis ce que voit le réseau, ou demande bien plus
+qu'un ordre de grandeur de données en plus.
+
+Acquis pour la suite : le selfplay ciblé `place=1` produit les décisions stratégiques du professeur
+neuf fois plus vite, à force quasi égale (D11).
