@@ -151,6 +151,11 @@ peuple ou au déclin d'au moins **0,03** sous c130, sans monter de plus de 0,01 
 têtes dans les moteurs (processeur, Vulkan) et arènes. Sinon : la structure de la sortie n'est pas en
 cause.
 
+*Arènes de D13* (ajouté le 31 octobre après le critère atteint au peuple, avant tout calcul). La tête
+du peuple seule (h2 sans la tête du déclin, `--no-decline`, `runs/d13-h2p.bin`), dans le moteur du
+processeur (`net::Pick`, mêmes logits que PyTorch à 1e-4 près). Contre c130, n = 1 puis n = 400 des
+deux côtés, graine 185001, 920 donnes, processeur. **Succès** : à n = 400, intervalle au-dessus de 0.
+
 ## Commandes
 
 ```sh

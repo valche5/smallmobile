@@ -28,7 +28,7 @@ use std::path::Path;
 
 use smallmobile_kernel::Map;
 
-use crate::encode::{Encoded, GLOBAL, NODE, REGIONS};
+use crate::encode::{CARD, Encoded, GLOBAL, MARKET_AT, NODE, PHASE_AT, REGIONS};
 use crate::moves::{GLOBAL_KEYS, KEYS, KINDS};
 
 /// Sortes de coups par région, dans l'ordre des clés (`moves::Kind`).
@@ -136,6 +136,74 @@ impl Policy {
     }
 }
 
+/// La tête construite du choix du peuple (`lab13/py/heads.py`, D13), si le fichier l'a (`pick.*`) :
+/// une correction des logits des six places du marché. Chaque carte (ses entrées, sa place, `g`)
+/// résumée par un même réseau (`card`) ; chaque paire carte × région par une même couche
+/// (`pair_region` + `pair_card`, relu), regroupée sur les régions (moyenne, maximum) ; un même score
+/// par carte (`out`). Calculée seulement au choix du peuple (phase `Pick`).
+struct Pick {
+    card0: Linear,
+    card2: Linear,
+    pair_region: Linear,
+    pair_card: Linear,
+    out0: Linear,
+    out2: Linear,
+}
+
+const SLOTS: usize = 6;
+
+impl Pick {
+    fn load(t: &mut HashMap<String, (Vec<usize>, Vec<f32>)>) -> io::Result<Pick> {
+        Ok(Pick {
+            card0: Linear::load(t, "pick.card.0")?,
+            card2: Linear::load(t, "pick.card.2")?,
+            pair_region: Linear::load(t, "pick.pair_region")?,
+            pair_card: Linear::load(t, "pick.pair_card")?,
+            out0: Linear::load(t, "pick.out.0")?,
+            out2: Linear::load(t, "pick.out.2")?,
+        })
+    }
+
+    /// Ajoute la correction aux logits des places du marché (`logits[0..6]`) : `h` les lignes des `r`
+    /// régions, `g` le vecteur de partie, `xg` les entrées de la partie mises à l'échelle.
+    #[inline(always)]
+    fn apply<const AVX2: bool>(&self, h: &[f32], r: usize, g: &[f32], xg: &[f32], hd: usize, logits: &mut [f32]) {
+        let mut pr = vec![0.0f32; r * hd];
+        self.pair_region.apply_many::<AVX2, false>(h, r, &mut pr);
+        let mut input = vec![0.0f32; CARD + SLOTS + hd];
+        let (mut z1, mut z, mut pc) = (vec![0.0f32; hd], vec![0.0f32; hd], vec![0.0f32; hd]);
+        let mut cat = vec![0.0f32; 3 * hd];
+        let mut o = vec![0.0f32; hd];
+        let mut s = [0.0f32; 1];
+        for (slot, logit) in logits[..SLOTS].iter_mut().enumerate() {
+            input[..CARD].copy_from_slice(&xg[MARKET_AT + slot * CARD..MARKET_AT + (slot + 1) * CARD]);
+            input[CARD..CARD + SLOTS].iter_mut().enumerate().for_each(|(i, x)| *x = (i == slot) as u8 as f32);
+            input[CARD + SLOTS..].copy_from_slice(g);
+            self.card0.apply_many::<AVX2, false>(&input, 1, &mut z1);
+            relu(&mut z1);
+            self.card2.apply_many::<AVX2, false>(&z1, 1, &mut z);
+            self.pair_card.apply_many::<AVX2, false>(&z, 1, &mut pc);
+            let (mean, rest) = cat.split_at_mut(hd);
+            let (max, zs) = rest.split_at_mut(hd);
+            mean.fill(0.0);
+            max.fill(f32::NEG_INFINITY);
+            for row in pr.chunks_exact(hd) {
+                for j in 0..hd {
+                    let v = (row[j] + pc[j]).max(0.0);
+                    mean[j] += v;
+                    max[j] = max[j].max(v);
+                }
+            }
+            mean.iter_mut().for_each(|m| *m /= r as f32);
+            zs.copy_from_slice(&z);
+            self.out0.apply_many::<AVX2, false>(&cat, 1, &mut o);
+            relu(&mut o);
+            self.out2.apply_many::<AVX2, false>(&o, 1, &mut s);
+            *logit += s[0];
+        }
+    }
+}
+
 pub struct Net {
     pub hidden: usize,
     node_in: Linear,
@@ -146,6 +214,8 @@ pub struct Net {
     val2: Linear,
     node_scale: [f32; NODE],
     global_scale: Vec<f32>,
+    /// La tête construite du choix du peuple, si le fichier l'a.
+    pick: Option<Pick>,
 }
 
 /// Ce que le réseau dit d'une position, du point de vue du joueur qui agit (joueurs relatifs).
@@ -238,6 +308,7 @@ impl Net {
             val2: Linear::load(t, "val2")?,
             node_scale: scale(t, "node_scale")?,
             global_scale: t.remove("global_scale").ok_or_else(|| missing("global_scale"))?.1,
+            pick: if t.contains_key("pick.card.0.weight") { Some(Pick::load(t)?) } else { None },
         };
         if net.node_in.inp != NODE
             || net.glob_in.inp != GLOBAL
@@ -409,7 +480,16 @@ impl Net {
             g.iter_mut().zip(&gadd).for_each(|(a, b)| *a += b);
         }
 
-        let logits = self.policy.logits_many::<AVX2, BF16, P>(&g, &hs, items, hd);
+        let mut logits = self.policy.logits_many::<AVX2, BF16, P>(&g, &hs, items, hd);
+        if let Some(pick) = &self.pick {
+            for (k, (p, h)) in items.iter().zip(&hs).enumerate() {
+                // au choix du peuple seulement (`Phase::Pick` : la première des phases)
+                if p.encoded().global[PHASE_AT] == 1 {
+                    let xg = &xg[k * GLOBAL..(k + 1) * GLOBAL];
+                    pick.apply::<AVX2>(h, p.encoded().regions, &g[k * hd..(k + 1) * hd], xg, hd, &mut logits[k]);
+                }
+            }
+        }
 
         // valeur : val1([g, moyenne h])
         let mut vin = vec![0.0f32; n * 2 * hd];

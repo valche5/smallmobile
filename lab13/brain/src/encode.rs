@@ -123,6 +123,10 @@ const G_HABITS: usize = G_MARKET + 6 * M; // 5 × habit::COUNT
 const G_ATTACKS: usize = G_HABITS + MAX_PLAYERS * habit::COUNT; // 25
 const G_RECENT: usize = G_ATTACKS + MAX_PLAYERS * MAX_PLAYERS; // 25
 pub const GLOBAL: usize = G_RECENT + MAX_PLAYERS * MAX_PLAYERS;
+/// Pour la tête du peuple (`net::Pick`) : la phase, le marché et la taille d'une carte du marché.
+pub const PHASE_AT: usize = G_PHASE;
+pub const MARKET_AT: usize = G_MARKET;
+pub const CARD: usize = M;
 
 /// Une position encodée.
 #[derive(Clone)]

@@ -60,10 +60,11 @@ def pooled(x, mask):
 
 
 class Heads(nn.Module):
-    def __init__(self, base, plain=False):
+    def __init__(self, base, plain=False, decline=True):
         super().__init__()
         self.base = base
         self.plain = plain
+        self.decline = decline
         h = base.hidden
         self.card = nn.Sequential(nn.Linear(M + SLOTS + h, h), nn.ReLU(), nn.Linear(h, h))
         self.pair_region = nn.Linear(h, h)
@@ -71,7 +72,9 @@ class Heads(nn.Module):
         self.card_out = nn.Sequential(nn.Linear(3 * h, h), nn.ReLU(), nn.Linear(h, 1))
         self.dec_region = nn.Linear(2 * h, h)
         self.dec_out = nn.Sequential(nn.Linear(5 * h, h), nn.ReLU(), nn.Linear(h, 1))
-        for lin in (self.card_out[-1], self.dec_out[-1]):
+        if not decline:
+            del self.dec_region, self.dec_out
+        for lin in (self.card_out[-1],) + ((self.dec_out[-1],) if decline else ()):
             nn.init.zeros_(lin.weight)
             nn.init.zeros_(lin.bias)
         self.register_buffer("slots", torch.eye(SLOTS), persistent=False)
@@ -90,11 +93,41 @@ class Heads(nn.Module):
         z = self.card(torch.cat([cards, self.slots.expand(B, -1, -1), g[:, None].expand(-1, SLOTS, -1)], -1))
         pair = F.relu(self.pair_region(h)[:, None] + self.pair_card(z)[:, :, None])  # (B, 6, R, h)
         pick = self.card_out(torch.cat([pooled(pair, mask[:, None].expand(-1, SLOTS, -1)), z], -1))[..., 0]
+        extra = torch.zeros_like(logits)
+        extra[:, :SLOTS] = pick
+        if not self.decline:
+            return logits + extra, value, own
         # déclin : chaque région, regroupée sur les miennes (peuple actif) et sur toutes
         u = F.relu(self.dec_region(torch.cat([h, g[:, None].expand_as(h)], -1)))
         mine = mask * (node[..., N_OWNER] == 1).float() * (node[..., N_ACTIVE] == 1).float()
         decline = self.dec_out(torch.cat([pooled(u, mine), pooled(u, mask), g], -1))[:, 0]
-        extra = torch.zeros_like(logits)
-        extra[:, :SLOTS] = pick
         extra[:, DECLINE] = decline
         return logits + extra, value, own
+
+
+def export_heads(net, path):
+    """Le réseau de base au format SMNN1 (`model.export`), plus la tête du peuple sous `pick.*` :
+    `pick.card.0`, `pick.card.2`, `pick.pair_region`, `pick.pair_card` (biais nul), `pick.out.0`,
+    `pick.out.2` (lus par lab13/brain/src/net.rs)."""
+    import struct
+
+    base = net.base
+    tensors = [(k, v.detach().float().cpu().contiguous()) for k, v in base.state_dict().items()]
+    tensors += [("node_scale", base.node_scale.cpu()), ("global_scale", base.global_scale.cpu())]
+    lins = {"card.0": net.card[0], "card.2": net.card[2], "pair_region": net.pair_region,
+            "pair_card": net.pair_card, "out.0": net.card_out[0], "out.2": net.card_out[2]}
+    for name, lin in lins.items():
+        bias = lin.bias if lin.bias is not None else torch.zeros(lin.out_features)
+        tensors += [(f"pick.{name}.weight", lin.weight.detach().float().cpu().contiguous()),
+                    (f"pick.{name}.bias", bias.detach().float().cpu().contiguous())]
+    with open(path, "wb") as f:
+        f.write(b"SMNN1")
+        f.write(struct.pack("<I", len(tensors)))
+        for name, t in tensors:
+            nb = name.encode()
+            f.write(struct.pack("<I", len(nb)))
+            f.write(nb)
+            f.write(struct.pack("<I", t.dim()))
+            for d in t.shape:
+                f.write(struct.pack("<I", d))
+            f.write(t.numpy().astype("<f4").tobytes())

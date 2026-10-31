@@ -18,7 +18,7 @@ import torch
 
 from d9 import TYPES, per_position
 from data import load_packed
-from heads import Heads
+from heads import Heads, export_heads
 from model import load as load_net
 from train import BATCH, WEIGHT_DECAY, batches, learn
 
@@ -35,6 +35,8 @@ def main():
     ap.add_argument("--epochs", type=float, default=4)
     ap.add_argument("--value-mix", type=float, default=0.5)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--no-decline", action="store_true", help="la tête du peuple seule")
+    ap.add_argument("--out", help="le réseau appris, tête du peuple comprise (`heads.export_heads`)")
     args = ap.parse_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(args.seed)
@@ -42,7 +44,7 @@ def main():
     recs, _ = load_packed(args.train)
     test, _ = load_packed([args.test])
     tidx = np.arange(len(test))
-    net = Heads(load_net(args.init), plain=args.plain).to(device)
+    net = Heads(load_net(args.init), plain=args.plain, decline=not args.no_decline).to(device)
     ref = per_position(net, test, tidx, device)
 
     groups = []
@@ -68,6 +70,8 @@ def main():
             print(f"lot {i + 1}/{steps} : politique (apprentissage) {sums / count:.3f}", flush=True)
             sums, count = 0.0, 0
     print(f"{args.name} : appris en {time.time() - start:.0f} s ({steps} lots)")
+    if args.out:
+        export_heads(net, args.out)
 
     ce0, ent, acc0, _, kind = ref
     ce, _, acc, _, _ = per_position(net, test, tidx, device)
