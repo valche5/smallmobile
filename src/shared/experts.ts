@@ -28,10 +28,11 @@ export const EXPERT_LABS: readonly ExpertLab[] = [
   // lab3/journal.md) ; n=400 : 63 ms par recherche sur un cœur du PC, contre 72 pour lab2 à n=800
   { id: 'lab3', label: 'Labo 3', net: 'c130', iterations: 400 },
   // c130 et fins simulées (lab7), sauf au redéploiement et à la défense (light=1 : le coup préféré du
-  // réseau) : +4,7 ± 1,5 contre c130 à n=400 (920 donnes ; sans light +5,4, différence −0,6 ± 2,1) ; sur un
-  // cœur du PC, 0,8 s en moyenne par décision à 4 joueurs, 1,2 s à 5 (max 2,4 s), contre 0,1 s pour lab3
-  // (lab13/journal.md, D10)
-  { id: 'lab13', label: 'Labo 13', net: 'c130', iterations: 100, search: 'roll=1,mix=0.5,light=1', threads: true },
+  // réseau), jetons des fins simulées posés par le noyau (place=1) : +3,4 ± 1,6 contre c130 à n=400 (920
+  // donnes ; sans place +4,7, différence −1,3 ± 2,1) ; évaluations sur les cœurs de la machine moins un :
+  // sur le PC à 6 fils, 0,14 s en moyenne par décision à 4 joueurs, 0,21 s à 5 (p95 0,44 s), 4,5 fois moins
+  // qu'avant (lab13/journal.md, D10 et D16)
+  { id: 'lab13', label: 'Labo 13', net: 'c130', iterations: 100, search: 'roll=1,mix=0.5,light=1,place=1', threads: true },
 ];
 
 export const DEFAULT_EXPERT_LAB = EXPERT_LABS[EXPERT_LABS.length - 1]!.id;

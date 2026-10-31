@@ -442,3 +442,71 @@ professeur sont bruitées (recherches rapides, bruit de Gumbel) et sa valeur de 
 fins simulées, porte le désaccord systématique que D14 mesure : la cible « q » de Lc0 ne vaut ici que
 pour la recherche qui a joué les parties jugées, pas pour celle du professeur. La piste de la cible de
 valeur est close avec D14.
+
+## D16 : le coût de la recherche au jeu (31 octobre)
+
+Décision de l'utilisateur après D14 : l'effort va au coût de la recherche au jeu, pas à
+l'apprentissage. Protocole : `lab.md`, D16. Mini (i5-8500T) a 6 cœurs et l'Expert n'en utilisait qu'un.
+
+**E2, les évaluations en parallèle.** `parallel::Parallel` : les positions qu'une recherche demande en
+même temps (les feuilles d'un tour du halving, puis chaque pas de leurs fins simulées, en cadence)
+attendent, puis sont évaluées ensemble, réparties entre les fils (`Net::eval_batch` par tranche) ;
+la recherche reprend. `Expert::with_threads`, `lab13-expert --threads N` ; le serveur donne à l'Expert
+les cœurs de la machine moins un (`src/server/expert.ts`, labos marqués `threads` dans
+`src/shared/experts.ts`). Mêmes décisions au bit près qu'à un fil (test
+`parallel_evaluations_give_the_same_decisions`) : pas d'arène.
+
+**Le temps par décision** (`lab13 expert-time`, PC, parties entières de 4 et 5 joueurs où tous les
+sièges sont l'Expert, ~200 décisions chacune ; `runs/d16-time.txt`) :
+
+| Réglages | Fils | 4 j. : moyenne / p95 / max (ms) | 5 j. : moyenne / p95 / max (ms) | Gain sur la production à 1 fil |
+| --- | --- | --- | --- | --- |
+| production `n=100,roll=1,mix=0.5,light=1` | 1 | 609 / 1 264 / 1 524 | 973 / 1 949 / 2 233 | |
+| production | 2 | 331 / 716 / 785 | 514 / 1 033 / 1 238 | 1,9× |
+| production | 4 | 256 / 551 / 637 | 395 / 845 / 939 | 2,4× |
+| production | 6 | 242 / 506 / 639 | 369 / 777 / 841 | 2,6× |
+| `place=1` (E1) | 1 | 328 / 737 / 849 | 531 / 1 122 / 1 318 | 1,8× |
+| `place=1` | 6 | **136 / 299 / 334** | **212 / 439 / 526** | **4,5×** |
+| `place=1`, n = 200 | 1 | 594 / 1 404 / 1 717 | 891 / 1 877 / 2 435 | 1,1× |
+| `place=1`, n = 200 | 6 | 255 / 619 / 821 | 368 / 804 / 1 033 | 2,6× |
+| `place=1`, n = 400 (E3) | 6 | 473 / 1 069 / 1 234 | 731 / 1 618 / 1 997 | 1,3× |
+
+- Les fils rapportent 1,9× à 2, 2,6× à 6 : le halving séquentiel n'offre que 16, 8, 4 puis 2
+  simulations par tour, et ses derniers tours, les plus nombreux, n'occupent que deux fils. Au-delà
+  de 4 fils, presque rien.
+- `place=1` divise le temps par 1,8 à lui seul (les jetons du redéploiement des fins simulées étaient
+  la moitié des évaluations) ; avec 6 fils, **4,5 fois moins de temps** que la production pour les
+  mêmes réglages de recherche, s'il garde la force (arène E1).
+- **n = 400 avec `place=1` à 6 fils tient dans le temps de la production à 1 fil** : p95 à 5 joueurs
+  1 618 ms contre 1 949 (le critère de E3). Sur mini, ~1,8 fois plus lent par cœur et 5 fils, environ
+  1,5 s en moyenne et 3 s au p95 à 5 joueurs, ce que la production fait aujourd'hui.
+
+**E1 et E3, la force** (arènes contre c130 à n = 400, graine 72002, 920 donnes, Vulkan ; témoin apparié
+light=1 de D10, +4,7 ± 1,5 ; `runs/d16-place-n*.tsv`, 12 + 25 + 48 min) :
+
+| Joueur testé | Score | 2 j. | 3 j. | 4 j. | 5 j. | Différence au témoin |
+| --- | --- | --- | --- | --- | --- | --- |
+| `n=100,roll=1,mix=0.5,light=1` (production, D10) | +4,7 ± 1,5 | +2,9 | +5,4 | +4,8 | +5,9 | |
+| **E1** `…,light=1,place=1` | +3,4 ± 1,6 | +2,4 | +4,3 | +3,2 | +3,8 | **−1,3 ± 2,1** |
+| `…,place=1`, n = 200 | +4,5 ± 1,4 | +4,0 | +3,3 | +6,5 | +4,2 | −0,2 ± 2,0 |
+| **E3** `…,place=1`, n = 400 | **+6,3 ± 1,5** | +3,8 | +7,1 | +7,1 | +7,2 | **+1,5 ± 2,0**, indécis |
+
+- **E1 est retenu** (différence au-dessus de −1,5, borne basse −3,4 au-dessus de −3,5), comme `place=1`
+  l'était pour le professeur en D11 (−1,3 ± 2,1, le même écart). Avec les six fils de mini : la même
+  recherche qu'aujourd'hui pour **4,5 fois moins de temps**, 0,21 s en moyenne par décision à 5 joueurs
+  sur le PC (0,44 au p95), soit environ 0,4 s (0,8 au p95) sur mini.
+- **E3 n'est pas établi** : n = 400 avec `place=1` gagne +1,5 ± 2,0 sur la production, l'intervalle
+  contient zéro ; le critère demandait un intervalle au-dessus de zéro. Il est pourtant positif à toutes
+  les tailles, et de +7 à 3, 4 et 5 joueurs, cohérent avec lab7 (n = 400 avec fins simulées : +8,9) et
+  D11 (+8,4 avec l'ancrage, sans `light`) ; `light=1` et l'absence d'ancrage en coûtent sans doute un
+  ou deux. Au p95, il tient dans le temps de la production actuelle : c'est l'option « plus fort au même
+  temps » si on la préfère à « aussi fort, 4,5 fois plus vite ».
+
+**L'Expert du jeu passe à E1** (`src/shared/experts.ts` : `n=100,roll=1,mix=0.5,light=1,place=1`,
+fils = cœurs moins un). À déployer sur mini (`bun run kernel:build` reconstruit `lab13-expert`).
+
+**Ce qui reste du coût.** À 6 fils, les derniers tours du halving (2 simulations) laissent quatre cœurs
+inoccupés ; une recherche à n = 400 fait 93 tours dont 75 à 4 simulations ou moins. Pour aller plus
+loin sans changer les décisions : lancer plusieurs mondes par simulation ou évaluer d'avance les enfants
+probables ; pour changer la recherche : des fins simulées jouées par un réseau léger (distillé de c130,
+politique seule), à mesurer en arène.
