@@ -368,3 +368,77 @@ processeur :
 73,4 à 74,3 % de coups communs), mais ni la politique seule ni la recherche n'en jouent mieux : un
 écart de cette taille, sur 3 % des décisions, ne se voit pas en arène, et la recherche à n = 400 fait
 déjà ses choix de peuple sans l'aide de la tête.
+
+## D14 : la valeur est-elle le levier ? (31 octobre)
+
+Relecture de D1 à D13 (`lab.md`, D14) : le gain des fins simulées corrige les valeurs des feuilles, pas
+l'a priori ; les élèves de la politique gagnent à n = 1 et rien à n = 400. Hypothèse testée : la valeur
+de c130, apprise sur des parties bruitées (A3 de lab7 : −10,7), sous-estime la riposte des adversaires,
+que la fin simulée gloutonne révèle.
+
+**Le juge** : 1 000 parties de c130 à n = 400 sans bruit, toutes les décisions cherchées à fond et
+enregistrées (278 334 positions, 89 s, graine 191 000 001, `data/judge`), chacune avec sa valeur par fin
+simulée (`selfplay --revalue 4` : coup préféré du réseau pour tous jusqu'au prochain tour du joueur,
+`place=1`, têtes du réseau à l'horizon, 4 mondes). Hors protocole, le même juge avec **64 mondes** par
+position (`data/judge64`, 508 s ; mêmes parties), pour séparer le bruit des mondes d'un biais.
+`py/d14.py`, `runs/d14.txt`, `runs/d14-k64.txt` ; ± : intervalle à 95 % par rééchantillonnage des parties.
+
+| Estimateur de la valeur, sur le juge | CE au résultat | Écart à c130 | Brier | Pièces (erreur²) |
+| --- | --- | --- | --- | --- |
+| c130, la tête de valeur | 1,029 | | 0,556 | 66,9 |
+| la recherche ordinaire à la racine (`value`) | 1,016 | **−0,013 ± 0,001** | | |
+| fin simulée, 4 mondes | 1,122 | **+0,093 ± 0,016** | 0,568 | 65,5 |
+| fin simulée, 64 mondes | 1,078 | **+0,049 ± 0,013** | 0,561 | 64,7 |
+| moyenne c130 / fin simulée (4 mondes) | 1,018 | −0,011 ± 0,004 | | |
+| moyenne c130 / fin simulée (64 mondes) | 1,015 | −0,014 ± 0,004 | | |
+
+Par type (64 mondes), écart de la fin simulée à c130 : déclin +0,079, conquête +0,047, jetons +0,046,
+pouvoirs +0,042, peuple +0,033, défense −0,020 ± 0,018. Par joueurs : 2 j. +0,009 ± 0,011, 3 j.
++0,015 ± 0,016, 4 j. +0,060, 5 j. +0,084. Écart signé de la part de victoire du joueur qui agit, fin
+simulée moins c130 : **+0,002 ± 0,001** (par type, de −0,004 au peuple à +0,011 aux pouvoirs) ; écart
+absolu 0,068.
+
+**Le critère n'est pas atteint, et de loin, à 4 comme à 64 mondes** : depuis la position même, la fin
+simulée prédit le résultat *moins* bien que la tête de valeur. Seize fois plus de mondes ne comblent
+que la moitié de l'écart et ne changent presque rien à l'écart absolu entre les deux estimations (0,072
+→ 0,068) : ce qui sépare la fin simulée du réseau n'est pas le hasard des mondes, c'est un désaccord
+systématique, position par position, **et il a tort plus souvent que raison**. L'écart signé est nul :
+la fin simulée ne corrige aucun biais d'ensemble de la valeur (les adversaires de la valeur de c130 ne
+sont pas « trop gentils »). Elle est d'autant moins bonne qu'il y a de joueurs (à 2 et 3 joueurs, à
+parité), là où en jeu elle rapporte le plus.
+
+Ce qui fait mieux que le réseau, c'est ce qui moyenne : la valeur de racine de la recherche ordinaire
+(−0,013) et la moyenne à parts égales réseau / fin simulée (−0,011 et −0,014), la cible « q + z » de
+Lc0. Un gain d'un peu plus de 1 % d'entropie croisée, de la variance en moins, pas une information que le
+réseau n'aurait pas. Sur les pièces à gagner, la fin simulée fait un peu mieux que la tête (64,7 contre
+66,9 ; au peuple 96 contre 105, à la défense 49 contre 57) : elle connaît les pièces du tour en cours.
+
+**Conclusion de D14** : l'hypothèse est réfutée. Le gain des fins simulées en jeu n'est pas une meilleure
+estimation de la valeur de la position courante qu'on pourrait apprendre à la tête de valeur ; il tient
+à ce qu'elles évaluent *sous* les coups cherchés (la suite concrète d'un choix, comparée à celle des
+autres choix) et à leur moyenne dans l'arbre. Selon le protocole, D15b (la valeur réapprise sur les fins
+simulées) n'a pas lieu. Acquis : le juge sans bruit (`data/judge64`, 278 000 positions avec leur valeur
+par fin simulée et celle de la recherche) mesure la qualité de la valeur de n'importe quel réseau sur du
+jeu d'arène, ce qu'aucune mesure ne faisait ; `selfplay --revalue`.
+
+## D15a, hors protocole : la valeur de racine du professeur pour seule cible (31 octobre)
+
+D14 fermait D15 ; D15a ne coûtait que quatre minutes sur des données existantes et D14 venait de
+montrer que la valeur de racine d'une recherche prédit le résultat un peu mieux que la tête
+(−0,013). c130 réentraîné sur `data/tgt-train` (D12) avec `--value-mix 1` (la valeur de racine du
+professeur, fins simulées et ancrage, pour seule cible de la victoire ; `fit.py`, 4 passages, réseau de
+la fin), taux 5e-5 et 1,5e-5 ; jugé sur `data/judge64` (`d14.py`, `runs/d15-a-value.txt`) et sur
+`anc-test` par type (`d9.py`, `runs/d15-a-types.txt`).
+
+| Taux | CE de la valeur au résultat, juge (écart à c130) | au peuple | à 5 joueurs | Politique, `anc-test` (écart) |
+| --- | --- | --- | --- | --- |
+| c130 | 1,029 | 1,162 | 1,343 | 1,271 |
+| 5e-5 | 1,037 (**+0,007 ± 0,002**) | +0,021 ± 0,003 | +0,010 ± 0,005 | 1,276 (+0,005) |
+| 1,5e-5 | 1,035 (**+0,006 ± 0,002**) | +0,019 ± 0,003 | +0,007 ± 0,004 | 1,273 (+0,002) |
+
+**Échec** (le critère demandait −0,005 ; pas d'arène) : apprise sur la valeur de racine du professeur,
+la tête de valeur juge *moins* bien le jeu d'arène, surtout aux choix de peuple. Les parties du
+professeur sont bruitées (recherches rapides, bruit de Gumbel) et sa valeur de racine, calculée sur des
+fins simulées, porte le désaccord systématique que D14 mesure : la cible « q » de Lc0 ne vaut ici que
+pour la recherche qui a joué les parties jugées, pas pour celle du professeur. La piste de la cible de
+valeur est close avec D14.
