@@ -26,6 +26,9 @@
 //! lab13 consistency --agent az:… --games DIR [--positions 1500] [--every 61] [--repeat 4] [--explore 1]
 //!     [--seed S] [--threads N] [--out F]   (la même recherche répétée sur des positions de parties
 //!     enregistrées : le plafond de ses cibles, lab13/lab.md D5)
+//! lab13 expert-time [--net poids.bin] [--search roll=1,mix=0.5,light=1] [--iterations 100] [--threads 1]
+//!     [--players 4,5] [--games 1] [--seed 1]   (le temps par décision de l'Expert du jeu, parties entières où
+//!     tous les sièges sont l'Expert ; lab13/lab.md D16)
 //! ```
 
 use std::collections::HashMap;
@@ -52,7 +55,60 @@ fn main() {
         "bench-gpu" => bench_gpu_cmd(&opts),
         "analyze" => analyze_cmd(&opts),
         "consistency" => consistency_cmd(&opts),
+        "expert-time" => expert_time_cmd(&opts),
         _ => usage(),
+    }
+}
+
+/// Le temps par décision de l'Expert du jeu (`Expert::decide`, comme le serveur) : des parties
+/// entières où tous les sièges sont l'Expert (`--players`, `--games` par taille), un réseau et des
+/// réglages (`--search`, `--iterations`), les évaluations sur `--threads` fils ; moyenne, médiane,
+/// p95 et maximum par décision (lab13/lab.md, D16 ; le format de D10).
+fn expert_time_cmd(opts: &HashMap<String, String>) {
+    use smallmobile_brain13::expert::Expert;
+    use smallmobile_lab13::az::Config as Search;
+    use smallmobile_lab13::know::Knowledge;
+    use smallmobile_lab13::net::Net;
+    use smallmobile_lab13::rand::mix;
+    let net_path = opts.get("net").map_or("lab13/nets/c130.bin", String::as_str);
+    let search = opts.get("search").map_or_else(Search::default, |s| Search::parse(s).unwrap_or_else(|| usage()));
+    let iterations: usize = get(opts, "iterations", 100);
+    let threads: usize = get(opts, "threads", 1);
+    let games: usize = get(opts, "games", 1);
+    let seed: u64 = get(opts, "seed", 1);
+    let net = std::sync::Arc::new(Net::load(std::path::Path::new(net_path)).unwrap_or_else(|e| {
+        eprintln!("réseau illisible ({net_path}) : {e}");
+        std::process::exit(2)
+    }));
+    for n in players(opts, "4,5") {
+        let expert = Expert::with_threads(net.clone(), Search { iterations, ..search }, threads);
+        let mut times = Vec::new();
+        for i in 0..games {
+            let table = Table::new(n, mix(seed, (10 * n + i) as u64));
+            let mut g = table.game(mix(seed, (100 * n + i) as u64) as u32);
+            let mut k = Knowledge::default();
+            let mut step = 0u64;
+            while g.state.phase != smallmobile_kernel::Phase::GameOver {
+                let start = Instant::now();
+                let d = expert.decide(&g, mix(seed, step)).expect("décision de l'Expert");
+                times.push(start.elapsed().as_secs_f64() * 1000.0);
+                for a in &d.actions {
+                    k.apply(&mut g, a).expect("action de l'Expert");
+                }
+                step += 1;
+            }
+        }
+        times.sort_by(f64::total_cmp);
+        let count = times.len();
+        let at = |q: f64| times[((count as f64 * q) as usize).min(count - 1)];
+        println!(
+            "{} n={iterations} {threads} fil(s) {n} j. : {count} décisions, moyenne {:.0} ms, médiane {:.0}, p95 {:.0}, max {:.0}",
+            search.options().trim_start_matches(", "),
+            times.iter().sum::<f64>() / count as f64,
+            at(0.5),
+            at(0.95),
+            times[count - 1]
+        );
     }
 }
 
@@ -74,6 +130,9 @@ fn usage() -> ! {
     eprintln!("        lab13 analyze --game partie.smk --agent az:net=poids.bin,n=20000");
     eprintln!(
         "        lab13 consistency --agent az:… --games DIR [--positions N] [--every K] [--repeat R] [--explore 0|1] [--seed S] [--threads N] [--out F]"
+    );
+    eprintln!(
+        "        lab13 expert-time [--net poids.bin] [--search réglages] [--iterations N] [--threads N] [--players 4,5] [--games N] [--seed S]"
     );
     std::process::exit(2)
 }

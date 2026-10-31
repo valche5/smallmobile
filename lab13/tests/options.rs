@@ -217,6 +217,25 @@ fn selfplay_without_noise_after_the_first_round() {
     assert!(played.positions > 5, "{} positions", played.positions);
 }
 
+/// Les évaluations réparties sur plusieurs fils (`Parallel`, `Expert::with_threads`) donnent les
+/// mêmes décisions, au bit près, que sur place une à une.
+#[test]
+fn parallel_evaluations_give_the_same_decisions() {
+    use smallmobile_brain13::expert::Expert;
+    let net = Arc::new(Net::load(&net("c130")).expect("c130"));
+    let cfg = Config::parse("n=24,roll=1,mix=0.5,light=1,place=1").expect("réglages");
+    let (one, four) = (Expert::with_threads(net.clone(), cfg, 1), Expert::with_threads(net.clone(), cfg, 4));
+    let table = Table::new(4, 730);
+    let mut searched = 0;
+    for (i, (g, _)) in positions(&table, 22, 5, 30).into_iter().enumerate() {
+        let a = one.decide(&g, i as u64).expect("décision");
+        let b = four.decide(&g, i as u64).expect("décision");
+        assert_eq!((&a.actions, a.value.to_bits(), a.iterations), (&b.actions, b.value.to_bits(), b.iterations));
+        searched += usize::from(a.iterations >= 24);
+    }
+    assert!(searched > 5, "{searched} recherches entières");
+}
+
 /// La valeur par fin simulée (`--revalue`) se calcule à côté de la partie, sur son propre
 /// générateur : les mêmes coups avec ou sans elle ; chaque position enregistrée a des parts de
 /// victoire de somme 1 sur les joueurs présents, et des pièces finies.

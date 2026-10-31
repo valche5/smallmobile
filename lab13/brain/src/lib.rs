@@ -9,9 +9,10 @@
 //! - `encode`, `net` : ce que voit le réseau, le réseau ;
 //! - `search` : la recherche guidée par le réseau (Gumbel AlphaZero, nœuds de hasard) ;
 //! - `outcome` : le résultat d'une partie finie ;
-//! - `expert` : l'IA Expert telle que le jeu l'emploie (réglages, coup découpé en actions du noyau).
+//! - `expert` : l'IA Expert telle que le jeu l'emploie (réglages, coup découpé en actions du noyau) ;
+//! - `parallel` : ses évaluations réparties sur plusieurs fils du processeur.
 //!
-//! Rien ici ne dépend du système (fichiers, fils), hors du programme `lab13-expert`.
+//! Rien ici ne dépend du système (fichiers, fils), hors `parallel` et le programme `lab13-expert`.
 
 pub mod encode;
 pub mod expert;
@@ -19,5 +20,6 @@ pub mod know;
 pub mod moves;
 pub mod net;
 pub mod outcome;
+pub mod parallel;
 pub mod rand;
 pub mod search;

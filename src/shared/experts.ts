@@ -13,6 +13,9 @@ export interface ExpertLab {
   iterations: number;
   /** Autres réglages de la recherche, passés au programme (`--search roll=1,mix=0.5`) ; défaut : ceux du labo. */
   search?: string;
+  /** Le programme accepte `--threads N` (évaluations sur plusieurs fils, mêmes décisions) : le serveur lui
+   * donne les cœurs de la machine moins un. */
+  threads?: boolean;
 }
 
 export const EXPERT_LABS: readonly ExpertLab[] = [
@@ -28,7 +31,7 @@ export const EXPERT_LABS: readonly ExpertLab[] = [
   // réseau) : +4,7 ± 1,5 contre c130 à n=400 (920 donnes ; sans light +5,4, différence −0,6 ± 2,1) ; sur un
   // cœur du PC, 0,8 s en moyenne par décision à 4 joueurs, 1,2 s à 5 (max 2,4 s), contre 0,1 s pour lab3
   // (lab13/journal.md, D10)
-  { id: 'lab13', label: 'Labo 13', net: 'c130', iterations: 100, search: 'roll=1,mix=0.5,light=1' },
+  { id: 'lab13', label: 'Labo 13', net: 'c130', iterations: 100, search: 'roll=1,mix=0.5,light=1', threads: true },
 ];
 
 export const DEFAULT_EXPERT_LAB = EXPERT_LABS[EXPERT_LABS.length - 1]!.id;

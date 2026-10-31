@@ -210,6 +210,35 @@ au-dessus de 0. Alors : la cible de valeur par fin simulée entre dans la boucle
 `place=1` l'écrit déjà), avec le garde-fou de Lc0 (mélange au résultat, vérification contre le
 résultat à chaque pas).
 
+**D16, le coût de la recherche au jeu** (ajouté le 31 octobre après D14, avant tout calcul ; décision
+de l'utilisateur : l'effort va au coût de la recherche, pas à l'apprentissage). L'Expert du jeu
+(`lab13-expert`, c130, `n=100,roll=1,mix=0.5,light=1`) tourne sur un cœur de mini (i5-8500T, 6 cœurs,
+~1,8 fois plus lent que le PC par cœur : lab7 mesurait 1 496 ms par recherche `n=100,roll=1` sur mini,
+le PC 848). Sur le PC, un cœur, `lab13 speed --positions 3 --seed 5` : 627 ms par recherche, 32
+évaluations par fin simulée dont la moitié au redéploiement ; avec `place=1`, 361 ms et 17,5
+évaluations. Trois leviers, mesurés sur le PC :
+
+1. **le temps par décision** : `lab13 expert-time`, parties entières de 4 et 5 joueurs où tous les
+   sièges sont l'Expert du jeu (`Expert::decide`, comme le serveur), moyenne, médiane, p95 et maximum
+   par décision (le format de D10, `runs/d10-time.txt` : light=1, 4 j. 819 ms / p95 1 410 / max 1 589 ;
+   5 j. 1 206 / 2 061 / 2 365) ;
+2. **la force** : arène contre c130 à n = 400, graine 72002, 920 donnes, Vulkan, appariée au témoin
+   light=1 de D10 (+4,7 ± 1,5, `runs/d10-light1.tsv`).
+
+- **E1, `place=1` au jeu** (sans code) : `n=100,roll=1,mix=0.5,light=1,place=1`. **Retenu** si la
+  différence au témoin est au-dessus de −1,5, borne basse au-dessus de −3,5 (règle de D10 et D11).
+- **E2, les évaluations en parallèle** : un oracle du processeur à plusieurs fils (`search::Parallel`),
+  qui évalue ensemble les positions qu'une recherche demande en même temps (les feuilles d'un tour du
+  halving, puis chaque pas de leurs fins simulées) ; `lab13-expert --threads T`. **Mêmes décisions au
+  bit près** qu'avec un fil (test), donc pas d'arène : seul le temps compte, à 1, 2, 4 et 6 fils.
+- **E3, racheter de la force avec le temps gagné** : `n=200` et `n=400` avec `place=1,light=1`, arènes
+  appariées au témoin ; temps à 6 fils. **Pour le jeu** : la variante la plus forte (intervalle de la
+  différence au témoin au-dessus de 0) dont le p95 à 5 joueurs, à 6 fils sur le PC, reste sous le
+  p95 actuel à un fil (2 061 ms) ; sinon E1 seul.
+
+Ensuite, selon le résultat : des fins simulées jouées par un réseau léger (politique seule, 64×4,
+distillée de c130), ou la tête des propriétaires comme évaluation bon marché.
+
 ## Commandes
 
 ```sh

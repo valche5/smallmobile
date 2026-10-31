@@ -6,6 +6,7 @@
  */
 import type { Subprocess } from 'bun';
 import { existsSync } from 'node:fs';
+import { availableParallelism } from 'node:os';
 import { basename } from 'node:path';
 import { gameWords, readAction } from '../engine/kernel';
 import type { Action, GameState } from '../engine/types';
@@ -41,11 +42,13 @@ export interface ExpertOptions {
   iterations: number;
   /** Autres réglages de la recherche (`ExpertLab.search`). */
   search?: string;
+  /** Fils de calcul du processus (`--threads`), si le programme les accepte (`ExpertLab.threads`). */
+  threads?: number;
   /** Au-delà, la décision est abandonnée et le processus relancé (ms). */
   timeoutMs?: number;
 }
 
-/** Le programme et le réseau de l'Expert d'un labo. */
+/** Le programme et le réseau de l'Expert d'un labo ; les cœurs de la machine moins un s'il sait s'en servir. */
 export function expertOptions(lab: ExpertLab): ExpertOptions {
   return {
     lab: lab.id,
@@ -53,6 +56,7 @@ export function expertOptions(lab: ExpertLab): ExpertOptions {
     net: `./${lab.id}/nets/${lab.net}.bin`,
     iterations: lab.iterations,
     search: lab.search,
+    threads: lab.threads ? Math.max(1, availableParallelism() - 1) : undefined,
   };
 }
 
@@ -117,7 +121,13 @@ export class ExpertProcess implements Expert {
 
   private spawn() {
     if (this.proc) return this.proc;
-    const args = [this.opts.binary, '--net', this.opts.net, ...(this.opts.search ? ['--search', this.opts.search] : [])];
+    const args = [
+      this.opts.binary,
+      '--net',
+      this.opts.net,
+      ...(this.opts.search ? ['--search', this.opts.search] : []),
+      ...(this.opts.threads && this.opts.threads > 1 ? ['--threads', String(this.opts.threads)] : []),
+    ];
     const proc = Bun.spawn(args, { stdin: 'pipe', stdout: 'pipe', stderr: 'inherit' });
     this.proc = proc;
     this.chunks = [];
