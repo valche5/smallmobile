@@ -130,6 +130,27 @@ moyenne sur les positions de peuple, de déclin et de conquête de `anc-test` es
 - **Succès** : arène du réseau retenu contre c130, n = 400 des deux côtés, graine 183001, 920 donnes,
   intervalle au-dessus de 0 ; aussi n = 1 (politique seule), mêmes donnes.
 
+**D13, des têtes construites pour le choix du peuple et le déclin** (ajouté le 31 octobre après D12,
+avant tout calcul ; Python seul, hors ligne). Dans c130, ces deux décisions sortent du seul vecteur
+global (`glob_pol2`) : les six cartes du marché y entrent à plat, chaque place a sa sortie sans
+partage, et une carte ne rencontre les régions qu'à travers leur moyenne et leur maximum. `py/heads.py`
+garde le tronc de c130 et ajoute aux logits de ces coups (corrections parties de zéro : au départ,
+c130 exactement) :
+
+- **peuple** : chaque carte (ses entrées, sa place, le vecteur global) résumée par un même petit
+  réseau pour les six places ; chaque paire carte × région passée par une même couche, regroupée sur
+  les régions (moyenne, maximum) ; un même score par carte (Deep Sets, sans attention) ;
+- **déclin** : une même couche sur chaque région (son état, le vecteur global), regroupée sur mes
+  régions et sur toutes ; un score.
+
+Apprentissage sur `data/tgt-train` (D12), 4 passages, comme `fit.py` (`py/d13.py`) : **t0** sans têtes,
+tout à 1,5e-5 (le témoin, D12) ; **h1** têtes à 1e-3, tronc figé ; **h2** têtes à 1e-3, tronc à
+1,5e-5 ; **h3** têtes à 3e-4, tronc figé. Mesure par type sur `data/anc-test` (`d9.py`).
+**L'architecture était la limite** si un essai à têtes baisse la perte de politique sur `anc-test` au
+peuple ou au déclin d'au moins **0,03** sous c130, sans monter de plus de 0,01 ailleurs. Alors : les
+têtes dans les moteurs (processeur, Vulkan) et arènes. Sinon : la structure de la sortie n'est pas en
+cause.
+
 ## Commandes
 
 ```sh
