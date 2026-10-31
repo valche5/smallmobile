@@ -353,3 +353,18 @@ politique à c130 sur `anc-test` (parties neuves), `runs/d13-*.txt` :
   déclin du professeur ne se lit pas mieux ainsi.
 - L'effet porte sur 3 % des positions (la perte moyenne ne bouge pas) ; ce que vaut en jeu un meilleur
   choix du peuple reste à mesurer : il faut la tête dans un moteur pour les arènes.
+
+**Arènes de D13** (31 octobre). La tête du peuple seule (`runs/d13-h2p.bin` : h2 sans la tête du
+déclin ; peuple −0,035 ± 0,016 sur `anc-test`), dans le moteur du processeur (`net::Pick`, mêmes
+logits que PyTorch à 7e-5 près sur 40 choix de peuple). Contre c130, graine 185001, 920 donnes,
+processeur :
+
+| Arène | Score | Durée |
+| --- | --- | --- |
+| n = 1 (politique seule) | +0,9 ± 1,4 | 43 s |
+| n = 400 | **−0,0 ± 1,4** | 88 min (processeur seul ; ~4 min en Vulkan) |
+
+**Échec en jeu.** La tête prédit mieux le choix du peuple du professeur sur des parties neuves (de
+73,4 à 74,3 % de coups communs), mais ni la politique seule ni la recherche n'en jouent mieux : un
+écart de cette taille, sur 3 % des décisions, ne se voit pas en arène, et la recherche à n = 400 fait
+déjà ses choix de peuple sans l'aide de la tête.
