@@ -11,7 +11,7 @@ import type { ClientMsg, ServerMsg } from '../src/shared/protocol';
 /** Les IA jouent sans attendre pendant les tests. */
 const fast: Scheduler = { set: (fn) => setTimeout(fn, 0), clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>) };
 
-const rooms = new RoomManager(null, fast);
+const rooms = new RoomManager(null, fast, { firstSeat: () => 0 });
 const sockets = new Set<ServerWebSocket<SocketData>>();
 const server = Bun.serve<SocketData>({
   port: 0,
@@ -109,7 +109,7 @@ describe('sauvegarde sur disque', () => {
     const dir = mkdtempSync(join(tmpdir(), 'smallmobile-'));
     try {
       const store = new FileRoomStore(dir);
-      const first = new RoomManager(store, fast);
+      const first = new RoomManager(store, fast, { firstSeat: () => 0 });
       const inbox: ServerMsg[] = [];
       const host: Client = { code: null, seat: null, send: (m) => inbox.push(m) };
       first.handle(host, { t: 'create', name: 'Alice', color: '#d62839', size: 2, aiLevel: 'normal', mapSeed: 2024 });

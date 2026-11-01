@@ -446,7 +446,7 @@ describe('avec le serveur', () => {
   test('reconnexion après une longue absence : une trame par entrée, sur les états de chaque moment', async () => {
     store.onlineQuit(false);
     const sched = new ManualScheduler();
-    const rooms = new RoomManager(null, sched);
+    const rooms = new RoomManager(null, sched, { firstSeat: () => 0 });
     FakeSocket.rooms = rooms;
     const host = new Phone();
     const guest = new Phone();
@@ -504,7 +504,7 @@ describe('avec le serveur', () => {
 
   test('vitesse changée par un autre siège : un toast, pas pour son auteur', async () => {
     store.onlineQuit(false);
-    const rooms = new RoomManager(null, new ManualScheduler());
+    const rooms = new RoomManager(null, new ManualScheduler(), { firstSeat: () => 0 });
     FakeSocket.rooms = rooms;
     store.onlineCreate({ name: 'Alice', color: ALICE, size: 2, aiLevel: 'normal', expertLab: 'lab1', mapSeed: PRESETS[2]!.seed, opponent: 'human' });
     await flush(10);

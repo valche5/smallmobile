@@ -88,7 +88,7 @@ async function playOut(sched: ManualScheduler, host: Phone, rooms: RoomManager, 
 function soloRoom(size: number, aiLevel: 'difficile' | 'expert', expert: Expert | null) {
   const sched = new ManualScheduler();
   const archive = new MemoryArchive();
-  const rooms = new RoomManager(null, sched, { experts: new Map(expert ? [[DEFAULT_EXPERT_LAB, expert]] : []), archive, log: () => {} });
+  const rooms = new RoomManager(null, sched, { experts: new Map(expert ? [[DEFAULT_EXPERT_LAB, expert]] : []), archive, log: () => {}, firstSeat: () => 0 });
   const host = new Phone();
   rooms.handle(host, { t: 'create', name: 'Alice', color: PLAYER_COLORS[0]!.color, size, aiLevel, mapSeed: 2024, opponent: 'ai' });
   return { sched, archive, rooms, host };

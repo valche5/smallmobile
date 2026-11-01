@@ -42,9 +42,9 @@ class ManualScheduler implements Scheduler {
   }
 }
 
-function setup(size = 2) {
+function setup(size = 2, firstSeat = 0) {
   const sched = new ManualScheduler();
-  const rooms = new RoomManager(null, sched);
+  const rooms = new RoomManager(null, sched, { firstSeat: () => firstSeat });
   const host = new Phone();
   const guest = new Phone();
   const send = (p: Phone, m: ClientMsg) => rooms.handle(p, m);
@@ -73,6 +73,41 @@ describe('parties en ligne', () => {
     const g = guest.game();
     expect(g.players.map((p) => p.name)).toEqual(['Alice', 'Bob', 'Gorbak']);
     expect(g.rng).toBe(0);
+  });
+
+  test('le premier joueur tiré commence, les sièges tournent', () => {
+    const { rooms, host, guest, send, code } = setup(3, 1);
+    const token = host.last('joined')!.token;
+    send(host, { t: 'start' });
+    const g = host.game();
+    expect(g.players.map((p) => p.name)).toEqual(['Bob', 'Gorbak', 'Alice']);
+    expect(g.current).toBe(0);
+    expect(host.last('joined')).toMatchObject({ seat: 2, token });
+    expect(guest.last('joined')!.seat).toBe(0);
+    expect(host.last('room')!.room.seats.map((s) => s.name)).toEqual(['Bob', 'Gorbak', 'Alice']);
+    // le siège de chacun suit : l'hôte attend son tour, un second « lancer » ne fait rien
+    send(host, { t: 'start' });
+    expect(host.last('error')).toBeUndefined();
+    send(host, { t: 'action', id: 1, action: { type: 'pick', index: 0 } });
+    expect(host.last('error')!.message).toContain('pas à vous');
+    send(guest, { t: 'action', id: 1, action: { type: 'pick', index: 0 } });
+    expect(guest.last('state')!.ack).toEqual({ seat: 0, id: 1 });
+    // à la reconnexion aussi
+    rooms.disconnect(host);
+    const back = new Phone();
+    send(back, { t: 'resume', code, token });
+    expect(back.last('joined')!.seat).toBe(2);
+  });
+
+  test('par défaut, le premier joueur est tiré au hasard', () => {
+    const rooms = new RoomManager(null, new ManualScheduler());
+    const firsts = new Set<string>();
+    for (let i = 0; i < 64; i++) {
+      const host = new Phone();
+      rooms.handle(host, { t: 'create', opponent: 'ai', name: 'Alice', color: PLAYER_COLORS[0]!.color, size: 2, aiLevel: 'normal', mapSeed: 2024 });
+      firsts.add(host.game().players[0]!.name);
+    }
+    expect(firsts.size).toBe(2);
   });
 
   test('un troisième téléphone ne peut pas rejoindre', () => {

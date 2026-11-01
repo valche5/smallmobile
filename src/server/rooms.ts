@@ -115,6 +115,8 @@ export interface RoomServices {
   archive?: GameArchive | null;
   /** Le journal du serveur (temps de décision de l'Expert). */
   log?: (line: string) => void;
+  /** Tire le siège du premier joueur, parmi `players` (au hasard par défaut). */
+  firstSeat?: (players: number) => number;
 }
 
 export class RoomManager {
@@ -122,6 +124,7 @@ export class RoomManager {
   private experts: Experts;
   private archive: GameArchive | null;
   private log: (line: string) => void;
+  private firstSeat: (players: number) => number;
 
   constructor(
     private store: RoomStore | null = null,
@@ -131,6 +134,7 @@ export class RoomManager {
     this.experts = services.experts ?? new Map();
     this.archive = services.archive ?? null;
     this.log = services.log ?? ((line) => console.log(line));
+    this.firstSeat = services.firstSeat ?? ((players) => Math.floor(Math.random() * players));
     for (const data of store?.loadAll() ?? []) {
       // salles sauvegardées avant les variantes de l'Expert : celle par défaut
       const room: Room = {
@@ -333,11 +337,11 @@ export class RoomManager {
 
   private start(client: Client) {
     const room = this.roomOf(client);
-    if (!room) return;
+    if (!room || room.game) return;
     if (client.seat !== 0) return client.send({ t: 'error', message: "Seul l'hôte peut lancer la partie." });
-    if (room.game) return;
     if (room.seats.some((s) => s.kind === 'human' && !s.token))
       return client.send({ t: 'error', message: "Attendez que l'autre joueur ait rejoint la partie." });
+    this.rotateSeats(room);
     room.game = createGame({
       players: room.seats.map((s) => ({ name: s.name, color: s.color, kind: s.kind, ai: s.ai })),
       mapSeed: room.mapSeed,
@@ -662,6 +666,17 @@ export class RoomManager {
     const others = frames.some((x) => x.events.some((e) => e.player !== seat && isShown(e)));
     if (!others && !missing) return undefined;
     return { base, frames, missing };
+  }
+
+  /** Le noyau fait commencer le joueur 0 : le premier joueur tiré y passe, l'ordre de jeu reste le même. */
+  private rotateSeats(room: Room) {
+    const n = room.seats.length;
+    const first = this.firstSeat(n);
+    room.seats = [...room.seats.slice(first), ...room.seats.slice(0, first)];
+    for (const c of room.clients) {
+      c.seat = (c.seat! - first + n) % n;
+      c.send({ t: 'joined', code: room.code, token: room.seats[c.seat]!.token!, seat: c.seat });
+    }
   }
 
   private resizeSeats(room: Room) {
