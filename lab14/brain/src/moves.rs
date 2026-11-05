@@ -124,7 +124,15 @@ pub fn legal(g: &Game, k: &Knowledge) -> Moves {
 
 /// `legal`, avec les cibles des conquêtes (`Game::targets`) si elles sont déjà calculées.
 pub fn legal_with(g: &Game, k: &Knowledge, targets: Option<&[Target]>) -> Moves {
-    let mut out = Vec::new();
+    // assez pour presque toutes les positions : une seule allocation
+    let mut out = Vec::with_capacity(64);
+    legal_into(g, k, targets, &mut out);
+    out
+}
+
+/// `legal_with`, dans `out` (vidée d'abord) : sans allocation quand on la réutilise.
+pub fn legal_into(g: &Game, k: &Knowledge, targets: Option<&[Target]>, out: &mut Moves) {
+    out.clear();
     let s = &g.state;
     match s.phase {
         Phase::GameOver => {}
@@ -135,8 +143,8 @@ pub fn legal_with(g: &Game, k: &Knowledge, targets: Option<&[Target]>) -> Moves 
                 out.push(Choice { key: PICK + index as Key, mv: Move::Pick(index as u8) });
             }
         }
-        Phase::Conquest => conquest(g, targets, &mut out),
-        Phase::Redeploy => redeploy(g, k.redeploy, &mut out),
+        Phase::Conquest => conquest(g, targets, out),
+        Phase::Redeploy => redeploy(g, k.redeploy, out),
         Phase::Defend => {
             let race = s.defense[0].race;
             let own = g.owned(race);
@@ -147,7 +155,6 @@ pub fn legal_with(g: &Game, k: &Knowledge, targets: Option<&[Target]>) -> Moves 
             }
         }
     }
-    out
 }
 
 /// Ce que la descente d'une recherche doit savoir d'une position (`forced`) : son seul coup
@@ -174,15 +181,9 @@ pub fn forced(g: &Game, k: &Knowledge) -> Forced {
     let other = g.can_decline().is_ok()
         || (abandon && g.owned(army).iter().any(|r| g.can_abandon(r).is_ok()))
         || (rs.has(Power::Berserk) && t.berserk_die.is_none() && rs.hand >= 1)
-        || {
-            // comme `conquest`, région par région
-            let hold = g.foothold(army);
-            (0..g.map.len()).any(|i| {
-                let x = g.target(i, hold);
-                x.reachable()
-                    && (x.sorcery.allowed() || x.dragon.allowed() || (rs.hand >= 1 && x.kind != TargetKind::None))
-            })
-        };
+        // comme `conquest`, région par région
+        || g.reachable_targets()
+            .any(|x| x.sorcery.allowed() || x.dragon.allowed() || (rs.hand >= 1 && x.kind != TargetKind::None));
     if other { Forced::Several(None) } else { Forced::One(Move::EndConquest) }
 }
 
@@ -204,15 +205,7 @@ fn conquest(g: &Game, targets: Option<&[Target]>, out: &mut Moves) {
     if rs.has(Power::Berserk) && t.berserk_die.is_none() && rs.hand >= 1 {
         out.push(Choice { key: BERSERK, mv: Move::Berserk });
     }
-    let computed;
-    let targets = match targets {
-        Some(t) => t,
-        None => {
-            computed = g.targets();
-            &computed[..]
-        }
-    };
-    for x in targets.iter().filter(|x| x.reachable()) {
+    let mut add = |x: &Target| {
         if x.sorcery.allowed() {
             out.push(region(Kind::Sorcery, x.region));
         }
@@ -226,6 +219,10 @@ fn conquest(g: &Game, targets: Option<&[Target]>, out: &mut Moves) {
                 TargetKind::None => {}
             }
         }
+    };
+    match targets {
+        Some(targets) => targets.iter().filter(|x| x.reachable()).for_each(&mut add),
+        None => g.reachable_targets().for_each(|x| add(&x)),
     }
     out.push(Choice { key: END_CONQUEST, mv: Move::EndConquest });
 }

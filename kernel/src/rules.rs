@@ -15,6 +15,12 @@ pub struct Foothold {
     pub any: bool,
     /// Il occupe au moins une caverne.
     pub cavern: bool,
+    /// Les voisines de ses régions.
+    pub near: RegionSet,
+}
+
+impl Foothold {
+    const NONE: Foothold = Foothold { any: false, cavern: false, near: RegionSet::EMPTY };
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -206,9 +212,23 @@ impl Game<'_> {
         out
     }
 
-    /// Total de `attack_modifiers` (chacun vaut −1).
+    /// Total de `attack_modifiers` (chacun vaut −1), sans les énumérer : une boucle chaude.
     pub fn attack_modifier(&self, race: Race, region: usize) -> i32 {
-        -(self.attack_modifiers(race, region).len() as i32)
+        let rs = self.state.race(race);
+        if rs.declined {
+            return 0;
+        }
+        let def = &self.map.regions[region];
+        let giants = race == Race::Giants
+            && self.map.hoods[region].adj.iter().any(|a| {
+                self.state.regions[a].occupant == Occupant::Race(Race::Giants)
+                    && self.map.regions[a].terrain == Terrain::Mountain
+            });
+        -(i32::from(rs.power == Power::Commando)
+            + i32::from(rs.power == Power::Mounted && matches!(def.terrain, Terrain::Hill | Terrain::Farmland))
+            + i32::from(rs.power == Power::Underworld && def.cavern)
+            + i32::from(race == Race::Tritons && def.coastal)
+            + i32::from(giants))
     }
 
     /// Coût d'une conquête, avant le dé des Berserks.
@@ -218,7 +238,8 @@ impl Game<'_> {
 
     pub fn foothold(&self, race: Race) -> Foothold {
         let own = self.owned(race);
-        Foothold { any: !own.is_empty(), cavern: own.intersects(self.map.caverns) }
+        let near = RegionSet(own.iter().fold(0, |near, r| near | self.map.hoods[r].adj.0));
+        Foothold { any: !own.is_empty(), cavern: own.intersects(self.map.caverns), near }
     }
 
     /// Le peuple peut-il atteindre la région (adjacence, première conquête) ?
@@ -233,8 +254,8 @@ impl Game<'_> {
         if flying {
             return Ok(());
         }
-        // les adjacences sont symétriques : inutile de parcourir toutes les régions du peuple
-        if def.adj.iter().any(|&a| self.state.regions[a as usize].occupant == Occupant::Race(race)) {
+        // les adjacences sont symétriques : voisine d'une région du peuple
+        if hold.near.contains(region) {
             return Ok(());
         }
         if rs.has(Power::Underworld) && def.cavern && hold.cavern {
@@ -349,9 +370,33 @@ impl Game<'_> {
     pub fn targets(&self) -> ArrayVec<Target, MAX_REGIONS> {
         let hold = match self.state.turn.army {
             Some(army) if self.state.phase == Phase::Conquest => self.foothold(army),
-            _ => Foothold { any: false, cavern: false },
+            _ => Foothold::NONE,
         };
         (0..self.map.len()).map(|i| self.target(i, hold)).collect()
+    }
+
+    /// Les régions que le peuple qui conquiert peut viser (`Target::reachable`), dans l'ordre : les
+    /// mêmes que `targets`, sans rien calculer pour les autres. Une boucle chaude des labos.
+    pub fn reachable_targets(&self) -> impl Iterator<Item = Target> + '_ {
+        let army = self.state.turn.army.filter(|_| self.state.phase == Phase::Conquest);
+        let (hold, candidates) = match army {
+            Some(race) => {
+                let hold = self.foothold(race);
+                let rs = self.state.race(race);
+                let all = RegionSet(u64::MAX >> (64 - self.map.len()));
+                // hors de ces régions, `reach` refuse
+                let candidates = if !hold.any || rs.has(Power::Flying) {
+                    all
+                } else if rs.has(Power::Underworld) && hold.cavern {
+                    RegionSet(hold.near.0 | self.map.caverns.0)
+                } else {
+                    hold.near
+                };
+                (hold, candidates)
+            }
+            None => (Foothold::NONE, RegionSet::EMPTY),
+        };
+        candidates.iter().map(move |i| self.target(i, hold)).filter(Target::reachable)
     }
 
     /// La région la moins chère que le peuple qui conquiert peut prendre sans dé (la première en cas

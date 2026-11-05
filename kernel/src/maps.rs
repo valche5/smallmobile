@@ -126,7 +126,8 @@ pub fn decode(bytes: &[u8]) -> Option<GeneratedMap> {
             return None;
         }
         let points = r.u16()? as usize;
-        let outline = (0..points).map(|_| Some((r.u16()? as f64 / 10.0, r.u16()? as f64 / 10.0))).collect::<Option<_>>()?;
+        let outline =
+            (0..points).map(|_| Some((r.u16()? as f64 / 10.0, r.u16()? as f64 / 10.0))).collect::<Option<_>>()?;
         let flag = |bit: u8| flags & 1 << bit != 0;
         regions.push(GeneratedRegion {
             terrain,
