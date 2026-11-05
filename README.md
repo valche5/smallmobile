@@ -101,7 +101,8 @@ décompte et égalité départagée au nombre de jetons en jeu.
 Choix d'adaptation :
 
 - Les cartes sont **générées** (diagramme de Voronoï) et dimensionnées pour un
-  écran vertical ; les quatre cartes « classiques » utilisent une graine fixe.
+  écran vertical : 100 par nombre de joueurs, générées une fois pour toutes
+  (`kernel/maps.bin`), dont les quatre cartes « classiques ».
 - Les pièces restent cachées jusqu'au podium, même les siennes : seuls les gains de chaque tour sont annoncés.
 - Les Goules en déclin jouent leurs conquêtes avant le peuple actif.
 - Les Robustes déclinent après le décompte du tour.
@@ -116,6 +117,7 @@ kernel/              le jeu en Rust : règles, IA, cartes (compilé en WebAssemb
   src/rules.rs       calculs (coût, portée, attaquants, décompte)
   src/game.rs        actions → nouvel état et événements
   src/mapgen.rs      génération des cartes (Voronoï, comme l'ancien générateur d3)
+  src/maps.rs, maps.bin   les cartes du jeu, générées une fois pour toutes
   src/ai/            IA : décisions, entrées des modèles, arbres appris, réglages
   models/            modèles appris de l'IA (sommes de petits arbres)
   src/wire.rs, abi.rs   protocole avec TypeScript
@@ -123,7 +125,7 @@ src/engine/          le jeu vu de TypeScript, partagé par le serveur et les té
   kernel.ts, engine.ts  pont vers le noyau WebAssembly
   rules.ts           réponses du noyau mises en mots (coûts, raisons, décompte)
   game.ts            actions → nouvel état, journal raconté à partir des événements
-  ai.ts, mapgen.ts   IA et cartes (dans le noyau)
+  ai.ts, maps.ts     IA et cartes (dans le noyau ; le serveur garde maps.bin en mémoire)
   data.ts            peuples, pouvoirs, terrains, noms des régions
   preview.ts         textes de conséquences affichés avant chaque action
 src/ui/              interface Preact (accueil, salon, vues, carte SVG zoomable)

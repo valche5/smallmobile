@@ -1,7 +1,6 @@
 import { useState } from 'preact/hooks';
 import { AI_LEVELS, AI_NAMES, PLAYER_COLORS } from '../engine/data';
-import { PRESETS, presetMap } from '../engine/mapgen';
-import { randomSeed } from '../engine/rng';
+import { otherMap, PRESETS } from '../engine/maps';
 import type { AiLevel } from '../engine/types';
 import { DEFAULT_EXPERT_LAB, EXPERT_LABS } from '../shared/experts';
 import { normalizeCode } from '../shared/protocol';
@@ -145,8 +144,8 @@ function OnlineSetup({ joinCode }: { joinCode: string }) {
                 }}
               >
                 <b>{pr.size}</b>
-                <span>{presetMap(n).regions.length} régions</span>
-                <span>{presetMap(n).rounds} tours</span>
+                <span>{pr.regions} régions</span>
+                <span>{pr.rounds} tours</span>
                 <span class="ai-count">{opponent === 'ai' ? `${n - 1} IA` : n === 2 ? 'Duel' : `+${n - 2} IA`}</span>
               </button>
             );
@@ -178,10 +177,10 @@ function OnlineSetup({ joinCode }: { joinCode: string }) {
           </div>
         )}
         <MapPreview size={size} seed={seed}>
-          <button class="btn ghost" onClick={() => setCustomSeed(randomSeed())}>
+          <button class="btn ghost" onClick={() => setCustomSeed(otherMap(size, seed))}>
             🎲 Autre carte
           </button>
-          {customSeed !== null && (
+          {seed !== PRESETS[size]!.seed && (
             <button class="btn ghost" onClick={() => setCustomSeed(null)}>
               ↩ Carte classique
             </button>

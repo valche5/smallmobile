@@ -120,8 +120,8 @@ Les autres champs sont facultatifs :
 - `seed` : un entier positif, pour rejouer la même carte et le même hasard (pioches, dés). Avec les
   mêmes `players` et `seat`, on retrouve la même carte et le même marché de départ (les adversaires
   peuvent jouer autrement). La graine d'une partie finie est donnée dans sa vue (`seed`) ; avant,
-  elle reste cachée, car elle détermine l'ordre des pioches et les dés. Le numéro affiché dans
-  « carte n°NNNN » en est les 4 derniers chiffres.
+  elle reste cachée, car elle détermine l'ordre des pioches et les dés. Il y a 100 cartes par
+  nombre de joueurs : le numéro affiché dans « carte n°NN » est la graine modulo 100.
 
 La réponse est la vue de la partie (ci-dessous), à votre premier tour : les adversaires qui jouent
 avant vous ont déjà joué.

@@ -13,13 +13,13 @@ use crate::ai::{Ai, Restrictions, Tuning};
 use crate::game::Game;
 use crate::ids::Race;
 use crate::map::Map;
-use crate::mapgen;
+use crate::maps;
 use crate::reason::Reason;
 use crate::state::{Occupant, State};
 use crate::wire::{self, Malformed, Writer};
 
 /// Version du protocole : à changer à chaque modification incompatible.
-pub const ABI_VERSION: u32 = 3;
+pub const ABI_VERSION: u32 = 4;
 pub const CAPACITY: usize = 16 * 1024;
 
 pub const MALFORMED: i32 = -1;
@@ -135,31 +135,31 @@ pub extern "C" fn kernel_set_state(len: u32) -> i32 {
     })
 }
 
-/// La carte générée pour `players` joueurs et cette graine (voir `wire::encode_generated_map`).
+/// Une carte du fichier des cartes (`maps`) : nombre d'octets, puis les octets rangés dans des
+/// mots. Renvoie la carte (voir `wire::encode_generated_map`).
 #[unsafe(no_mangle)]
-pub extern "C" fn kernel_generate_map(players: u32, seed_lo: u32, seed_hi: u32) -> i32 {
-    call(0, |_, _, w| {
-        let seed = seed_lo as u64 | (seed_hi as u64) << 32;
-        let map = mapgen::generate(players as usize, seed).map_err(|_| Failure::Malformed("carte impossible"))?;
+pub extern "C" fn kernel_read_map(len: u32) -> i32 {
+    call(len, |_, input, w| {
+        let (&count, words) = input.split_first().ok_or(Failure::Malformed("carte vide"))?;
+        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        let bytes = bytes.get(..count as usize).ok_or(Failure::Malformed("carte tronquée"))?;
+        let map = maps::decode(bytes).ok_or(Failure::Malformed("carte illisible"))?;
         wire::encode_generated_map(&map, w);
         Ok(())
     })
 }
 
-/// Crée et charge une nouvelle partie : nombre de joueurs, leurs niveaux, graine de la carte (2 mots),
-/// graine de la partie. Renvoie les événements du début de partie.
+/// Crée et charge une nouvelle partie (voir `wire::decode_new_game`). Renvoie les événements du
+/// début de partie.
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_new_game(len: u32) -> i32 {
     call(len, |k, input, w| {
         let mut r = wire::Reader::new(input);
-        let (levels, map_seed, seed) = wire::decode_new_game(&mut r)?;
+        let new = wire::decode_new_game(&mut r)?;
         r.done()?;
-        let generated = mapgen::generate(levels.len(), map_seed).map_err(|_| Failure::Malformed("carte impossible"))?;
-        let map = generated.to_map().map_err(|_| Failure::Malformed("carte impossible"))?;
-        let lost = generated.regions.iter().enumerate().filter(|(_, r)| r.lost_tribe).map(|(i, _)| i).collect();
         let mut events: Vec<Logged> = Vec::new();
-        let state = Game::create(&map, lost, &levels, generated.rounds, seed, &mut events).state;
-        k.game = Some((map, state));
+        let state = Game::create(&new.map, new.lost, &new.levels, new.rounds, new.seed, &mut events).state;
+        k.game = Some((new.map, state));
         wire::encode_events(&events, w);
         Ok(())
     })

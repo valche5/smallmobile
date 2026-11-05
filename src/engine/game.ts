@@ -5,7 +5,7 @@
 import { POWERS, RACES, comboName } from './data';
 import { engine, kernelFor } from './engine';
 import { KernelRefusal, type KernelEvent } from './kernel';
-import { generateMap } from './mapgen';
+import { getMap } from './maps';
 import { reasonText } from './reasons';
 import { currentActor, scoreLine } from './rules';
 import type { Action, AiLevel, AiThought, GameState, LogEntry, LogKind, TurnState } from './types';
@@ -49,7 +49,7 @@ function freshTurn(): TurnState {
 
 export function createGame(setup: GameSetup): GameState {
   const n = setup.players.length;
-  const map = generateMap(n, setup.mapSeed);
+  const map = getMap(n, setup.mapSeed);
   const template: GameState = {
     version: 1,
     map,

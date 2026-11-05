@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { AI_LEVELS, PLAYER_COLORS } from '../engine/data';
-import { PRESETS, presetMap } from '../engine/mapgen';
-import { randomSeed } from '../engine/rng';
+import { otherMap, PRESETS } from '../engine/maps';
 import { EXPERT_LABS } from '../shared/experts';
 import { MapPreview } from './components/MapPreview';
 import { QrCode } from './components/QrCode';
@@ -159,8 +158,8 @@ function Room({ s }: { s: UIState }) {
                 return (
                   <button key={n} class={`size-opt ${room.size === n ? 'on' : ''}`} onClick={() => onlineSend({ t: 'lobby', size: n })}>
                     <b>{pr.size}</b>
-                    <span>{presetMap(n).regions.length} régions</span>
-                    <span>{presetMap(n).rounds} tours</span>
+                    <span>{pr.regions} régions</span>
+                    <span>{pr.rounds} tours</span>
                     <span class="ai-count">{n === 2 ? 'Duel' : `+${n - 2} IA`}</span>
                   </button>
                 );
@@ -194,7 +193,7 @@ function Room({ s }: { s: UIState }) {
         <MapPreview size={room.size} seed={room.mapSeed}>
           {host && (
             <>
-              <button class="btn ghost" onClick={() => onlineSend({ t: 'lobby', mapSeed: randomSeed() })}>
+              <button class="btn ghost" onClick={() => onlineSend({ t: 'lobby', mapSeed: otherMap(room.size, room.mapSeed) })}>
                 🎲 Autre carte
               </button>
               {room.mapSeed !== PRESETS[room.size]!.seed && (

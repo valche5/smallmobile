@@ -1,5 +1,5 @@
 /**
- * Le pont vers le noyau Rust (kernel/), qui contient les règles, l'IA et la génération des cartes,
+ * Le pont vers le noyau Rust (kernel/), qui contient les règles, l'IA et la lecture des cartes,
  * compilé en WebAssembly pour le téléphone et le serveur : des mots de 32 bits échangés dans un
  * tampon. Le format est décrit dans kernel/src/wire.rs ; les deux fichiers vont ensemble.
  */
@@ -7,7 +7,7 @@ import { NOUNS, POWER_IDS, RACE_IDS, SUFFIXES } from './data';
 import type { Action, AiLevel, GameState, MapDef, Phase, PowerId, RaceId, RegionDef, Terrain } from './types';
 
 /** Version du protocole attendue (`ABI_VERSION` côté Rust). */
-export const KERNEL_ABI = 3;
+export const KERNEL_ABI = 4;
 const MAGIC = 0x534d4b33;
 const NONE = 255;
 const LOST = 254;
@@ -86,8 +86,9 @@ function mapWords(map: MapDef, out: number[]) {
 }
 
 /** Les régions d'une carte générée par le noyau (`wire::encode_generated_map`). */
-export function readGeneratedRegions(xs: Uint32Array): { rounds: number; regions: RegionDef[] } {
+export function readGeneratedRegions(xs: Uint32Array): { seed: number; rounds: number; regions: RegionDef[] } {
   const r = new Words(xs);
+  const seed = r.u() + r.u() * 2 ** 32;
   const rounds = r.u();
   const regions = Array.from({ length: r.u() }, (_, id): RegionDef => {
     const terrain = TERRAINS[r.u()]!;
@@ -117,7 +118,7 @@ export function readGeneratedRegions(xs: Uint32Array): { rounds: number; regions
     };
   });
   r.end('Carte');
-  return { rounds, regions };
+  return { seed, rounds, regions };
 }
 
 // --- état --------------------------------------------------------------------------------------
@@ -539,7 +540,7 @@ export interface KernelExports {
   kernel_apply(len: number): number;
   kernel_decide(flags: number): number;
   kernel_targets(): number;
-  kernel_generate_map(players: number, seedLow: number, seedHigh: number): number;
+  kernel_read_map(len: number): number;
   kernel_new_game(len: number): number;
   kernel_attackers(region: number, owner: number): number;
   kernel_income(player: number): number;
@@ -629,16 +630,20 @@ export class Kernel {
     return readEvents(this.reply(this.x.kernel_apply(this.send(actionWords(a, this.template!.regions.length)))));
   }
 
-  /** Les régions de la carte générée pour `players` joueurs et cette graine. */
-  generateRegions(players: number, seed: number): { rounds: number; regions: RegionDef[] } {
-    if (!Number.isSafeInteger(seed) || seed < 0) throw new Error('Graine de carte invalide.');
-    return readGeneratedRegions(this.reply(this.x.kernel_generate_map(players, seed % 2 ** 32, Math.floor(seed / 2 ** 32))));
+  /** Une carte du fichier des cartes (ses octets, voir kernel/src/maps.rs) : sa graine, ses tours, ses régions. */
+  readMap(bytes: Uint8Array): { seed: number; rounds: number; regions: RegionDef[] } {
+    const words = new Uint32Array(1 + Math.ceil(bytes.length / 4));
+    words[0] = bytes.length;
+    new Uint8Array(words.buffer, 4).set(bytes);
+    return readGeneratedRegions(this.reply(this.x.kernel_read_map(this.send(words))));
   }
 
-  /** Crée et charge une partie sur la carte de `template` (générée pour sa graine) ; renvoie les événements du début. */
+  /** Crée et charge une partie sur la carte de `template` ; renvoie les événements du début. */
   newGame(template: GameState, seed: number): KernelEvent[] {
     const { map, players } = template;
-    const words = [players.length, ...players.map((p) => LEVELS.indexOf(p.ai)), map.seed % 2 ** 32, Math.floor(map.seed / 2 ** 32), seed >>> 0];
+    const words = [players.length, ...players.map((p) => LEVELS.indexOf(p.ai)), seed >>> 0, map.rounds];
+    mapWords(map, words);
+    words.push(...map.regions.map((r) => +r.lostTribe));
     const events = readEvents(this.reply(this.x.kernel_new_game(this.send(Uint32Array.from(words)))));
     this.map = map;
     this.template = template;

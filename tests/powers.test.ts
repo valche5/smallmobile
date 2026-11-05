@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { applyAction, createGame } from '../src/engine/game';
-import { PRESETS } from '../src/engine/mapgen';
+import { PRESETS } from '../src/engine/maps';
 import { previewConquest, previewDecline, previewEndTurn } from '../src/engine/preview';
 import { analyzeTarget, cloneState, defenseValue, regionsOf, scoreBreakdown } from '../src/engine/rules';
 import type { GameState, PowerId, RaceId } from '../src/engine/types';

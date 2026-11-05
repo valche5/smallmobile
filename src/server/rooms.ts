@@ -1,7 +1,7 @@
 import { aiAction } from '../engine/ai';
 import { AI_NAMES, PLAYER_COLORS } from '../engine/data';
 import { applyAction, createGame, RuleError } from '../engine/game';
-import { PRESETS } from '../engine/mapgen';
+import { PRESETS } from '../engine/maps';
 import { randomSeed } from '../engine/rng';
 import { currentActor } from '../engine/rules';
 import type { Action, AiLevel, AiThought, GameState } from '../engine/types';

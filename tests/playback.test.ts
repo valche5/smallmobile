@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { aiAction } from '../src/engine/ai';
 import { PLAYER_COLORS } from '../src/engine/data';
 import { applyAction, createGame } from '../src/engine/game';
-import { PRESETS } from '../src/engine/mapgen';
+import { PRESETS } from '../src/engine/maps';
 import { analyzeTarget, cloneState, currentActor, regionsOf } from '../src/engine/rules';
 import type { GameState, LogEntry, PowerId, RaceId } from '../src/engine/types';
 import { RoomManager, type Client, type Scheduler } from '../src/server/rooms';

@@ -17,6 +17,7 @@ pub mod geometry;
 pub mod ids;
 pub mod map;
 pub mod mapgen;
+pub mod maps;
 pub mod reason;
 pub mod rng;
 pub mod rules;

@@ -143,9 +143,12 @@ describe('parties pour un LLM', () => {
     const v = await games.create({ model: 'test', players: 4, opponents: 'difficile', seat: 2, seed: 9 });
     const g = games.game(v.id);
     expect(Object.keys(v).sort()).toEqual(['events', 'gameOver', 'id', 'legal', 'maxRounds', 'model', 'phase', 'round', 'seat', 'text', 'yourTurn']);
-    // les peuples de la pioche n'apparaissent nulle part, sauf s'ils sont aussi en jeu
+    // les peuples de la pioche n'apparaissent nulle part, sauf s'ils sont aussi en jeu (hors des noms de
+    // régions, comme « Collines des Géants »)
     const shown = new Set([...g.market.map((m) => m.race), ...(Object.keys(g.races) as (keyof typeof RACES)[])]);
-    for (const r of g.raceDeck.filter((r) => !shown.has(r))) expect(v.text).not.toContain(RACES[r].name);
+    const names = g.map.regions.map((r) => r.name);
+    const text = names.reduce((t, name) => t.replaceAll(name, ''), v.text);
+    for (const r of g.raceDeck.filter((r) => !shown.has(r))) expect(text).not.toContain(RACES[r].name);
   });
 
   test('une partie se reprend après un redémarrage du serveur', async () => {
@@ -204,8 +207,11 @@ describe('parties pour un LLM', () => {
       while (g.phase !== 'gameOver') {
         if (g.phase === 'redeploy' && g.turn.stage === 'ghouls') {
           const ends = legalActions(g).filter((l) => l.action.type === 'endTurn');
-          expect(ends.map((l) => l.action)).toEqual([{ type: 'endTurn' }]);
-          stages++;
+          // avec des jetons encore en main, le tour ne peut pas finir
+          if (ends.length) {
+            expect(ends.map((l) => l.action)).toEqual([{ type: 'endTurn' }]);
+            stages++;
+          }
         }
         g = applyAction(g, aiAction(g));
       }

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { aiAction } from '../src/engine/ai';
 import { RACES, RACE_IDS } from '../src/engine/data';
 import { applyAction, createGame, type PlayerSetup } from '../src/engine/game';
-import { generateMap, PRESETS } from '../src/engine/mapgen';
+import { getMap, PRESETS } from '../src/engine/maps';
 import {
   allTargets,
   analyzeTarget,
@@ -82,17 +82,17 @@ const SIZES: Record<number, [number, number]> = { 2: [23, 10], 3: [30, 10], 4: [
 describe('cartes', () => {
   for (const n of [2, 3, 4, 5]) {
     test(`carte ${n} joueurs`, () => {
-      const m = generateMap(n, PRESETS[n]!.seed);
+      const m = getMap(n, PRESETS[n]!.seed);
       expect(m.regions.length).toBe(SIZES[n]![0]);
       expect(m.rounds).toBe(SIZES[n]![1]);
       for (const r of m.regions) for (const a of r.adj) expect(m.regions[a]!.adj).toContain(r.id);
       expect(m.regions.filter((r) => r.entry).length).toBeGreaterThan(3);
       // déterministe
-      expect(generateMap(n, PRESETS[n]!.seed)).toBe(m);
+      expect(getMap(n, PRESETS[n]!.seed)).toBe(m);
     });
   }
   test('cartes aléatoires', () => {
-    for (let s = 1; s < 25; s++) for (const n of [2, 5]) expect(generateMap(n, s * 977).regions.length).toBe(SIZES[n]![0]);
+    for (let s = 1; s < 25; s++) for (const n of [2, 5]) expect(getMap(n, s * 977).regions.length).toBe(SIZES[n]![0]);
   });
 });
 

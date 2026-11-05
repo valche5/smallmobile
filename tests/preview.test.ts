@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { applyAction, createGame } from '../src/engine/game';
-import { PRESETS } from '../src/engine/mapgen';
+import { PRESETS } from '../src/engine/maps';
 import {
   abandonBrief,
   attackBrief,

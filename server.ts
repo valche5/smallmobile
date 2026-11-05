@@ -2,6 +2,7 @@ import type { ServerWebSocket } from 'bun';
 import { networkInterfaces } from 'node:os';
 import index from './src/index.html';
 import { initEngine } from './src/engine/engine';
+import { loadMaps, mapRecord, PRESETS } from './src/engine/maps';
 import { FileGameArchive } from './src/server/archive';
 import { startExperts, type ExpertProcess } from './src/server/expert';
 import { LlmGames, llmRoutes, llmRules } from './src/server/llm';
@@ -12,6 +13,8 @@ import { FileRoomStore } from './src/server/store';
 const KERNEL = './public/game-kernel.wasm';
 if (!(await Bun.file(KERNEL).exists())) throw new Error(`${KERNEL} manque : bun run kernel:build`);
 await initEngine(await Bun.file(KERNEL).arrayBuffer());
+// les cartes du jeu (kernel/maps.bin), gardées en mémoire
+loadMaps(await Bun.file('./kernel/maps.bin').arrayBuffer());
 
 const port = Number(process.env.PORT ?? 3000);
 const dev = process.env.NODE_ENV !== 'production';
@@ -60,6 +63,12 @@ const server = Bun.serve<SocketData>({
       new Response(Bun.file('./public/manifest.webmanifest'), { headers: { 'Content-Type': 'application/manifest+json' } }),
     '/icon.svg': () => new Response(Bun.file('./public/icon.svg'), { headers: { 'Content-Type': 'image/svg+xml' } }),
     '/game-kernel.wasm': () => new Response(Bun.file(KERNEL), { headers: { 'Content-Type': 'application/wasm' } }),
+    // une carte, pour l'aperçu du téléphone (src/engine/maps.ts)
+    '/maps/:players/:rank': (req: Request & { params: { players: string; rank: string } }) => {
+      const [players, rank] = [Number(req.params.players), Number(req.params.rank)];
+      if (!PRESETS[players] || !Number.isSafeInteger(rank) || rank < 0) return new Response('Introuvable', { status: 404 });
+      return new Response(mapRecord(players, rank), { headers: { 'Content-Type': 'application/octet-stream' } });
+    },
     ...llmRoutes(llm, () => llmGuide),
   },
   // une action d'un LLM attend que les adversaires aient joué : parfois plus que les 10 s par défaut

@@ -8,7 +8,7 @@
 //! - état : voir `encode_state`, qui l'écrit dans le même ordre.
 
 use crate::action::{Action, Event, How, IncomeKind, IncomeLine, Logged, Placement};
-use crate::collections::{ArrayVec, PlayerSet};
+use crate::collections::{ArrayVec, PlayerSet, RegionSet};
 use crate::game::Game;
 use crate::ids::{Level, MAX_PLAYERS, MAX_REGIONS, Phase, Power, Race, Terrain};
 use crate::map::{Map, RegionDef};
@@ -467,13 +467,13 @@ pub fn encode_state(s: &State, n: usize, w: &mut Writer) {
 
 // --- cartes générées -------------------------------------------------------------------------
 
-/// Une carte générée : tours, nombre de régions, puis par région : terrain, drapeaux (caverne,
+/// Une carte générée : graine (2 mots), tours, nombre de régions, puis par région : terrain, drapeaux (caverne,
 /// magie, mine, tribu oubliée, bord, entrée, côte), centre (x, y), nom (0 tiré : nom commun et
 /// complément ; 1 numéroté : numéro et 0), voisines, contour (nombre de points, puis x et y en f64
 /// sur deux mots chacun).
 pub fn encode_generated_map(m: &crate::mapgen::GeneratedMap, w: &mut Writer) {
     use crate::mapgen::Name;
-    w.int(m.rounds).word(m.regions.len() as u32);
+    w.word(m.seed as u32).word((m.seed >> 32) as u32).int(m.rounds).word(m.regions.len() as u32);
     for r in &m.regions {
         let flags = r.cavern as u32
             | (r.magic as u32) << 1
@@ -503,15 +503,33 @@ pub fn encode_generated_map(m: &crate::mapgen::GeneratedMap, w: &mut Writer) {
 
 // --- actions -----------------------------------------------------------------------------------
 
-/// Une nouvelle partie : nombre de joueurs, niveaux, graine de la carte (2 mots), graine de la partie.
-pub fn decode_new_game(r: &mut Reader) -> Result<(Vec<Level>, u64, u32)> {
+/// Une nouvelle partie.
+pub struct NewGame {
+    pub levels: Vec<Level>,
+    pub seed: u32,
+    pub rounds: i32,
+    pub map: Map,
+    pub lost: RegionSet,
+}
+
+/// Une nouvelle partie : nombre de joueurs, niveaux, graine de la partie, nombre de tours, la carte
+/// (`decode_map`), puis pour chaque région 1 si une tribu oubliée l'occupe, 0 sinon.
+pub fn decode_new_game(r: &mut Reader) -> Result<NewGame> {
     let count = r.upto(MAX_PLAYERS)?;
     if count < 2 {
         return Err(BAD);
     }
     let levels = (0..count).map(|_| Level::from_index(r.word()? as usize).ok_or(BAD)).collect::<Result<Vec<_>>>()?;
-    let map_seed = r.word()? as u64 | (r.word()? as u64) << 32;
-    Ok((levels, map_seed, r.word()?))
+    let seed = r.word()?;
+    let rounds = r.count()?;
+    let map = decode_map(r)?;
+    let mut lost = RegionSet::default();
+    for region in 0..map.len() {
+        if r.flag()? {
+            lost.insert(region);
+        }
+    }
+    Ok(NewGame { levels, seed, rounds, map, lost })
 }
 
 /// Une action : type, deux arguments, puis pour `Place` un nombre de jetons par région.
