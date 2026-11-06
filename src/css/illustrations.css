@@ -22,6 +22,21 @@ span.art-icon {
   pointer-events: none;
   opacity: 0.3;
 }
+/* Forêts : la texture assombrit la couleur (multiplication) au lieu de l'éclaircir, plus marquée. */
+.tex-forest {
+  mix-blend-mode: multiply;
+}
+.terrain-texture.t-forest {
+  opacity: 0.6;
+}
+.terrain-texture.t-mountain {
+  opacity: 0.5;
+}
+/* Marais : dessins de la texture recolorés en bleu foncé (filtre tint-swamp, MapView). */
+.terrain-texture.t-swamp {
+  opacity: 0.3;
+  filter: url(#tint-swamp);
+}
 .region-title {
   display: flex;
   align-items: center;

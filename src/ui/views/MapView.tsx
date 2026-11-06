@@ -51,6 +51,8 @@ const PATTERNS: Record<Terrain, string> = {
 
 const DEFS = `
 ${Object.values(PATTERNS).join('')}
+<filter id="tint-swamp" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="0 0 0 0 0.11  0 0 0 0 0.21  0 0 0 0 0.40  0 0 0 1 0"/></filter>
+<filter id="water-shade" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="9"/></filter>
 <filter id="gray"><feColorMatrix type="saturate" values="0.05"/></filter>
 <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="1.2" stdDeviation="1.2" flood-color="#000" flood-opacity="0.35"/></filter>
 `;
@@ -374,7 +376,18 @@ export function MapView(props: Props) {
       map.regions.map((r) => (
         <g key={r.id}>
           <path d={r.path} fill={TERRAINS[r.terrain].color} />
-          <path d={r.path} fill={`url(#${TERRAIN_TEXTURES[r.terrain] ? `texture-${r.id}` : `pat-${r.terrain}`})`} />
+          <path d={r.path} class={`tex-${r.terrain}`} fill={`url(#${TERRAIN_TEXTURES[r.terrain] ? `texture-${r.id}` : `pat-${r.terrain}`})`} />
+          {/* Mers et lacs : contour intérieur foncé qui s'estompe vers le centre (trait flou, découpé à la région). */}
+          {(r.terrain === 'sea' || r.terrain === 'lake') && (
+            <>
+              <clipPath id={`clip-${r.id}`}>
+                <path d={r.path} />
+              </clipPath>
+              <g clip-path={`url(#clip-${r.id})`}>
+                <path d={r.path} class="water-shade" filter="url(#water-shade)" />
+              </g>
+            </>
+          )}
         </g>
       )),
     [map],
@@ -385,9 +398,33 @@ export function MapView(props: Props) {
   const textures = useMemo(() => {
     const boxes = map.regions.filter((r) => TERRAIN_TEXTURES[r.terrain]).map((r) => ({ r, ...pathBox(r.path) }));
     const tile = Math.ceil(Math.max(0, ...boxes.map((b) => Math.max(b.w, b.h))));
+    // Champs : sillons orientés différemment d'un champ à l'autre (jamais comme un champ voisin). Quart de
+    // tour et miroir autour du centre : la tuile carrée couvre toujours la région, sans raccord.
+    const turn = new Map<number, number>();
+    for (const r of map.regions) {
+      if (r.terrain !== 'farmland') continue;
+      const taken = new Set(r.adj.map((n) => turn.get(n)));
+      const free = [0, 1, 2, 3].map((k) => (r.id + k) % 4).find((k) => !taken.has(k));
+      turn.set(r.id, free ?? r.id % 4);
+    }
+    const orient = (id: number, cx: number, cy: number) => {
+      const k = turn.get(id) ?? 0;
+      const rot = k & 1 ? `rotate(90 ${cx} ${cy})` : '';
+      const flip = k & 2 ? `translate(${2 * cx} 0) scale(-1 1)` : '';
+      return `${rot} ${flip}`.trim() || undefined;
+    };
     return boxes.map(({ r, x, y, w, h }) => (
-      <pattern key={r.id} id={`texture-${r.id}`} x={x + w / 2 - tile / 2} y={y + h / 2 - tile / 2} width={tile} height={tile} patternUnits="userSpaceOnUse">
-        <image class="terrain-texture" href={TERRAIN_TEXTURES[r.terrain]} width={tile} height={tile} />
+      <pattern
+        key={r.id}
+        id={`texture-${r.id}`}
+        x={x + w / 2 - tile / 2}
+        y={y + h / 2 - tile / 2}
+        width={tile}
+        height={tile}
+        patternUnits="userSpaceOnUse"
+        patternTransform={orient(r.id, x + w / 2, y + h / 2)}
+      >
+        <image class={`terrain-texture t-${r.terrain}`} href={TERRAIN_TEXTURES[r.terrain]} width={tile} height={tile} />
       </pattern>
     ));
   }, [map]);
@@ -419,6 +456,8 @@ export function MapView(props: Props) {
               .join(' ');
             return <path key={r.id} d={r.path} class={cls} data-region={r.id} vector-effect="non-scaling-stroke" />;
           })}
+          {/* cadre extérieur du plateau, sombre par-dessus les bordures blanches des régions */}
+          <rect x={0} y={0} width={map.width} height={map.height} class="board-edge" vector-effect="non-scaling-stroke" />
           {selected !== null && map.regions[selected] && (
             <path d={map.regions[selected]!.path} class="sel-outline" vector-effect="non-scaling-stroke" />
           )}

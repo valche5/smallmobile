@@ -116,7 +116,7 @@ button {
 
 .region {
   fill: transparent;
-  stroke: #3a2d20;
+  stroke: #ffffff;
   stroke-width: 1.6px;
   stroke-linejoin: round;
   cursor: pointer;
@@ -142,6 +142,20 @@ button {
   stroke: #ffffff;
   stroke-width: 2.2px;
   stroke-dasharray: 3 3;
+}
+.water-shade {
+  fill: none;
+  stroke: #0c2747;
+  stroke-width: 36px;
+  stroke-opacity: 0.55;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.board-edge {
+  fill: none;
+  stroke: #3a2d20;
+  stroke-width: 2.4px;
+  pointer-events: none;
 }
 .sel-outline {
   fill: rgba(255, 255, 255, 0.2);
