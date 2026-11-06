@@ -238,7 +238,7 @@ describe('parties pour un LLM', () => {
     expect(played.status).toBe(200);
     expect(await routes['/llm.md']().text()).toBe('règles');
 
-    const guide = llmRules(await Bun.file(new URL('../src/server/llm.md', import.meta.url).pathname).text());
+    const guide = llmRules(await Bun.file(new URL('../src/server/llm.md', import.meta.url)).text());
     expect(guide).not.toContain('<!-- peuples et pouvoirs -->');
     for (const id of RACE_IDS) expect(guide).toContain(`**${RACES[id].name}**`);
   });
