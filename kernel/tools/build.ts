@@ -7,8 +7,9 @@ import { existsSync, readdirSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = new URL('../..', import.meta.url).pathname;
+const root = fileURLToPath(new URL('../..', import.meta.url));
 const cargo = Bun.which('cargo') ?? join(homedir(), '.cargo/bin/cargo');
 export const WASM_FILE = join(root, 'public/game-kernel.wasm');
 /** Taille maximale du module livré au téléphone, compressé (les modèles appris en font plus de la moitié). */

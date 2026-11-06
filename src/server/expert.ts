@@ -52,7 +52,7 @@ export interface ExpertOptions {
 export function expertOptions(lab: ExpertLab): ExpertOptions {
   return {
     lab: lab.id,
-    binary: `./target/release/${lab.id}-expert`,
+    binary: `./target/release/${lab.id}-expert${process.platform === 'win32' ? '.exe' : ''}`,
     net: `./${lab.id}/nets/${lab.net}.bin`,
     iterations: lab.iterations,
     search: lab.search,
