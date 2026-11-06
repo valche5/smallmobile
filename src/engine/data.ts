@@ -466,10 +466,10 @@ export interface TerrainDef {
 
 export const TERRAINS: Record<Terrain, TerrainDef> = {
   farmland: { name: 'Ferme', color: '#ecd77c', icon: '🌾' },
-  forest: { name: 'Forêt', color: '#5d9a4c', icon: '🌲' },
-  hill: { name: 'Colline', color: '#c9ab6d', icon: '🏞️' },
+  forest: { name: 'Forêt', color: '#356b2c', icon: '🌲' },
+  hill: { name: 'Colline', color: '#86a442', icon: '🏞️' },
   mountain: { name: 'Montagne', color: '#9b948e', icon: '🏔️' },
-  swamp: { name: 'Marais', color: '#7d9c86', icon: '🐸' },
+  swamp: { name: 'Marais', color: '#7b6345', icon: '🐸' },
   sea: { name: 'Mer', color: '#4b8cc6', icon: '🌊' },
   lake: { name: 'Lac', color: '#71b4df', icon: '💧' },
 };
