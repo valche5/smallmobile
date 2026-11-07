@@ -27,7 +27,6 @@ import pillaging from '../assets/illustrations/power-pillaging.webp';
 import seafaring from '../assets/illustrations/power-seafaring.webp';
 import spirit from '../assets/illustrations/power-spirit.webp';
 import stout from '../assets/illustrations/power-stout.webp';
-import underworld from '../assets/illustrations/power-underworld.webp';
 import wealthy from '../assets/illustrations/power-wealthy.webp';
 import farmland from '../assets/illustrations/terrain-farmland.webp';
 import forest from '../assets/illustrations/terrain-forest.webp';
@@ -50,10 +49,11 @@ export const RACE_ART: Record<RaceId, string> = {
   amazons, dwarves, elves, ghouls, giants, halflings, humans,
   orcs, ratmen, skeletons, sorcerers, tritons, trolls, wizards,
 };
-export const POWER_ART: Record<PowerId, string> = {
+/** Souterrains : pas d'illustration, l'emoji des Souterrains de la carte (🕳️) parle davantage. */
+export const POWER_ART: Partial<Record<PowerId, string>> = {
   alchemist, berserk, bivouacking, commando, diplomat, dragonMaster, flying,
   forest, fortified, heroic, hill, merchant, mounted, pillaging, seafaring,
-  spirit, stout, swamp, underworld, wealthy,
+  spirit, stout, swamp, wealthy,
 };
 export const TERRAIN_ART: Record<Terrain, string> = {
   farmland, forest, hill, mountain, swamp, sea, lake,

@@ -29,6 +29,10 @@
   color: var(--ink);
   flex: none;
 }
+/* ce qu'il ne faut pas oublier (marqueurs du pouvoir à poser) : plus appuyé que le reste de la ligne */
+.actionbar.decide .hint-row b {
+  font-weight: 800;
+}
 .actionbar.decide .hint-row .spinner {
   margin-right: 4px;
 }

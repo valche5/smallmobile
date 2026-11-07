@@ -411,7 +411,7 @@ export function foeThreatText(g: GameState, region: number, me: number): ThreatT
   if (t.how === 'sorcery') text = `${RACES.sorcerers.icon} ${who} la prend gratis : 1 seul jeton`;
   else if (t.how === 'dragon') text = `${FEATURE_ICONS.dragon} ${who} la prend avec 1 jeton (dragon)`;
   else if (t.via === 'flying') text = `${POWERS.flying.icon} ${who} la prend avec ${t.cost}, de n'importe où`;
-  else if (t.via === 'cavern') text = `${POWERS.underworld.icon} ${who} la prend avec ${t.cost} par les cavernes`;
+  else if (t.via === 'cavern') text = `${POWERS.underworld.icon} ${who} la prend avec ${t.cost} par les souterrains`;
   else if (!t.race) text = `⚔ ${who} la prend avec ${t.cost} (nouveau peuple)`;
   else text = `⚔ ${who} la prend avec ${t.cost}${t.mod ? ` (${t.mod})` : ''}`;
   return { text, muted: false, color: p.color };
@@ -436,8 +436,8 @@ export function foeThreatReason(g: GameState, region: number, me: number): strin
 
 // --- État de mon pouvoir et rappels -------------------------------------------------------
 
-/** Ce que mon pouvoir permet encore ce tour-ci (seulement ce qui change) : « 🐉 Dragon prêt », « ⛺ 2 en réserve ». */
-export function powerStatus(g: GameState, pid: number): string | null {
+/** Ce que mon pouvoir permet encore ce tour-ci (seulement ce qui change) : « 🐉 Dragon prêt », « ⛺ Placez ou déplacez des bivouacs · 2 en réserve ». */
+export function powerStatus(g: GameState, pid: number, compact = false): string | null {
   if (g.current !== pid || g.turn.stage !== 'active') return null;
   const race = g.players[pid]!.active;
   if (!race || g.turn.army !== race) return null;
@@ -454,7 +454,12 @@ export function powerStatus(g: GameState, pid: number): string | null {
     if (race === 'halflings' && rs.holesPlaced < 2) return `${FEATURE_ICONS.hole} Terriers : ${rs.holesPlaced}/2`;
   } else if (g.phase === 'redeploy') {
     const left = powerLeft(g, race);
-    if (left.camps > 0) return `${FEATURE_ICONS.camp} ${left.camps} en réserve`;
+    // Bivouaqueurs : les campements se posent ET se déplacent à chaque redéploiement, même la réserve vide
+    // (`compact` : la ligne dit déjà les jetons à placer, seule la réserve tient encore)
+    if (rs.power === 'bivouacking' && regionsOf(g, race).length) {
+      if (compact) return left.camps > 0 ? `${FEATURE_ICONS.camp} ${left.camps} en réserve` : null;
+      return `${FEATURE_ICONS.camp} Placez ou déplacez des bivouacs${left.camps > 0 ? ` · ${left.camps} en réserve` : ''}`;
+    }
     if (left.fortress) return `${FEATURE_ICONS.fortress} Forteresse à bâtir`;
     if (left.heroes > 0) return `${POWERS.heroic.icon} ${pl(left.heroes, 'héros', 'héros')} à placer`;
   }

@@ -68,6 +68,73 @@ function pathBox(path: string): { x: number; y: number; w: number; h: number } {
   return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
 }
 
+/** Les sommets d'une région (tracé polygonal en coordonnées absolues). */
+function polygonOf(path: string): [number, number][] {
+  const n = (path.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+  const pts: [number, number][] = [];
+  for (let i = 0; i + 1 < n.length; i += 2) pts.push([n[i]!, n[i + 1]!]);
+  return pts;
+}
+
+/** Le point (x, y) est-il dans le polygone ? (lancer de rayon) */
+function insidePolygon(x: number, y: number, poly: [number, number][]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i]!;
+    const [xj, yj] = poly[j]!;
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** Losanges des particularités fixes : demi-diagonale et écart entre deux losanges (unités des pastilles). */
+const FEAT_R = 11.5;
+const FEAT_GAP = 23;
+
+/**
+ * Où poser les losanges des particularités fixes, en unités des pastilles (× `s` = unités de la carte),
+ * par rapport au centre de la région : sous les jetons si la place y est, sinon à côté, en diagonale ou
+ * au-dessus ; toujours entièrement dans la région, sans toucher la pastille du peuple ni les marqueurs.
+ * Dans une région trop petite, les losanges rapetissent (`k`, jusqu'à 70 %) plutôt que de déborder ; en dernier
+ * recours ils peuvent toucher la pastille du peuple, mais restent dans la région.
+ */
+function featureSpot(
+  poly: [number, number][], cx: number, cy: number, s: number, n: number, hasBadge: boolean, hasMarkers: boolean,
+): { x: number; y: number; k: number } {
+  const fallback = { x: 0, y: hasBadge ? 25 : 0, k: 1 };
+  if (!s || n === 0) return fallback;
+  const angles = [90, 60, 120, 30, 150, 0, 180, -30, -150, -60, -120, -90];
+  let best = fallback;
+  let bestIn = -1;
+  for (const [k, clear] of [[1, true], [0.85, true], [0.7, true], [0.7, false]] as const) {
+    // points à tester autour de chaque losange (un peu de marge au-delà des pointes)
+    const probe: [number, number][] = [];
+    const m = FEAT_R * k + 1.5;
+    for (let i = 0; i < n; i++) {
+      const x = (i - (n - 1) / 2) * FEAT_GAP * k;
+      probe.push([x, 0], [x, -m], [x, m], [x - m, 0], [x + m, 0], [x - m / 2, -m / 2], [x + m / 2, -m / 2], [x - m / 2, m / 2], [x + m / 2, m / 2]);
+    }
+    const candidates: { x: number; y: number }[] = [];
+    if (!hasBadge || !clear) candidates.push({ x: 0, y: 0 });
+    for (const d of [(clear ? 0 : 4) + m, 8 + m, 15 + m, 18 + m, 22 + m, 27 + m, 33 + m]) {
+      for (const a of angles) candidates.push({ x: d * Math.cos((a * Math.PI) / 180), y: d * Math.sin((a * Math.PI) / 180) });
+    }
+    for (const c of candidates) {
+      const pts = probe.map(([px, py]) => [c.x + px, c.y + py] as const);
+      // ni sur la pastille du peuple (rayon 13, bulle du nombre en haut à droite), ni sur les marqueurs du dessus
+      if (clear && hasBadge && pts.some(([px, py]) => Math.hypot(px, py) < 14 || Math.hypot(px - 12, py + 10) < 8.5)) continue;
+      if (hasMarkers && pts.some(([, py]) => py < -10)) continue;
+      const inCount = pts.filter(([px, py]) => insidePolygon(cx + px * s, cy + py * s, poly)).length;
+      if (inCount === pts.length) return { ...c, k };
+      if (inCount > bestIn) {
+        bestIn = inCount;
+        best = { ...c, k };
+      }
+    }
+  }
+  return best;
+}
+
 function swallowNextClick() {
   const swallow = (ev: Event) => {
     ev.stopPropagation();
@@ -105,6 +172,9 @@ export function MapView(props: Props) {
   const gRef = useRef<SVGGElement>(null);
   const view = useRef<View>({ x: 0, y: 0, k: 1 });
   const fitK = useRef(1);
+  /** Échelle des pastilles (--s), pour placer les losanges des particularités dans leur région. */
+  const [markS, setMarkS] = useState(0);
+  const markSRef = useRef(0);
   const size = useRef({ w: 1, h: 1 });
   const onTapRef = useRef(onTap);
   onTapRef.current = onTap;
@@ -119,6 +189,11 @@ export function MapView(props: Props) {
     // Les pastilles gardent une taille d'écran à peu près constante (elles grossissent un peu au zoom)
     const px = Math.min(1.45, 1 + (zoom - 1) * 0.22) * (size.current.w < 500 ? 1 : 1.15);
     svgRef.current?.style.setProperty('--s', String(px / v.k));
+    const sv = px / v.k;
+    if (Math.abs(sv - markSRef.current) > markSRef.current * 0.02) {
+      markSRef.current = sv;
+      setMarkS(sv);
+    }
   };
 
   const clamp = () => {
@@ -468,7 +543,7 @@ export function MapView(props: Props) {
             />
           )}
           {map.regions.map((r) => (
-            <RegionMarks key={r.id} g={g} id={r.id} mark={marks.get(r.id)} />
+            <RegionMarks key={r.id} g={g} id={r.id} mark={marks.get(r.id)} s={markS} />
           ))}
           {hl && hl.loss > 0 && (
             <g key={`b${hl.key}`} class="mk" style={{ transform: `translate(${map.regions[hl.region]!.cx}px, ${map.regions[hl.region]!.cy}px) scale(var(--s))` }}>
@@ -490,7 +565,7 @@ export function MapView(props: Props) {
   );
 }
 
-function RegionMarks({ g, id, mark }: { g: GameState; id: number; mark?: Mark }) {
+function RegionMarks({ g, id, mark, s }: { g: GameState; id: number; mark?: Mark; s: number }) {
   const def = g.map.regions[id]!;
   const r = g.regions[id]!;
   const feats: string[] = [];
@@ -534,17 +609,29 @@ function RegionMarks({ g, id, mark }: { g: GameState; id: number; mark?: Mark })
   }
 
   const hasBadge = !!badge;
+  const poly = useMemo(() => polygonOf(def.path), [def.path]);
+  const spot = useMemo(
+    () => featureSpot(poly, def.cx, def.cy, s, feats.length, hasBadge, markers.length > 0),
+    [poly, def.cx, def.cy, s, feats.length, hasBadge, markers.length > 0],
+  );
   return (
     <g class="mk" style={{ transform: `translate(${def.cx}px, ${def.cy}px) scale(var(--s))` }}>
       {badge}
       {feats.length > 0 && (
-        <g transform={`translate(0 ${hasBadge ? 21 : 0})`}>
-          <rect x={-feats.length * 6.5 - 2} y={-7.5} width={feats.length * 13 + 4} height={15} rx={7.5} fill="#fffaf0" fill-opacity={0.82} />
-          {feats.map((f, i) => (
-            <text key={i} x={(i - (feats.length - 1) / 2) * 13} y={3.8} class="emo" font-size={10}>
-              {f}
-            </text>
-          ))}
+        // particularités fixes (Souterrain, Source magique, Mine) : un losange chacune
+        // (placés dans la région : featureSpot)
+        <g transform={`translate(${spot.x.toFixed(1)} ${spot.y.toFixed(1)}) scale(${spot.k})`}>
+          {feats.map((f, i) => {
+            const x = (i - (feats.length - 1) / 2) * FEAT_GAP;
+            return (
+              <g key={i} transform={`translate(${x} 0)`}>
+                <polygon points={`0,${-FEAT_R} ${FEAT_R},0 0,${FEAT_R} ${-FEAT_R},0`} fill="#fffaf0" fill-opacity={0.9} stroke="#8a7651" stroke-width={1} stroke-linejoin="round" />
+                <text y={3.4} class="emo" font-size={9}>
+                  {f}
+                </text>
+              </g>
+            );
+          })}
         </g>
       )}
       {markers.length > 0 && (

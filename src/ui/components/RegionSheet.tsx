@@ -90,7 +90,7 @@ function subtitle(g: GameState, region: number, viewer: number | null, human: bo
   const def = g.map.regions[region]!;
   const terrain = TERRAINS[def.terrain];
   const parts = [`${terrain.icon} ${terrain.name}`];
-  if (def.cavern) parts.push(`${FEATURE_ICONS.cavern} Caverne`);
+  if (def.cavern) parts.push(`${FEATURE_ICONS.cavern} Souterrain`);
   if (def.magic) parts.push(`${FEATURE_ICONS.magic} Source magique`);
   if (def.mine) parts.push(`${FEATURE_ICONS.mine} Mine`);
   const army = g.turn.army;

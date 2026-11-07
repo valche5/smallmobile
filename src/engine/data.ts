@@ -415,11 +415,11 @@ export const POWERS: Record<PowerId, PowerDef> = {
     id: 'underworld',
     name: 'Souterrains',
     tokens: 5,
-    icon: '🦇',
-    tag: 'cavernes reliées',
-    short: 'Cavernes reliées, −1 jeton',
-    desc: 'Conquérir une Caverne coûte 1 jeton de moins, et toutes les Cavernes sont considérées comme adjacentes entre elles.',
-    foe: 'Cavernes reliées entre elles, −1 pour les prendre',
+    icon: '🕳️', // le symbole des Souterrains sur la carte (FEATURE_ICONS.cavern)
+    tag: 'souterrains reliés',
+    short: 'Souterrains reliés, −1 jeton',
+    desc: 'Conquérir un Souterrain coûte 1 jeton de moins, et tous les Souterrains sont considérés comme adjacents entre eux.',
+    foe: 'Souterrains reliés entre eux, −1 pour les prendre',
     kind: 'attaque',
   },
   wealthy: {

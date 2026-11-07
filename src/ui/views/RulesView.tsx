@@ -95,7 +95,7 @@ export function RulesView() {
               <span class="swatch" style={{ background: t.color }} /> <ArtIcon terrain={id as Terrain} size={32} /> {t.name}
             </li>
           ))}
-          <li>{FEATURE_ICONS.cavern} Caverne · {FEATURE_ICONS.magic} Source magique · {FEATURE_ICONS.mine} Mine</li>
+          <li>{FEATURE_ICONS.cavern} Souterrain · {FEATURE_ICONS.magic} Source magique · {FEATURE_ICONS.mine} Mine</li>
           <li>{FEATURE_ICONS.lost} Tribu oubliée (1 jeton neutre)</li>
           <li>
             {FEATURE_ICONS.fortress} Forteresse · {FEATURE_ICONS.lair} Tanière · {FEATURE_ICONS.camp} Campement : +1 défense chacun

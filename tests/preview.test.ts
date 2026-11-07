@@ -41,7 +41,7 @@ function put(g: GameState, region: number, race: RaceId, tokens: number) {
 
 const land = (g: GameState, id: number) => !isWater(g.map.regions[id]!);
 
-/** Région intérieure simple (ni montagne, ni caverne, ni côte, ni bord) dont tous les voisins sont des terres. */
+/** Région intérieure simple (ni montagne, ni souterrain, ni côte, ni bord) dont tous les voisins sont des terres. */
 function interior(g: GameState): number {
   return g.map.regions.find(
     (r) =>
@@ -274,7 +274,8 @@ describe('fiche d’attaque et barre', () => {
     g.phase = 'redeploy';
     expect(powerStatus(g, 0)).toBeNull(); // aucune région où poser un campement
     put(g, interior(g), 'ratmen', 2);
-    expect(powerStatus(g, 0)).toBe('⛺ 5 en réserve');
+    expect(powerStatus(g, 0)).toBe('⛺ Placez ou déplacez des bivouacs · 5 en réserve');
+    expect(powerStatus(g, 0, true)).toBe('⛺ 5 en réserve'); // jetons encore à placer : version courte
     g.races.ratmen!.power = 'alchemist';
     expect(powerStatus(g, 0)).toBeNull();
   });
