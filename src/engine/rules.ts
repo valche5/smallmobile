@@ -155,7 +155,7 @@ export function costFormula(parts: CostPart[]): string {
 const MODIFIER_PARTS: Record<Modifier, CostPart> = {
   commando: { label: 'Commandos', value: -1, short: 'Commandos' },
   mounted: { label: 'Montés (Colline/Ferme)', value: -1, short: 'Montés' },
-  underworld: { label: 'Souterrains (Caverne)', value: -1, short: 'Souterrains' },
+  underworld: { label: 'Souterrains (Souterrain)', value: -1, short: 'Souterrains' },
   tritons: { label: 'Tritons (côte)', value: -1, short: 'Tritons' },
   giants: { label: 'Géants (près de leur Montagne)', value: -1, short: 'Géants' },
 };
@@ -248,7 +248,7 @@ export interface Attacker {
   how: 'conquer' | 'dragon' | 'sorcery';
   /** Premier modificateur qui baisse le coût (« 🗡️ −1 »), ou le dé des Berserks. */
   mod: string | null;
-  /** Attaque possible seulement de loin (Volants, cavernes reliées). */
+  /** Attaque possible seulement de loin (Volants, souterrains reliés). */
   far: boolean;
   via: 'flying' | 'cavern' | null;
 }

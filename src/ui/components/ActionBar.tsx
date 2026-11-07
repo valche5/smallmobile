@@ -156,7 +156,8 @@ function MyBar({ s, g }: { s: UIState; g: GameState }) {
         { icon: '', label: 'Redéployer →', cls: 'primary', main: true, onClick: second(() => act({ type: 'endConquest' })) },
       ];
     } else {
-      hint = endTurnReminder(g) ?? 'Terminer le tour ?';
+      const reminder = endTurnReminder(g);
+      hint = reminder ? <b>{reminder}</b> : 'Terminer le tour ?';
       buttons = [
         { icon: '', label: 'Retour', cls: 'ghost', onClick: () => setConfirm(null) },
         { icon: '✓', label: `Terminer · +${scoreBreakdown(g, g.current).total} 💰`, cls: 'primary', main: true, onClick: second(() => act({ type: 'endTurn' })) },
@@ -272,11 +273,27 @@ function planBar(s: UIState, g: GameState, arm: (kind: ConfirmKind) => void): { 
     };
   }
   const note = redeployNote(g);
-  const status = powerStatus(g, g.current);
+  // jetons encore à placer : ils passent d'abord, le pouvoir en version courte
+  const status = powerStatus(g, g.current, mustPlace);
   const head = note ? `${note} · ${mustPlace ? `🔁 ${rs.hand} à placer` : place}` : place;
   const income = scoreBreakdown(g, g.current).total;
   return {
-    hint: status ? `${head} · ${status}` : head,
+    // les marqueurs du pouvoir encore à poser (campements, forteresse, héros) : en gras, pour ne pas les oublier
+    // (tout est placé : « ✓ Tout est placé » laisse sa place au pouvoir, qui tiendrait mal à côté)
+    hint: status ? (
+      mustPlace ? (
+        <>
+          {head} · <b>{status}</b>
+        </>
+      ) : (
+        <>
+          {note && `${note} · `}
+          <b>{status}</b>
+        </>
+      )
+    ) : (
+      head
+    ),
     buttons: [
       ...(canImprove ? [placeAll] : []),
       {

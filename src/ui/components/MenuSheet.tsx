@@ -24,7 +24,7 @@ export function LegendSheet({ onClose, onHeight }: Base) {
         ))}
       </div>
       <div class="legend-grid">
-        <div class="legend-item">{FEATURE_ICONS.cavern} Caverne</div>
+        <div class="legend-item">{FEATURE_ICONS.cavern} Souterrain</div>
         <div class="legend-item">{FEATURE_ICONS.magic} Source magique</div>
         <div class="legend-item">{FEATURE_ICONS.mine} Mine</div>
         <div class="legend-item">{FEATURE_ICONS.lost} Tribu oubliée</div>

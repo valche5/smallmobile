@@ -61,14 +61,15 @@
   padding-top: env(safe-area-inset-top);
 }
 .me-row {
+  position: relative;
   height: 44px;
   display: flex;
   align-items: stretch;
   padding-left: 8px;
 }
 .round {
-  width: 44px;
   flex: none;
+  padding: 0 8px;
   margin: 3px 0;
   border-radius: 9px;
   display: flex;
@@ -88,73 +89,31 @@
   font-size: 11px;
   opacity: 0.75;
 }
-.round-label {
-  font-size: 11px;
-  margin-top: 2px;
-  opacity: 0.75;
-  white-space: nowrap;
-}
-.round.mine .round-label {
-  opacity: 1;
+/* « à vous » : au milieu de la ligne du haut */
+.my-turn {
+  position: absolute;
+  top: 50%;
+  left: calc(50% + 4px);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  font-size: 14px;
   font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
   color: #fff;
   background: var(--pc);
-  border-radius: 5px;
-  padding: 1px 3px;
+  border-radius: 7px;
+  padding: 4px 9px;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5);
 }
 .round.last {
   background: #f2b134;
   color: #2a2118;
 }
-.round.last .round-label {
-  opacity: 1;
-  font-weight: 800;
-}
-
-.who {
-  flex: 1;
-  min-width: 0;
-  background: none;
-  border: 0;
-  border-radius: 10px;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  padding: 0 4px 0 8px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 1px;
-}
-.who:active {
-  background: var(--chrome-2);
-}
-.who-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 19px;
-  min-width: 0;
-  font-size: 13px;
-}
-.who-line.indent {
-  padding-left: 14px;
-}
-.who-line .pdot {
-  width: 8px;
-  height: 8px;
-  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.85);
-}
-.who-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 .stats {
-  width: 64px;
+  margin-left: auto;
+  min-width: 64px;
   flex: none;
   display: flex;
   flex-direction: column;
@@ -171,6 +130,12 @@
   font-size: 12px;
   line-height: 18px;
   white-space: nowrap;
+}
+.stat-total {
+  font-size: 11px;
+  opacity: 0.75;
+  margin-left: -3px;
+  font-variant-numeric: tabular-nums;
 }
 .stat b {
   font-size: 15px;
@@ -214,6 +179,7 @@
 /* ---------- Bandeau des adversaires ---------- */
 
 .foes {
+  --foe-bg: #5e4b3b; /* fond des étiquettes de joueur, plus clair que la barre */
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.07);
 }
 .foes.one {
@@ -266,7 +232,7 @@
   flex: none;
   margin-right: -8px;
 }
-/* Peuples en déclin : affichés en entier s'ils tiennent, sinon pas du tout */
+/* Peuples en déclin : à droite de la ligne, affichés en entier s'ils tiennent, sinon pas du tout */
 .foe-old {
   /* ne prend que la place laissée par les étiquettes, jamais une fraction de pixel de plus */
   flex: 1 1 0;
@@ -275,6 +241,7 @@
   overflow: hidden;
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end; /* calés à droite de la ligne */
 }
 .foe-old::before {
   content: '';
@@ -308,7 +275,7 @@
 .foe.one {
   height: 32px;
   border-radius: 10px;
-  background: var(--chrome-2);
+  background: var(--foe-bg);
   padding: 0 8px;
   display: flex;
   flex-direction: column;
@@ -382,7 +349,7 @@
 
 /* L'adversaire qui agit : anneau à sa couleur qui pulse */
 .foe.now {
-  background: color-mix(in srgb, var(--pc) 22%, var(--chrome-2));
+  background: color-mix(in srgb, var(--pc) 22%, var(--foe-bg));
 }
 .foe.now::after {
   content: '';
