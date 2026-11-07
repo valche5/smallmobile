@@ -6,8 +6,8 @@ import type { GameState } from '../../engine/types';
  * Pastilles et marquages de la carte, calculés pour le joueur de ce téléphone (rendus par MapView).
  * - 'normal' | 'die' | 'special' : cible de ma conquête (pastille ⚔N, 🎲N%, 🐉1, 🔮) ;
  * - 'threat' : une de mes régions qu'un ennemi peut prendre (redéploiement, défense) ;
- * - 'own' : une de mes régions, sans pastille ; 'none' : hors de portée (assombrie) ;
- * - 'plain' : rien à signaler pour la phase (seuls les drapeaux comme `lost` comptent, pas d'assombrissement).
+ * - 'own' : une de mes régions, sans pastille ; 'none' : hors de portée (sans marque) ;
+ * - 'plain' : rien à signaler pour la phase (seuls les drapeaux comme `lost` comptent).
  */
 export type MarkKind = 'normal' | 'die' | 'special' | 'threat' | 'own' | 'none' | 'plain';
 

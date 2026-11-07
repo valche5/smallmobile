@@ -176,19 +176,6 @@ export function MapView(props: Props) {
     anim.current = requestAnimationFrame(step);
   };
 
-  const zoomAt = (sx: number, sy: number, factor: number) => {
-    restore.current = null;
-    stopAnim();
-    const v = view.current;
-    const k = Math.max(fitK.current * 0.85, Math.min(fitK.current * 6, v.k * factor));
-    const f = k / v.k;
-    v.x = sx - (sx - v.x) * f;
-    v.y = sy - (sy - v.y) * f;
-    v.k = k;
-    clamp();
-    apply();
-  };
-
   // Taille du conteneur
   useEffect(() => {
     const el = wrapRef.current!;
@@ -207,6 +194,7 @@ export function MapView(props: Props) {
         const cx = (old.w / 2 - v.x) / v.k;
         const cy = (old.h / 2 - v.y) / v.k;
         fitK.current = Math.min(r.width / map.width, r.height / map.height) * 0.97;
+        v.k = fitK.current; // pas de zoom : la carte garde l'échelle « carte entière »
         v.x = r.width / 2 - cx * v.k;
         v.y = r.height / 2 - cy * v.k;
         clamp();
@@ -217,7 +205,7 @@ export function MapView(props: Props) {
     return () => ro.disconnect();
   }, [map]);
 
-  // Gestes : glisser, pincer, molette, toucher
+  // Gestes : glisser, toucher (pas de zoom : ni pincement ni molette, la carte reste entière)
   useEffect(() => {
     const svg = svgRef.current!;
     const pointers = new Map<number, { x: number; y: number }>();
@@ -225,7 +213,7 @@ export function MapView(props: Props) {
     let moved = false;
     let multi = false;
 
-    const local = (e: PointerEvent | WheelEvent) => {
+    const local = (e: PointerEvent) => {
       const r = svg.getBoundingClientRect();
       return { x: e.clientX - r.left, y: e.clientY - r.top };
     };
@@ -257,19 +245,18 @@ export function MapView(props: Props) {
         }
         pointers.set(e.pointerId, p);
       } else if (pointers.size === 2) {
+        // deux doigts : la carte suit leur milieu, sans changer d'échelle
         const [aId, bId] = [...pointers.keys()];
         const a0 = pointers.get(aId!)!;
         const b0 = pointers.get(bId!)!;
         pointers.set(e.pointerId, p);
         const a1 = pointers.get(aId!)!;
         const b1 = pointers.get(bId!)!;
-        const d0 = Math.hypot(a0.x - b0.x, a0.y - b0.y);
-        const d1 = Math.hypot(a1.x - b1.x, a1.y - b1.y);
-        const m0 = { x: (a0.x + b0.x) / 2, y: (a0.y + b0.y) / 2 };
-        const m1 = { x: (a1.x + b1.x) / 2, y: (a1.y + b1.y) / 2 };
-        view.current.x += m1.x - m0.x;
-        view.current.y += m1.y - m0.y;
-        if (d0 > 0) zoomAt(m1.x, m1.y, d1 / d0);
+        restore.current = null;
+        view.current.x += (a1.x + b1.x - a0.x - b0.x) / 2;
+        view.current.y += (a1.y + b1.y - a0.y - b0.y) / 2;
+        clamp();
+        apply();
         moved = true;
       }
     };
@@ -285,28 +272,19 @@ export function MapView(props: Props) {
         start = null;
       }
     };
-    const wheel = (e: WheelEvent) => {
-      e.preventDefault();
-      touched();
-      restore.current = null;
-      const p = local(e);
-      zoomAt(p.x, p.y, Math.exp(-e.deltaY * 0.0015));
-    };
     svg.addEventListener('pointerdown', down);
     svg.addEventListener('pointermove', move);
     svg.addEventListener('pointerup', up);
     svg.addEventListener('pointercancel', up);
-    svg.addEventListener('wheel', wheel, { passive: false });
     return () => {
       svg.removeEventListener('pointerdown', down);
       svg.removeEventListener('pointermove', move);
       svg.removeEventListener('pointerup', up);
       svg.removeEventListener('pointercancel', up);
-      svg.removeEventListener('wheel', wheel);
     };
   }, []);
 
-  /** Un toucher, un glisser, un pincement ou la molette suspendent la caméra de la lecture. */
+  /** Un toucher ou un glisser suspendent la caméra de la lecture. */
   const touched = () => {
     forced.current = false;
     setHeld(true);
@@ -429,7 +407,6 @@ export function MapView(props: Props) {
     ));
   }, [map]);
 
-  const humanMarks = marks.size > 0;
   // surbrillance de la trame adverse ; mes propres actions gardent leur pulsation
   const hl = live && s.highlight && map.regions[s.highlight.region] ? s.highlight : null;
   const pulseOn = !live && s.ownPulse ? s.ownPulse : null;
@@ -449,7 +426,6 @@ export function MapView(props: Props) {
               'region',
               m ? `m-${m.kind}` : '',
               selected === r.id ? 'sel' : '',
-              humanMarks && m?.kind === 'none' ? 'dim' : '',
               showLost && m?.lost ? 'lost' : '',
             ]
               .filter(Boolean)
@@ -504,9 +480,6 @@ export function MapView(props: Props) {
         </g>
       </svg>
       <div class="map-tools">
-        <button class="tool" aria-label="Voir toute la carte" onClick={() => fit()}>
-          ⤢
-        </button>
         {live && suspended && (
           <button class="tool follow" aria-label="Suivre l'action" onClick={resumeFollow}>
             📍<span>Suivre</span>
