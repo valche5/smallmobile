@@ -77,7 +77,7 @@ l'identique et le temps de chaque décision d'IA (`bun labtools/games.ts`).
 
 - Sur la carte, chaque région attaquable porte une pastille : **⚔3** = coût en
   jetons, **🎲 33 %** = possible seulement au dé de renfort, **🐉 / 🔮** = pouvoir
-  spécial. Les régions hors de portée sont assombries.
+  spécial.
 - Toucher une région ouvre une feuille avec le **détail du coût** et la liste
   des **conséquences** : jetons restants, pertes du défenseur, pièces gagnées,
   défense de la région ensuite, conquêtes encore possibles…

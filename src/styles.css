@@ -122,9 +122,6 @@ button {
   cursor: pointer;
   transition: fill 0.2s;
 }
-.region.dim {
-  fill: rgba(25, 18, 10, 0.45);
-}
 .region.m-normal {
   stroke: #1fd06a;
   stroke-width: 2.6px;

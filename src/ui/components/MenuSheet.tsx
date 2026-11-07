@@ -58,7 +58,7 @@ export function LegendSheet({ onClose, onHeight }: Base) {
           <span class="token-demo" /> Jetons d'un joueur (pastille grise = peuple en déclin)
         </div>
       </div>
-      <p class="muted small">Pincez pour zoomer, glissez pour vous déplacer, ⤢ pour revoir toute la carte. Touchez une région pour la détailler.</p>
+      <p class="muted small">Touchez une région pour la détailler.</p>
     </Sheet>
   );
 }
