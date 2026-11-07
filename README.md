@@ -128,7 +128,7 @@ src/engine/          le jeu vu de TypeScript, partagé par le serveur et les té
   ai.ts, maps.ts     IA et cartes (dans le noyau ; le serveur garde maps.bin en mémoire)
   data.ts            peuples, pouvoirs, terrains, noms des régions
   preview.ts         textes de conséquences affichés avant chaque action
-src/ui/              interface Preact (accueil, salon, vues, carte SVG zoomable)
+src/ui/              interface Preact (accueil, salon, vues, carte SVG fixe)
 tests/               bun test
 ```
 

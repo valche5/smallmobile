@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo } from 'preact/hooks';
 import { ActionBar } from './components/ActionBar';
 import { TabBar } from './components/TabBar';
 import { mySeat, TopBar } from './components/TopBar';
@@ -14,29 +14,12 @@ import { MapView } from './views/MapView';
 import { MarketView } from './views/MarketView';
 import { RulesView } from './views/RulesView';
 
-const NO_COVER = { bottom: 0, right: 0 };
-const WIDE = '(min-width: 760px)';
-
-/** Sur grand écran, les feuilles s'affichent en panneau à droite au lieu d'en bas. */
-function useWide(): boolean {
-  const [wide, setWide] = useState(() => window.matchMedia(WIDE).matches);
-  useEffect(() => {
-    const mq = window.matchMedia(WIDE);
-    const on = () => setWide(mq.matches);
-    mq.addEventListener('change', on);
-    return () => mq.removeEventListener('change', on);
-  }, []);
-  return wide;
-}
-
 export function GameScreen({ s }: { s: UIState }) {
   const g = s.game!;
   // « human » : ce téléphone a la main
   const human = canAct(s);
   // le joueur dont on montre le point de vue (ligne du haut, Peuples en jeu, Journal)
   const me = mySeat(s, g);
-  const [sheetH, setSheetH] = useState(0);
-  const wide = useWide();
   const viewer = viewerSeat(s);
   const marks = useMemo(() => computeMarks(g, viewer, human), [g, viewer, human]);
 
@@ -56,7 +39,7 @@ export function GameScreen({ s }: { s: UIState }) {
 
   let sheet = null;
   if (s.sheet) {
-    const common = { g, onClose: closeSheet, onHeight: setSheetH };
+    const common = { g, onClose: closeSheet };
     switch (s.sheet.kind) {
       case 'region':
         sheet = <RegionSheet {...common} region={s.sheet.region} human={human} />;
@@ -68,13 +51,13 @@ export function GameScreen({ s }: { s: UIState }) {
         sheet = human && g.phase === 'redeploy' && <EndTurnSheet {...common} />;
         break;
       case 'legend':
-        sheet = <LegendSheet onClose={closeSheet} onHeight={setSheetH} />;
+        sheet = <LegendSheet onClose={closeSheet} />;
         break;
       case 'people':
         sheet = <PeopleSheet key={s.sheet.player} {...common} player={s.sheet.player} me={me} />;
         break;
       case 'menu':
-        sheet = <MenuSheet onClose={closeSheet} onHeight={setSheetH} />;
+        sheet = <MenuSheet onClose={closeSheet} />;
         break;
     }
   }
@@ -95,9 +78,6 @@ export function GameScreen({ s }: { s: UIState }) {
             marks={marks}
             showCosts
             pulse={g.lastRegion}
-            focus={selected !== null ? s.focus : null}
-            follow={s.follow}
-            cover={!sheetH ? NO_COVER : wide ? { bottom: 0, right: 450 } : { bottom: sheetH, right: 0 }}
             onTap={(r) => openRegion(r)}
             onLegend={() => setState({ sheet: { kind: 'legend' } })}
             onToggleCosts={() => undefined}

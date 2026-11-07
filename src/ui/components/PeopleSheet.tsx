@@ -15,20 +15,19 @@ interface Props {
   /** Le joueur de ce téléphone (même règle que la ligne du haut). */
   me: number;
   onClose: () => void;
-  onHeight: (h: number) => void;
 }
 
 /** État variable de mon pouvoir (fourni par preview.ts ; absent tant qu'il n'existe pas). */
 const powerStatus = (preview as unknown as { powerStatus?: (g: GameState, pid: number) => string | null }).powerStatus;
 
 /** Peuples en jeu : chaque joueur, ses pouvoirs en clair, vus de l'adversaire ou de moi. */
-export function PeopleSheet({ g, player, me, onClose, onHeight }: Props) {
+export function PeopleSheet({ g, player, me, onClose }: Props) {
   const n = g.players.length;
   const order = Array.from({ length: n }, (_, i) => (player + i) % n);
   const [open, setOpen] = useState<number[]>([player]);
   const toggle = (pid: number) => setOpen((o) => (o.includes(pid) ? o.filter((x) => x !== pid) : [...o, pid]));
   return (
-    <Sheet onClose={onClose} onHeight={onHeight} title="Peuples en jeu" accent={g.players[player]!.color} scrollKey={player}>
+    <Sheet onClose={onClose} title="Peuples en jeu" accent={g.players[player]!.color} scrollKey={player}>
       <div class="people">
         {order.map((pid) => (
           <PlayerBlock key={pid} g={g} pid={pid} me={me} open={open.includes(pid)} onToggle={() => toggle(pid)} />

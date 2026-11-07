@@ -37,7 +37,6 @@ interface Props {
   region: number;
   human: boolean;
   onClose: () => void;
-  onHeight: (h: number) => void;
 }
 
 interface Section {
@@ -53,7 +52,7 @@ interface Section {
 
 
 /** Fiche d'une région : l'essentiel en quelques lignes, les chiffres sur les boutons, le détail à la demande. */
-export function RegionSheet({ g, region, human, onClose, onHeight }: Props) {
+export function RegionSheet({ g, region, human, onClose }: Props) {
   const def = g.map.regions[region]!;
   const r = g.regions[region]!;
   const race = actingRace(g);
@@ -70,7 +69,7 @@ export function RegionSheet({ g, region, human, onClose, onHeight }: Props) {
   return (
     <Sheet
       onClose={onClose}
-      onHeight={onHeight}
+     
       scrollKey={region}
       size={section.size}
       class="region-sheet"

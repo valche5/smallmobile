@@ -84,7 +84,6 @@ interface SheetProps {
   onClose: () => void;
   children: ComponentChildren;
   footer?: ComponentChildren;
-  onHeight?: (h: number) => void;
   accent?: string;
   /** Change de valeur quand le contenu change complètement (remonte en haut). */
   scrollKey?: string | number;
@@ -112,14 +111,12 @@ function anchorBottom(size: SheetSize): number {
 }
 
 /** Feuille glissante en bas de l'écran (glisser vers le bas pour fermer). */
-export function Sheet({ title, subtitle, onClose, children, footer, onHeight, accent, scrollKey, size = 'standard', class: cls }: SheetProps) {
+export function Sheet({ title, subtitle, onClose, children, footer, accent, scrollKey, size = 'standard', class: cls }: SheetProps) {
   const ref = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
   const eff: SheetSize = expanded ? 'expanded' : size;
   const [bottom, setBottom] = useState(0);
-  const bottomRef = useRef(0);
-  bottomRef.current = bottom;
 
   useEffect(() => {
     bodyRef.current?.scrollTo(0, 0);
@@ -137,20 +134,6 @@ export function Sheet({ title, subtitle, onClose, children, footer, onHeight, ac
     window.addEventListener('resize', on);
     return () => window.removeEventListener('resize', on);
   }, [eff]);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || !onHeight) return;
-    const ro = new ResizeObserver(() => onHeight(el.getBoundingClientRect().height + bottomRef.current));
-    ro.observe(el);
-    return () => {
-      ro.disconnect();
-      onHeight(0);
-    };
-  }, []);
-  useEffect(() => {
-    if (ref.current && onHeight) onHeight(ref.current.getBoundingClientRect().height + bottom);
-  }, [bottom]);
 
   const onDown = (e: PointerEvent) => {
     drag.current = { y: e.clientY, dy: 0 };

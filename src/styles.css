@@ -208,25 +208,6 @@ button {
   fill: #7b3fd0;
 }
 
-.map-tools {
-  position: absolute;
-  right: 8px;
-  top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-.tool {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  border: 0;
-  background: rgba(255, 253, 248, 0.94);
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
-  font-size: 19px;
-  font-weight: 800;
-  color: var(--ink);
-}
 
 /* ---------- Barre d'actions ---------- */
 
@@ -1514,10 +1495,6 @@ button {
   }
   .view {
     padding: 20px max(20px, calc(50% - 360px)) 28px;
-  }
-  .map-tools {
-    right: auto;
-    left: 12px;
   }
   .toast {
     left: 64px;

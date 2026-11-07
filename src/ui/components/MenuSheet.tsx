@@ -7,12 +7,11 @@ import type { Terrain } from '../../engine/types';
 
 interface Base {
   onClose: () => void;
-  onHeight: (h: number) => void;
 }
 
-export function LegendSheet({ onClose, onHeight }: Base) {
+export function LegendSheet({ onClose }: Base) {
   return (
-    <Sheet onClose={onClose} onHeight={onHeight} title="Légende de la carte">
+    <Sheet onClose={onClose} title="Légende de la carte">
       <div class="legend-grid">
         {Object.entries(TERRAINS).map(([k, t]) => (
           <div key={k} class="legend-item">
@@ -63,7 +62,7 @@ export function LegendSheet({ onClose, onHeight }: Base) {
   );
 }
 
-export function MenuSheet({ onClose, onHeight }: Base) {
+export function MenuSheet({ onClose }: Base) {
   const s = getState();
   const online = s.online;
   const speeds: { id: AiSpeed; label: string }[] = [
@@ -75,7 +74,7 @@ export function MenuSheet({ onClose, onHeight }: Base) {
   const setSpeed = (id: AiSpeed) => (online ? onlineSend({ t: 'speed', speed: id }) : setState({ aiSpeed: id }));
   const [confirmQuit, setConfirmQuit] = useState(false);
   return (
-    <Sheet onClose={onClose} onHeight={onHeight} title="Menu">
+    <Sheet onClose={onClose} title="Menu">
       {online && (
         <div class="power-block">
           <div class="option-title">Partie en ligne {online.code}</div>

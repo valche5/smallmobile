@@ -313,31 +313,6 @@
   fill: #e8590c;
 }
 
-/* ---------- Carte : contrôles ---------- */
-
-.tool.follow {
-  width: auto;
-  padding: 0 10px 0 8px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 14px;
-  font-weight: 800;
-  animation: follow-in 0.2s ease-out;
-}
-.tool.follow span {
-  font-family: var(--font);
-}
-@keyframes follow-in {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-}
-.map-tools {
-  align-items: flex-end;
-}
-
 /* texte d'une ligne flex : l'ellipse ne marche que sur un enfant qui peut rétrécir */
 .ec-ell {
   min-width: 0;

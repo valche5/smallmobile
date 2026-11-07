@@ -142,7 +142,7 @@ export function RulesView() {
           <li>En redéploiement, ⚔ sur vos régions indique ce que l'ennemi le plus dangereux paiera pour vous la prendre.</li>
           <li>Les étiquettes du haut résument vos pouvoirs et ceux des adversaires : touchez-les pour le détail.</li>
           <li>↶ annule la dernière action tant qu'aucun dé n'a été lancé.</li>
-          <li>Glissez la feuille vers le bas pour la fermer. Pincez la carte pour zoomer.</li>
+          <li>Glissez la feuille vers le bas pour la fermer.</li>
           <li>En ligne, votre téléphone vibre quand c'est votre tour ; en attendant, vous pouvez explorer la carte et les autres vues.</li>
           <li>Les parties sont sauvegardées automatiquement (sur le serveur en ligne, sur l'appareil sinon).</li>
         </ul>

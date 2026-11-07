@@ -14,29 +14,10 @@ interface Props {
   showCosts?: boolean;
   /** Ignoré : la pulsation de mes actions et la surbrillance des actions adverses viennent du store. */
   pulse?: number | null;
-  focus: { region: number; n: number } | null;
-  follow: { region: number; n: number } | null;
-  /** Partie de la carte masquée par une feuille (en px, depuis le bas ou la droite de l'écran). */
-  cover: { bottom: number; right: number };
   onTap: (region: number | null) => void;
   /** Ignorés : la légende passe par ☰, les coûts sont toujours affichés. */
   onLegend?: () => void;
   onToggleCosts?: () => void;
-}
-
-/** Après un toucher de la carte, la caméra de la lecture adverse reste immobile ce temps-là (ms). */
-const HOLD_MS = 4000;
-
-interface View {
-  x: number;
-  y: number;
-  k: number;
-}
-
-/** Position sur un axe : centrée si la carte tient dans l'écran, sinon sans bord vide. */
-function fitAxis(pos: number, mapSize: number, viewSize: number): number {
-  if (mapSize <= viewSize) return (viewSize - mapSize) / 2;
-  return Math.min(0, Math.max(viewSize - mapSize, pos));
 }
 
 const PATTERNS: Record<Terrain, string> = {
@@ -152,194 +133,63 @@ function pulseColor(g: GameState, region: number): string {
 }
 
 export function MapView(props: Props) {
-  const { game: g, selected, marks, focus, follow, cover, onTap } = props;
+  const { game: g, selected, marks, onTap } = props;
   const s = useStore();
-  const covered = cover.bottom > 0 || cover.right > 0;
   const live = !!s.playback;
   const mine = canAct(s);
   // contour des régions perdues : masqué pendant mon redéploiement et ma défense
   const showLost = !(mine && (g.phase === 'redeploy' || g.phase === 'defend'));
-  /** L'utilisateur a touché la carte il y a moins de HOLD_MS : la lecture ne déplace pas la vue. */
-  const [held, setHeld] = useState(false);
-  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** « 📍 Suivre » touché : la caméra suit même avec une feuille ouverte, jusqu'au prochain toucher. */
-  const forced = useRef(false);
-  const sheetOpen = s.sheet !== null;
-  const suspended = !forced.current && (held || sheetOpen);
   const map = g.map;
   const wrapRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const gRef = useRef<SVGGElement>(null);
-  const view = useRef<View>({ x: 0, y: 0, k: 1 });
-  const fitK = useRef(1);
   /** Échelle des pastilles (--s), pour placer les losanges des particularités dans leur région. */
   const [markS, setMarkS] = useState(0);
-  const markSRef = useRef(0);
-  const size = useRef({ w: 1, h: 1 });
   const onTapRef = useRef(onTap);
   onTapRef.current = onTap;
-  const anim = useRef<number | null>(null);
-  /** Vue d'avant un recentrage automatique, rétablie quand la feuille se referme. */
-  const restore = useRef<View | null>(null);
 
-  const apply = () => {
-    const v = view.current;
-    gRef.current?.setAttribute('transform', `translate(${v.x.toFixed(2)},${v.y.toFixed(2)}) scale(${v.k.toFixed(5)})`);
-    const zoom = v.k / fitK.current;
-    // Les pastilles gardent une taille d'écran à peu près constante (elles grossissent un peu au zoom)
-    const px = Math.min(1.45, 1 + (zoom - 1) * 0.22) * (size.current.w < 500 ? 1 : 1.15);
-    svgRef.current?.style.setProperty('--s', String(px / v.k));
-    const sv = px / v.k;
-    if (Math.abs(sv - markSRef.current) > markSRef.current * 0.02) {
-      markSRef.current = sv;
-      setMarkS(sv);
-    }
-  };
-
-  const clamp = () => {
-    const v = view.current;
-    const { w, h } = size.current;
-    v.k = Math.max(fitK.current * 0.85, Math.min(fitK.current * 6, v.k));
-    const keep = 60; // au moins 60 px de carte restent visibles
-    v.x = Math.min(w - keep, Math.max(keep - map.width * v.k, v.x));
-    v.y = Math.min(h - keep, Math.max(keep - map.height * v.k, v.y));
-  };
-
-  const animTarget = useRef<View | null>(null);
-
-  /** Arrête l'animation en cours ; `finish` saute directement à sa position finale. */
-  const stopAnim = (finish = false) => {
-    if (anim.current) cancelAnimationFrame(anim.current);
-    anim.current = null;
-    if (finish && animTarget.current) {
-      view.current = { ...animTarget.current };
-      apply();
-    }
-    animTarget.current = null;
-  };
-
-  const fit = () => {
-    restore.current = null;
-    stopAnim();
-    const { w, h } = size.current;
-    const k = Math.min(w / map.width, h / map.height) * 0.97;
-    fitK.current = Math.min(w / map.width, h / map.height) * 0.97;
-    view.current = { k, x: (w - map.width * k) / 2, y: (h - map.height * k) / 2 };
-    apply();
-  };
-
-  const animateTo = (target: View) => {
-    stopAnim();
-    animTarget.current = target;
-    const from = { ...view.current };
-    const t0 = performance.now();
-    const step = (now: number) => {
-      const t = Math.min(1, (now - t0) / 260);
-      const e = 1 - Math.pow(1 - t, 3);
-      view.current = {
-        x: from.x + (target.x - from.x) * e,
-        y: from.y + (target.y - from.y) * e,
-        k: from.k + (target.k - from.k) * e,
-      };
-      apply();
-      if (t < 1) anim.current = requestAnimationFrame(step);
-      else {
-        anim.current = null;
-        animTarget.current = null;
-      }
-    };
-    anim.current = requestAnimationFrame(step);
-  };
-
-  // Taille du conteneur
+  // La carte entière, centrée, à l'échelle de l'écran : elle ne bouge jamais (ni glisser, ni zoom, ni caméra)
   useEffect(() => {
     const el = wrapRef.current!;
-    let first = true;
     const ro = new ResizeObserver(() => {
-      const r = el.getBoundingClientRect();
-      if (r.width < 10 || r.height < 10) return;
-      const old = size.current;
-      size.current = { w: r.width, h: r.height };
-      if (first) {
-        first = false;
-        fit();
-      } else {
-        // garder le même centre
-        const v = view.current;
-        const cx = (old.w / 2 - v.x) / v.k;
-        const cy = (old.h / 2 - v.y) / v.k;
-        fitK.current = Math.min(r.width / map.width, r.height / map.height) * 0.97;
-        v.k = fitK.current; // pas de zoom : la carte garde l'échelle « carte entière »
-        v.x = r.width / 2 - cx * v.k;
-        v.y = r.height / 2 - cy * v.k;
-        clamp();
-        apply();
-      }
+      const { width: w, height: h } = el.getBoundingClientRect();
+      if (w < 10 || h < 10) return;
+      const k = Math.min(w / map.width, h / map.height) * 0.97;
+      const x = (w - map.width * k) / 2;
+      const y = (h - map.height * k) / 2;
+      gRef.current?.setAttribute('transform', `translate(${x.toFixed(2)},${y.toFixed(2)}) scale(${k.toFixed(5)})`);
+      // les pastilles gardent une taille d'écran constante
+      const sv = (w < 500 ? 1 : 1.15) / k;
+      svgRef.current?.style.setProperty('--s', String(sv));
+      setMarkS((old) => (Math.abs(sv - old) > old * 0.02 ? sv : old));
     });
     ro.observe(el);
     return () => ro.disconnect();
   }, [map]);
 
-  // Gestes : glisser, toucher (pas de zoom : ni pincement ni molette, la carte reste entière)
+  // Toucher une région : un seul doigt, sans glisser
   useEffect(() => {
     const svg = svgRef.current!;
-    const pointers = new Map<number, { x: number; y: number }>();
+    const pointers = new Set<number>();
     let start: { x: number; y: number; t: number; region: number | null } | null = null;
-    let moved = false;
-    let multi = false;
+    let tap = false;
 
-    const local = (e: PointerEvent) => {
-      const r = svg.getBoundingClientRect();
-      return { x: e.clientX - r.left, y: e.clientY - r.top };
-    };
     const down = (e: PointerEvent) => {
-      touched();
-      stopAnim(true);
       svg.setPointerCapture(e.pointerId);
-      const p = local(e);
-      pointers.set(e.pointerId, p);
+      pointers.add(e.pointerId);
       if (pointers.size === 1) {
         const el = (e.target as Element).closest('[data-region]');
-        start = { ...p, t: performance.now(), region: el ? Number(el.getAttribute('data-region')) : null };
-        moved = false;
-        multi = false;
-      } else multi = true;
+        start = { x: e.clientX, y: e.clientY, t: performance.now(), region: el ? Number(el.getAttribute('data-region')) : null };
+        tap = true;
+      } else tap = false;
     };
     const move = (e: PointerEvent) => {
-      const prev = pointers.get(e.pointerId);
-      if (!prev) return;
-      const p = local(e);
-      if (pointers.size === 1) {
-        if (start && Math.hypot(p.x - start.x, p.y - start.y) > 9) moved = true;
-        if (moved) {
-          restore.current = null;
-          view.current.x += p.x - prev.x;
-          view.current.y += p.y - prev.y;
-          clamp();
-          apply();
-        }
-        pointers.set(e.pointerId, p);
-      } else if (pointers.size === 2) {
-        // deux doigts : la carte suit leur milieu, sans changer d'échelle
-        const [aId, bId] = [...pointers.keys()];
-        const a0 = pointers.get(aId!)!;
-        const b0 = pointers.get(bId!)!;
-        pointers.set(e.pointerId, p);
-        const a1 = pointers.get(aId!)!;
-        const b1 = pointers.get(bId!)!;
-        restore.current = null;
-        view.current.x += (a1.x + b1.x - a0.x - b0.x) / 2;
-        view.current.y += (a1.y + b1.y - a0.y - b0.y) / 2;
-        clamp();
-        apply();
-        moved = true;
-      }
+      if (start && pointers.has(e.pointerId) && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 9) tap = false;
     };
     const up = (e: PointerEvent) => {
-      if (!pointers.has(e.pointerId)) return;
-      pointers.delete(e.pointerId);
+      if (!pointers.delete(e.pointerId)) return;
       if (pointers.size === 0) {
-        if (start && !moved && !multi && performance.now() - start.t < 700) {
+        if (start && tap && performance.now() - start.t < 700) {
           // le « click » qui suit ce toucher tomberait sur la feuille qui s'ouvre sous le doigt : on l'avale
           swallowNextClick();
           onTapRef.current(start.region);
@@ -347,82 +197,21 @@ export function MapView(props: Props) {
         start = null;
       }
     };
+    const cancel = (e: PointerEvent) => {
+      tap = false;
+      up(e);
+    };
     svg.addEventListener('pointerdown', down);
     svg.addEventListener('pointermove', move);
     svg.addEventListener('pointerup', up);
-    svg.addEventListener('pointercancel', up);
+    svg.addEventListener('pointercancel', cancel);
     return () => {
       svg.removeEventListener('pointerdown', down);
       svg.removeEventListener('pointermove', move);
       svg.removeEventListener('pointerup', up);
-      svg.removeEventListener('pointercancel', up);
+      svg.removeEventListener('pointercancel', cancel);
     };
   }, []);
-
-  /** Un toucher ou un glisser suspendent la caméra de la lecture. */
-  const touched = () => {
-    forced.current = false;
-    setHeld(true);
-    if (holdTimer.current) clearTimeout(holdTimer.current);
-    holdTimer.current = setTimeout(() => setHeld(false), HOLD_MS);
-  };
-  useEffect(() => () => void (holdTimer.current && clearTimeout(holdTimer.current)), []);
-
-  /** Amène une région dans la partie visible de la carte (sans rien bouger si elle y est déjà), par panoramique seulement. */
-  const bringIntoView = (region: number, remember: boolean, margin = 60) => {
-    const def = map.regions[region];
-    if (!def) return;
-    const v = view.current;
-    const { w, h } = size.current;
-    const top = wrapRef.current?.getBoundingClientRect().top ?? 0;
-    const visibleW = Math.max(120, w - cover.right);
-    const visibleH = Math.max(120, Math.min(h, window.innerHeight - cover.bottom - top));
-    const sx = def.cx * v.k + v.x;
-    const sy = def.cy * v.k + v.y;
-    const inX = sx > margin && sx < visibleW - margin;
-    const inY = sy > margin && sy < visibleH - margin;
-    if (inX && inY) return;
-    // on ne bouge que l'axe nécessaire, sans jamais découvrir de vide autour de la carte
-    // (avec une feuille ouverte, la vue d'avant sera rétablie à la fermeture)
-    const target = {
-      k: v.k,
-      x: inX ? v.x : fitAxis(visibleW / 2 - def.cx * v.k, map.width * v.k, visibleW),
-      y: inY ? v.y : fitAxis(visibleH * 0.45 - def.cy * v.k, map.height * v.k, visibleH),
-    };
-    if (Math.abs(target.x - v.x) < 2 && Math.abs(target.y - v.y) < 2) return;
-    if (remember) restore.current ??= { ...v };
-    animateTo(target);
-  };
-
-  // Région ouverte dans la feuille : on la recentre, puis on revient à la vue d'avant à la fermeture
-  useEffect(() => {
-    if (focus) bringIntoView(focus.region, true);
-  }, [focus?.n, cover.bottom, cover.right]);
-
-  // Action adverse en cours d'affichage : la caméra la suit, sauf si l'on vient de toucher la carte ou qu'une feuille est ouverte
-  useEffect(() => {
-    if (follow && !focus && !suspended) bringIntoView(follow.region, false, 40);
-  }, [follow?.n]);
-
-  // une feuille qui s'ouvre ou se ferme rend la main à la règle normale
-  useEffect(() => {
-    forced.current = false;
-  }, [s.sheet?.kind]);
-
-  const resumeFollow = () => {
-    forced.current = true;
-    setHeld(false);
-    if (holdTimer.current) clearTimeout(holdTimer.current);
-    const region = s.highlight?.region ?? follow?.region;
-    if (region !== undefined) bringIntoView(region, false, 40);
-  };
-
-  useEffect(() => {
-    if (!covered && restore.current) {
-      animateTo(restore.current);
-      restore.current = null;
-    }
-  }, [covered]);
 
   const base = useMemo(
     () =>
@@ -554,13 +343,6 @@ export function MapView(props: Props) {
           )}
         </g>
       </svg>
-      <div class="map-tools">
-        {live && suspended && (
-          <button class="tool follow" aria-label="Suivre l'action" onClick={resumeFollow}>
-            📍<span>Suivre</span>
-          </button>
-        )}
-      </div>
     </div>
   );
 }

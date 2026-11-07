@@ -111,8 +111,6 @@ export interface UIState {
   card: Playback | null;
   /** La file est vide depuis plus de GRACE_MS : la carte d'événement passe en attente (« réfléchit… »). */
   idle: boolean;
-  /** La caméra suit la région de la trame affichée. */
-  follow: { region: number; n: number } | null;
   highlight: Highlight | null;
   /** Début du tour d'un adversaire : ses régions clignotent une fois. */
   blink: { regions: number[]; color: string; key: number } | null;
@@ -132,8 +130,6 @@ export interface UIState {
   seen: Record<number, number>;
   /** Le dernier début de tour de ce téléphone déjà annoncé (« À vous ! »). */
   handoffKey: string | null;
-  /** Incrémenté pour demander à la carte de recentrer une région. */
-  focus: { region: number; n: number } | null;
 }
 
 const PREFS_KEY = 'smallmobile:prefs:v1';
@@ -150,13 +146,12 @@ function loadPrefs(): Pick<UIState, 'aiSpeed' | 'showCosts'> {
 }
 
 /** Champs de lecture remis à zéro quand on quitte ou change de partie. */
-const NO_PLAYBACK: Pick<UIState, 'playback' | 'card' | 'idle' | 'highlight' | 'blink' | 'follow' | 'ownPulse' | 'flash'> = {
+const NO_PLAYBACK: Pick<UIState, 'playback' | 'card' | 'idle' | 'highlight' | 'blink' | 'ownPulse' | 'flash'> = {
   playback: null,
   card: null,
   idle: false,
   highlight: null,
   blink: null,
-  follow: null,
   ownPulse: null,
   flash: null,
 };
@@ -172,7 +167,6 @@ let state: UIState = {
   podium: false,
   seen: {},
   handoffKey: null,
-  focus: null,
   ...loadPrefs(),
 };
 
@@ -566,8 +560,6 @@ function display(f: Frame) {
     }
     const color = f.actor !== null ? (f.game.players[f.actor]?.color ?? '#ffe066') : '#ffe066';
     const region = story.region;
-    const camera = region !== undefined && f.events.some((e) => e.kind === 'conquer' || e.kind === 'die' || e.kind === 'abandon');
-    if (camera) patch.follow = { region: region!, n: (state.follow?.n ?? 0) + 1 };
     const conquest = f.events.some((e) => e.kind === 'conquer');
     const turn = f.events[0]!;
     if (turn.kind === 'turn' && turn.player !== null && !(turn.race === 'ghouls' && f.game.races.ghouls?.declined)) {
@@ -911,14 +903,9 @@ export function checkHandoff() {
   else showFlash({ icon: '🔔', text: 'À vous !', color: p.color, tone: 'turn' });
 }
 
-/** Recentre la carte sur une région. */
-export function showRegion(region: number) {
-  setState({ follow: { region, n: (state.follow?.n ?? 0) + 1 } });
-}
-
 export function openRegion(region: number | null) {
   if (region === null) setState({ sheet: null });
-  else setState({ sheet: { kind: 'region', region }, focus: { region, n: (state.focus?.n ?? 0) + 1 } });
+  else setState({ sheet: { kind: 'region', region } });
 }
 
 // --- En ligne -------------------------------------------------------------------

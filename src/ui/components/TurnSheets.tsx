@@ -9,18 +9,17 @@ import { Consequences, Details, Lines, PlayerDot, Sheet } from './common';
 interface Base {
   g: GameState;
   onClose: () => void;
-  onHeight: (h: number) => void;
 }
 
 /** Déclin (irréversible) : 4 lignes au plus, le décompte dans Détails. */
-export function DeclineSheet({ g, onClose, onHeight }: Base) {
+export function DeclineSheet({ g, onClose }: Base) {
   const race = g.players[g.current]!.active!;
   const rs = raceOf(g, race);
   const brief = declineBrief(g);
   return (
     <Sheet
       onClose={onClose}
-      onHeight={onHeight}
+     
       size="standard"
       title={
         <span class="ell">
@@ -61,7 +60,7 @@ function peaceOptions(g: GameState) {
 }
 
 /** Fin du tour des Diplomates (imposer la paix) ou des Robustes (décliner après le décompte). */
-export function EndTurnSheet({ g, onClose, onHeight }: Base) {
+export function EndTurnSheet({ g, onClose }: Base) {
   const race = g.turn.army!;
   const rs = raceOf(g, race);
   const diplomat = !rs.declined && rs.power === 'diplomat';
@@ -75,7 +74,7 @@ export function EndTurnSheet({ g, onClose, onHeight }: Base) {
   return (
     <Sheet
       onClose={onClose}
-      onHeight={onHeight}
+     
       size="standard"
       title={diplomat ? `${POWERS.diplomat.icon} Imposer la paix à…` : '✓ Fin du tour'}
       footer={
