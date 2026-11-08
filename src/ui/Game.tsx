@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'preact/hooks';
 import { ActionBar } from './components/ActionBar';
 import { TabBar } from './components/TabBar';
 import { mySeat, TopBar } from './components/TopBar';
-import { DieOverlay, GameOverOverlay } from './components/Overlays';
+import { CoinOverlay, DieOverlay, GameOverOverlay } from './components/Overlays';
 import { PeopleSheet } from './components/PeopleSheet';
 import { RegionSheet } from './components/RegionSheet';
 import { LegendSheet, MenuSheet } from './components/MenuSheet';
@@ -69,6 +69,7 @@ export function GameScreen({ s }: { s: UIState }) {
 
   return (
     <div class="app">
+      {s.coin && <CoinOverlay key={s.coin.key} coin={s.coin} me={viewerSeat(s) !== null && g.players[viewerSeat(s)!]?.name === s.coin.name} />}
       <TopBar g={g} s={s} />
       <main class="main">
         <div class={`pane ${s.tab === 'map' ? '' : 'hidden'}`}>

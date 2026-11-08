@@ -2,7 +2,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { applyAction, RuleError } from '../engine/game';
 import { RACES } from '../engine/data';
 import { currentActor } from '../engine/rules';
-import type { Action, AiLevel, DieEvent, GameState, LogEntry, MapDef } from '../engine/types';
+import type { Action, AiLevel, DieEvent, GameState, LogEntry, MapDef, RaceId } from '../engine/types';
 import {
   DIE_ROLL_MS,
   FACTOR,
@@ -90,6 +90,11 @@ export interface Highlight {
   hit: boolean;
   /** Jetons que je perds (bulle « −N »). */
   loss: number;
+  /**
+   * Une de mes régions prise : `n` jetons tués s'y déchirent, `back` survivants s'envolent vers mon compteur
+   * de jetons en main (`ms` : durée de l'animation).
+   */
+  torn?: { race: RaceId; color: string; n: number; back: number; ms: number };
   key: number;
 }
 
@@ -103,9 +108,20 @@ export interface Flash {
   tone: 'turn' | 'hit';
 }
 
+/** Fin du tour d'un joueur : les pièces gagnées, dans une grande pièce au milieu de l'écran (CoinPop). */
+export interface CoinPop {
+  gain: number;
+  name: string;
+  color: string;
+  /** Durée d'affichage (ms), adaptée à la vitesse de lecture. */
+  ms: number;
+  key: number;
+}
+
 export interface UIState {
   /** État affiché (peut être en retard sur le serveur pendant la lecture du tour adverse). */
   game: GameState | null;
+  coin: CoinPop | null;
   playback: Playback | null;
   /** Dernière trame montrée : la carte d'événement la garde pendant l'attente de la suivante. */
   card: Playback | null;
@@ -146,7 +162,8 @@ function loadPrefs(): Pick<UIState, 'aiSpeed' | 'showCosts'> {
 }
 
 /** Champs de lecture remis à zéro quand on quitte ou change de partie. */
-const NO_PLAYBACK: Pick<UIState, 'playback' | 'card' | 'idle' | 'highlight' | 'blink' | 'ownPulse' | 'flash'> = {
+const NO_PLAYBACK: Pick<UIState, 'playback' | 'card' | 'idle' | 'highlight' | 'blink' | 'ownPulse' | 'flash' | 'coin'> = {
+  coin: null,
   playback: null,
   card: null,
   idle: false,
@@ -381,6 +398,8 @@ function frameAfter(ms: number, fn: () => void) {
 function clearFrameTimers() {
   for (const t of timers) if (t.h) clearTimeout(t.h);
   timers = [];
+  // l'attente de la pièce de score est un de ces minuteurs : elle disparaît avec eux
+  coinWaiting = false;
 }
 
 function playbackSpeed(): AiSpeed {
@@ -404,7 +423,7 @@ function turnOf(g: GameState): string {
 function pushFrame(f: Frame) {
   frames.push(f);
   if (holding) return;
-  if (!current) showNextFrame();
+  if (!current && !coinWaiting) showNextFrame();
   else if (state.playback) setState({ playback: { ...state.playback, backlog: backlog() } });
 }
 
@@ -496,6 +515,17 @@ function showNextFrame() {
   if (current && !current.header && state.game !== current.game) setState({ game: current.game });
   current = null;
   if (paused) return;
+  // la pièce de score d'une fin de tour reste jusqu'au bout : le tour suivant attend qu'elle ait disparu
+  const wait = coinUntil - Date.now();
+  if (wait > 0 && state.coin) {
+    coinWaiting = true;
+    frameAfter(wait, () => {
+      coinWaiting = false;
+      showNextFrame();
+    });
+    return;
+  }
+  coinWaiting = false;
   for (;;) {
     const f = frames.shift();
     if (!f) return endPlayback();
@@ -567,9 +597,25 @@ function display(f: Frame) {
       const regions = f.game.regions.flatMap((r, i) => (r.race && r.race !== 'lost' && f.game.races[r.race]?.owner === turn.player ? [i] : []));
       if (regions.length) patch.blink = { regions, color, key: id };
     }
+    // une de mes régions prise : mes jetons tués se déchirent, les survivants (tous, pour les Elfes) reviennent
+    // dans ma main (le peuple d'avant la conquête, à ma couleur ; les jetons d'avant : l'état encore affiché)
+    const taken = f.events.find((e) => e.kind === 'conquer' && viewer !== null && e.victim === viewer && e.player !== viewer);
+    const lost = hit && conquest ? (story.loss ?? 0) : 0;
+    const before = region !== undefined ? state.game?.regions[region] : undefined;
+    const back = taken && before && before.race === taken.victimRace ? Math.max(0, before.tokens - lost) : 0;
+    const torn =
+      region !== undefined && taken?.victimRace && taken.victimRace !== 'lost' && (lost > 0 || back > 0) && viewer !== null
+        ? {
+            race: taken.victimRace,
+            color: f.game.players[viewer]?.color ?? '#888',
+            n: Math.min(3, lost),
+            back: Math.min(5, back),
+            ms: Math.round(Math.max(450, Math.min(1100, (story.dieRoll ? ms / 2 : ms) * 0.85))),
+          }
+        : undefined;
     const after: Partial<UIState> = {
       game: f.game,
-      highlight: region !== undefined ? { region, color, hit: hit && conquest, loss: hit && conquest ? (story.loss ?? 0) : 0, key: id } : null,
+      highlight: region !== undefined ? { region, color, hit: hit && conquest, loss: lost, torn, key: id } : null,
     };
     if (story.dieRoll) {
       // phase 1 : le dé roule sur l'état d'avant ; phase 2 : verdict et nouvel état
@@ -587,6 +633,9 @@ function display(f: Frame) {
     }
   }
   if (f.header) patch.highlight = null;
+  // fin du tour d'un adversaire : sa pièce de score au milieu de l'écran (même durée pour tous, quelle que soit la vitesse)
+  const scored = !f.header ? f.events.find((e) => e.kind === 'score' && e.gain !== undefined && e.player !== null) : undefined;
+  if (scored) patch.coin = coinOf(f.game, scored, COIN_MS);
   const pb: Playback = { id, kind, events: f.events, ms, backlog: backlog(), actor: f.actor, story, rolling, header: f.header, turn: turnOf(f.game) };
   patch.playback = pb;
   if (!f.header) patch.card = pb;
@@ -635,9 +684,12 @@ function headerFrame(text: string): Frame {
   return { game: g, events: [], seq: -1, actor: null, header: text };
 }
 
-/** Passe à la trame suivante (toucher la carte d'événement). */
+/** Passe à la trame suivante (toucher la carte d'événement) : sans attendre la fin de la pièce de score. */
 export function nextFrame() {
-  if (current) showNextFrame();
+  if (!current && !coinWaiting) return;
+  coinUntil = 0;
+  if (state.coin) setState({ coin: null });
+  showNextFrame();
 }
 
 /** Saute la lecture : affiche directement le dernier état connu et rend la main. */
@@ -645,7 +697,8 @@ export function skipPlayback() {
   const last = [...frames].reverse().find((f) => !f.header)?.game ?? current?.game ?? null;
   resetPlayback();
   // la dernière carte montrée ne correspond plus à la carte de jeu : on n'en garde rien
-  const patch: Partial<UIState> = { playback: null, highlight: null, card: null };
+  coinUntil = 0;
+  const patch: Partial<UIState> = { playback: null, highlight: null, card: null, coin: null };
   if (last && last !== state.game) patch.game = last;
   if (state.overlay?.kind === 'die' && state.overlay.auto) patch.overlay = null;
   setState(patch);
@@ -804,10 +857,35 @@ function actOnline(a: Action): boolean {
   }
   if (!conn().send({ t: 'action', id, action: a })) return lostConnection();
   // affichage immédiat, confirmé (ou corrigé) par le serveur ensuite
-  setState({ game: next, online: { ...o, pending: [...o.pending, { id, action: a }] }, ...sheetAfter(a), ...pulseAfter(g, next) });
+  // ma fin de tour : ma pièce de score
+  const scored = newEvents(g, next).find((e) => e.kind === 'score' && e.gain !== undefined && e.player === o.seat);
+  setState({
+    game: next,
+    online: { ...o, pending: [...o.pending, { id, action: a }] },
+    ...sheetAfter(a),
+    ...pulseAfter(g, next),
+    ...(scored ? { coin: coinOf(next, scored, COIN_MS) } : {}),
+  });
   feedback(a);
   if (!state.overlay) checkHandoff();
   return true;
+}
+
+let coinKey = 0;
+/** Durée de la pièce de score (ms), la même pour tous les joueurs. */
+const COIN_MS = 1800;
+/** Fin d'affichage de la pièce de score (horloge) ; la lecture attend la fin de la pièce avant de continuer. */
+let coinUntil = 0;
+let coinWaiting = false;
+function coinOf(g: GameState, e: LogEntry, ms: number): CoinPop {
+  coinUntil = Date.now() + ms;
+  const p = g.players[e.player!];
+  return { gain: e.gain ?? 0, name: p?.name ?? '', color: p?.color ?? '#f2b134', ms, key: ++coinKey };
+}
+
+/** La pièce de score a fini de s'afficher (sans effacer une pièce plus récente). */
+export function clearCoin(key: number) {
+  if (state.coin?.key === key) setState({ coin: null });
 }
 
 function lostConnection(): false {

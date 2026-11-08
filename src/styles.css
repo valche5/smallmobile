@@ -1,3 +1,4 @@
+@import './css/coin-font.css';
 @import './css/chrome.css';
 @import './css/decisions.css';
 @import './css/playback.css';
@@ -19,8 +20,9 @@
   --bad: #c93434;
   --alt: #7a3fc4;
   --shadow: 0 6px 24px rgba(40, 28, 10, 0.2);
-  --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --emoji: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
+  /* 'Piece SmallMobile' ne contient que 💰, dessiné comme la pièce de score (css/coin-font.css) */
+  --font: 'Piece SmallMobile', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --emoji: 'Piece SmallMobile', 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
 }
 
 * {
@@ -915,18 +917,28 @@ button {
   display: block;
   filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.5));
 }
-.die.rolling svg {
-  animation: roll 0.65s ease-out;
+/* le dé tourne sur lui-même en faisant défiler ses faces (Overlays.tsx, rotation pilotée image par image),
+   puis rebondit sur le résultat */
+.die {
+  will-change: transform;
 }
-@keyframes roll {
+.die svg.land {
+  animation: die-land 0.45s cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+@keyframes die-land {
   0% {
-    transform: rotate(0) scale(0.4);
+    transform: scale(0.85) translateY(-10px);
   }
   60% {
-    transform: rotate(520deg) scale(1.1);
+    transform: scale(1.15);
   }
   100% {
-    transform: rotate(720deg) scale(1);
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .die svg {
+    animation: none !important;
   }
 }
 .die-result {

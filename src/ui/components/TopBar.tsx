@@ -38,7 +38,10 @@ export function TopBar({ g, s }: { g: GameState; s: UIState }) {
   const over = g.phase === 'gameOver';
   const myTurn = !over && actor === me;
   const last = g.round === g.maxRounds;
-  const acting = myTurn && canAct(s) && g.phase !== 'pick' ? actingRace(g) : null;
+  // le peuple dont on compte les jetons : celui qui joue pendant mon tour, sinon mon peuple actif (même pendant le
+  // tour des autres, pour voir mes pertes)
+  const own = p.active && !g.races[p.active]?.declined ? p.active : null;
+  const acting = myTurn && canAct(s) && g.phase !== 'pick' ? actingRace(g) : own;
   const n = g.players.length;
   const single = n === 2;
   // tous les joueurs dans l'ordre du tour de jeu (le siège 0 joue en premier à chaque manche), moi à ma place ;
@@ -72,7 +75,7 @@ export function TopBar({ g, s }: { g: GameState; s: UIState }) {
         )}
         <div class="stats">
           {acting && (
-            <Counter key={`h${me}`} icon="🖐️" value={g.races[acting]?.hand ?? 0} total={inPlay(g, acting)} label="Jetons en main" />
+            <Counter key={`h${me}-${acting}`} icon="🖐️" value={g.races[acting]?.hand ?? 0} total={inPlay(g, acting)} label="Jetons en main" />
           )}
         </div>
         <button class="menu-btn" aria-label="Menu" onClick={() => setState({ sheet: { kind: 'menu' } })}>
@@ -108,16 +111,20 @@ function inPlay(g: GameState, race: RaceId): number {
  */
 function Counter({ icon, value, total, label }: { icon: string; value: number; total?: number; label: string }) {
   const prev = useRef(value);
+  const prevTotal = useRef(total);
   const [bubble, setBubble] = useState<{ id: number; d: number } | null>(null);
   useEffect(() => {
-    const d = value - prev.current;
+    // une perte (le total baisse) passe avant le mouvement des jetons entre la main et la carte
+    const lost = total !== undefined && prevTotal.current !== undefined ? total - prevTotal.current : 0;
+    const d = lost < 0 ? lost : value - prev.current;
     prev.current = value;
+    prevTotal.current = total;
     if (!d) return;
     const id = Math.random();
     setBubble({ id, d });
     const t = setTimeout(() => setBubble((b) => (b?.id === id ? null : b)), 1000);
     return () => clearTimeout(t);
-  }, [value]);
+  }, [value, total]);
   return (
     <div class="stat" title={label} aria-label={total === undefined ? `${label} : ${value}` : `${label} : ${value} sur ${total} en jeu`}>
       <span class="emo">{icon}</span>

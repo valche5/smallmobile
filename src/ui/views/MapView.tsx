@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { FEATURE_ICONS, RACES, TERRAINS } from '../../engine/data';
 import { TERRAIN_TEXTURES } from '../art';
 import { ownerOf } from '../../engine/rules';
-import type { GameState, Terrain } from '../../engine/types';
-import { canAct, useStore } from '../store';
+import type { GameState, RaceId, Terrain } from '../../engine/types';
+import { canAct, useStore, type Highlight } from '../store';
 import type { Mark, MarkKind } from './marks';
 
 interface Props {
@@ -334,6 +334,7 @@ export function MapView(props: Props) {
           {map.regions.map((r) => (
             <RegionMarks key={r.id} g={g} id={r.id} mark={marks.get(r.id)} s={markS} />
           ))}
+          {hl && hl.torn && hl.torn.n > 0 && <TornTokens key={`t${hl.key}`} at={map.regions[hl.region]!} torn={hl.torn} id={hl.key} />}
           {hl && hl.loss > 0 && (
             <g key={`b${hl.key}`} class="mk" style={{ transform: `translate(${map.regions[hl.region]!.cx}px, ${map.regions[hl.region]!.cy}px) scale(var(--s))` }}>
               <text class="loss-bubble" x={0} y={-20}>
@@ -343,7 +344,99 @@ export function MapView(props: Props) {
           )}
         </g>
       </svg>
+      {hl && hl.torn && hl.torn.back > 0 && (
+        <TokensHome key={`r${hl.key}`} gRef={gRef} at={map.regions[hl.region]!} torn={hl.torn} />
+      )}
     </div>
+  );
+}
+
+/**
+ * Mes jetons qui survivent à la perte d'une région (tous, pour les Elfes) : ils s'envolent de la région jusqu'à mon
+ * compteur de jetons en main, en haut de l'écran (après la déchirure des jetons tués, s'il y en a).
+ */
+function TokensHome({ gRef, at, torn }: { gRef: { current: SVGGElement | null }; at: { cx: number; cy: number }; torn: NonNullable<Highlight['torn']> }) {
+  useEffect(() => {
+    const g = gRef.current;
+    const ctm = g?.getScreenCTM();
+    if (!g || !ctm) return;
+    const from = new DOMPoint(at.cx, at.cy).matrixTransform(ctm);
+    const stat = document.querySelector('.topbar .stat');
+    const r = stat?.getBoundingClientRect();
+    const to = r ? { x: r.left + 10, y: r.top + r.height / 2 } : { x: window.innerWidth - 60, y: 22 };
+    const layer = document.createElement('div');
+    layer.className = 'tokens-home';
+    document.body.appendChild(layer);
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    // les jetons tués se déchirent d'abord : les survivants partent ensuite
+    const start = torn.n > 0 ? torn.ms * 0.35 : 0;
+    const fly = Math.max(380, torn.ms * 0.6);
+    const step = Math.min(110, (torn.ms * 0.4) / Math.max(1, torn.back));
+    for (let i = 0; i < torn.back; i++) {
+      const el = document.createElement('div');
+      el.className = 'token-fly';
+      el.style.background = torn.color;
+      el.textContent = RACES[torn.race].icon;
+      layer.appendChild(el);
+      const x0 = from.x + (i - (torn.back - 1) / 2) * 10;
+      // une courbe (le compteur est tout en haut : on ne monte jamais au-dessus de lui, hors de l'écran)
+      const midX = x0 + (to.x - x0) * 0.25;
+      const midY = to.y + (from.y - to.y) * 0.3;
+      el.animate(
+        [
+          { transform: `translate(${x0}px, ${from.y}px) translate(-50%, -50%) scale(1)`, opacity: 1 },
+          { transform: `translate(${midX}px, ${midY}px) translate(-50%, -50%) scale(1.1)`, opacity: 1, offset: 0.45 },
+          { transform: `translate(${to.x}px, ${to.y}px) translate(-50%, -50%) scale(0.45)`, opacity: 0.2 },
+        ],
+        { duration: reduced ? 1 : fly, delay: start + i * step, easing: 'ease-in-out', fill: 'both' },
+      );
+    }
+    // le vol va jusqu'au bout même si l'action suivante s'affiche déjà
+    setTimeout(() => layer.remove(), start + torn.back * step + fly + 100);
+  }, []);
+  return null;
+}
+
+/** Bord déchiré d'un jeton (de haut en bas), en unités des pastilles : la moitié gauche et la droite. */
+const TEAR = '1,-16 -3,-10 3,-4 -2,2 4,8 -1,13 2,16';
+const TEAR_LEFT = `-18,-18 1,-18 ${TEAR} 2,18 -18,18`;
+const TEAR_RIGHT = `1,-18 18,-18 18,18 2,18 ${TEAR.split(' ').reverse().join(' ')}`;
+
+/**
+ * Mes jetons tués quand un adversaire prend une de mes régions : chacun tremble, se déchire en deux et les
+ * moitiés tombent en s'effaçant, par-dessus le nouvel occupant (Highlight.torn).
+ */
+function TornTokens({ at, torn, id }: { at: { cx: number; cy: number }; torn: { race: RaceId; color: string; n: number; ms: number }; id: number }) {
+  const badge = (
+    <>
+      <circle r={13} fill={torn.color} stroke="#fff" stroke-width={2} />
+      <text y={4.5} class="emo" font-size={13}>
+        {RACES[torn.race].icon}
+      </text>
+    </>
+  );
+  const uid = `torn${Math.abs(id)}`;
+  return (
+    <g class="mk torn" style={{ transform: `translate(${at.cx}px, ${at.cy}px) scale(var(--s))`, '--torn-ms': `${torn.ms}ms` } as Record<string, string>}>
+      <defs>
+        <clipPath id={`${uid}l`}>
+          <polygon points={TEAR_LEFT} />
+        </clipPath>
+        <clipPath id={`${uid}r`}>
+          <polygon points={TEAR_RIGHT} />
+        </clipPath>
+      </defs>
+      {Array.from({ length: torn.n }, (_, i) => (
+        <g key={i} transform={`translate(${(i - (torn.n - 1) / 2) * 12} ${-i * 3})`}>
+          <g class="torn-l" style={{ animationDelay: `${i * 110}ms` }} clip-path={`url(#${uid}l)`}>
+            {badge}
+          </g>
+          <g class="torn-r" style={{ animationDelay: `${i * 110}ms` }} clip-path={`url(#${uid}r)`}>
+            {badge}
+          </g>
+        </g>
+      ))}
+    </g>
   );
 }
 
