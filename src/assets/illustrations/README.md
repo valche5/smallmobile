@@ -1,13 +1,17 @@
 # Illustrations mobiles
 
-Collection complète : les 14 peuples, les 20 pouvoirs et les 7 terrains.
+Collection du jeu de base et des trois extensions (Même pas peur, Maauuudits,
+Honneur aux Dames) : les 24 peuples, les 32 pouvoirs et les 7 terrains.
 Chaque terrain possède une icône pour la légende et les fiches ainsi qu'une
 texture pour la carte. Les pouvoirs Sylvestres, des Collines et des Marais
-partagent l'icône de leur terrain. La collection contient 38 icônes et
-7 textures ; le second lot ajoute 32 fichiers aux 13 du premier.
+partagent l'icône de leur terrain. Souterrains conserve l'emoji de la carte ;
+son ancienne illustration reste archivée ici. La collection contient 60 icônes
+et 7 textures ; les extensions ajoutent 10 portraits et 12 icônes de pouvoirs.
 
 Les illustrations sont générées avec l'outil intégré imagegen, une génération
 par sujet. Les prompts exacts sont enregistrés dans `prompts.json`.
+Les portraits des extensions reprennent les repères des scans officiels fournis
+(coiffes, ailes, masques, fiole, etc.) dans le style simplifié de la collection.
 Direction : silhouettes franches, contours foncés, aplats de couleur,
 fond transparent, aucun texte ni décor fin. Les fichiers livrés sont des
 WebP de 192 × 192 pixels avec transparence, pour un affichage de 20 à 42 px.
