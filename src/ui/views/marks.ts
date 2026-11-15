@@ -1,10 +1,11 @@
 import { foeThreat, lostRegions } from '../../engine/preview';
-import { actingRace, analyzeTarget } from '../../engine/rules';
+import { FEATURE_ICONS, POWERS } from '../../engine/data';
+import { actingRace, analyzeTarget, catapultShots } from '../../engine/rules';
 import type { GameState } from '../../engine/types';
 
 /**
  * Pastilles et marquages de la carte, calculés pour le joueur de ce téléphone (rendus par MapView).
- * - 'normal' | 'die' | 'special' : cible de ma conquête (pastille ⚔N, 🎲N%, 🐉1, 🔮) ;
+ * - 'normal' | 'die' | 'special' : cible de ma conquête (pastille ⚔N, 🎲N%, 🐉1, 🔮, ☄️N, 🤝N) ;
  * - 'threat' : une de mes régions qu'un ennemi peut prendre (redéploiement, défense) ;
  * - 'own' : une de mes régions, sans pastille ; 'none' : hors de portée (sans marque) ;
  * - 'plain' : rien à signaler pour la phase (seuls les drapeaux comme `lost` comptent).
@@ -28,6 +29,9 @@ export function computeMarks(g: GameState, pid: number | null, humanTurn: boolea
   const race = actingRace(g);
   const deploying = humanTurn && (g.phase === 'redeploy' || g.phase === 'defend');
   if (humanTurn && g.phase === 'conquest') {
+    // Catapultés : le tir le moins cher sur chaque cible
+    const shots = new Map<number, number>();
+    for (const x of catapultShots(g)) shots.set(x.region, Math.min(x.cost, shots.get(x.region) ?? Infinity));
     for (const def of g.map.regions) {
       if (g.regions[def.id]!.race === race) {
         marks.set(def.id, { kind: 'own' });
@@ -36,8 +40,12 @@ export function computeMarks(g: GameState, pid: number | null, humanTurn: boolea
       const t = analyzeTarget(g, def.id);
       if (t.kind === 'normal') marks.set(def.id, { kind: 'normal', label: `⚔${t.effective}` });
       else if (t.sorcery) marks.set(def.id, { kind: 'special', label: '🔮' });
-      else if (t.dragon) marks.set(def.id, { kind: 'special', label: '🐉1' });
+      else if (t.dragon) marks.set(def.id, { kind: 'special', label: `🐉${g.turn.army === 'kobolds' ? 2 : 1}` });
+      else if (shots.has(def.id)) marks.set(def.id, { kind: 'special', label: `${FEATURE_ICONS.catapult}${shots.get(def.id)}` });
+      else if (t.hire) marks.set(def.id, { kind: 'special', label: `${POWERS.mercenary.icon}${t.hired}` });
       else if (t.kind === 'die') marks.set(def.id, { kind: 'die', label: `🎲${Math.round(t.chance * 100)}%` });
+      // Gitanes : la région abandonnée ce tour ne se reprend pas
+      else if (g.turn.abandoned?.includes(def.id)) marks.set(def.id, { kind: 'none', label: '🚫' });
       else marks.set(def.id, { kind: 'none' });
     }
   } else if (deploying && pid !== null) {

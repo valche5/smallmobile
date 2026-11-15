@@ -381,7 +381,7 @@ pub fn chance(g: &Game, m: &Move) -> u64 {
 /// choix de peuple ; la recherche avec `market_late` le range aux choix de peuple suivants).
 pub fn market(g: &Game) -> u64 {
     g.state.market.iter().fold(1, |h: u64, c| {
-        (h ^ (c.race.index() * Power::COUNT + c.power.index()) as u64).wrapping_mul(0x0100_0000_01b3)
+        (h ^ (c.race.index() * Power::BASE_COUNT + c.power.index()) as u64).wrapping_mul(0x0100_0000_01b3)
     })
 }
 
@@ -501,4 +501,4 @@ pub fn describe(g: &Game, m: &Move) -> String {
 }
 
 const _: () = assert!(KEYS == 608 && GLOBAL_KEYS > FORCED as usize && STOUT + 1 < FORCED);
-const _: () = assert!(Race::COUNT == 14);
+const _: () = assert!(Race::BASE_COUNT == 14);

@@ -1137,7 +1137,15 @@ mod tests {
         seed: u64,
         every: usize,
     ) -> Vec<(Game<'_>, Knowledge)> {
-        let mut g = Game::create(map, lost, &vec![Level::Hard; n], rounds, seed as u32, &mut NoJournal);
+        let mut g = Game::create(
+            map,
+            lost,
+            &vec![Level::Hard; n],
+            rounds,
+            seed as u32,
+            smallmobile_kernel::Expansions::NONE,
+            &mut NoJournal,
+        );
         let (mut k, mut rng, mut out, mut step) = (Knowledge::default(), Rng::new(seed), Vec::new(), 0);
         while g.state.phase != Phase::GameOver {
             let legal = moves::legal(&g, &k);

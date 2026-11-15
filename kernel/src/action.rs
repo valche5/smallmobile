@@ -57,6 +57,27 @@ pub enum Action {
         stout: bool,
     },
     EndDefense,
+    // --- extensions ---
+    /// Catapultés : conquête de `region` par-dessus une région voisine de `from` et de `region`.
+    Catapult {
+        from: usize,
+        region: usize,
+    },
+    /// Mercenaires : conquête en payant 1 pièce (2 jetons de moins), ou, après un dé de renfort raté
+    /// qui réussirait ainsi, le choix de payer.
+    Hire {
+        region: usize,
+    },
+    /// Intrépides : reprendre ses jetons en main (un par région reste) et continuer à conquérir.
+    Regroup,
+    /// Farfadets : pose ou retire un Chaudron.
+    Cauldron {
+        region: usize,
+    },
+    /// Prêtresses : la région de leur Tour d'Ivoire quand elles passeront en déclin.
+    Tower {
+        region: usize,
+    },
 }
 
 /// Jetons voulus par région (les régions qui ne sont pas au peuple sont ignorées).
@@ -77,6 +98,7 @@ pub enum How {
     Die,
     Dragon,
     Sorcery,
+    Catapult,
 }
 
 /// Une ligne du décompte de fin de tour.
@@ -105,6 +127,31 @@ pub enum IncomeKind {
     Pillage,
     Fortresses,
     Wealthy,
+    // --- extensions ---
+    /// Gitanes : régions abandonnées ce tour.
+    Abandoned,
+    /// Prêtresses en déclin : jetons de la Tour d'Ivoire.
+    Tower,
+    Imperial,
+    Barricade,
+    PeaceLoving,
+}
+
+/// Pourquoi des pièces changent de main en cours de tour (extensions).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Payment {
+    /// Corrompus : l'attaquant paie le propriétaire de la région prise.
+    Bribe,
+    /// Voleurs : le peuple qui conquiert vole sa victime.
+    Theft,
+    /// Un Chaudron des Farfadets pris avec la région.
+    Cauldron,
+    /// Les Chaudrons restés en place, encaissés par les Farfadets au début de leur tour.
+    Cauldrons,
+    /// Historiens : peuples en déclin au choix, puis chaque passage en déclin.
+    Historian,
+    /// Mercenaires : 1 pièce payée pour une conquête.
+    Hire,
 }
 
 pub type Income = ArrayVec<IncomeLine, 16>;
@@ -188,6 +235,20 @@ pub enum Event {
         race: Race,
     },
     GameOver,
+    // --- extensions ---
+    /// Pygmées perdus : dé de renfort, autant de Pygmées reviennent en main (`tokens`).
+    PygmiesReturned {
+        player: usize,
+        value: i32,
+        tokens: i32,
+    },
+    /// Des pièces changent de main : de `from` à `to` (`None` : la banque).
+    Paid {
+        kind: Payment,
+        from: Option<usize>,
+        to: Option<usize>,
+        coins: i32,
+    },
 }
 
 /// Un événement daté : son numéro (`State::seq` après lui) et la manche en cours.

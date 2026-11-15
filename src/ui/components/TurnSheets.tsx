@@ -1,7 +1,7 @@
 import { useState } from 'preact/hooks';
-import { POWERS, RACES } from '../../engine/data';
-import { declineBrief, previewEndTurn } from '../../engine/preview';
-import { raceOf, scoreBreakdown } from '../../engine/rules';
+import { FEATURE_ICONS, POWERS, RACES } from '../../engine/data';
+import { cut, declineBrief, previewEndTurn, towerPreview } from '../../engine/preview';
+import { canChooseTower, raceOf, regionsOf, scoreBreakdown } from '../../engine/rules';
 import type { GameState } from '../../engine/types';
 import { act } from '../store';
 import { Consequences, Details, Lines, PlayerDot, Sheet } from './common';
@@ -37,6 +37,7 @@ export function DeclineSheet({ g, onClose }: Base) {
         </div>
       }
     >
+      <TowerChoice g={g} />
       <Consequences lines={brief.lines} />
       <Details>
         <ScoreTable lines={brief.score.lines} total={brief.score.total} />
@@ -109,10 +110,31 @@ export function EndTurnSheet({ g, onClose }: Base) {
               {POWERS.stout.icon} Décliner après le décompte <span class="muted">(nouveau peuple au prochain tour)</span>
             </span>
           </label>
-          {stout && <Consequences lines={previewEndTurn(g, { stout: true }).lines.filter((l) => l.icon === '🪦')} />}
+          {stout && <TowerChoice g={g} />}
+          {stout && <Consequences lines={previewEndTurn(g, { stout: true }).lines.filter((l) => l.icon === '🪦' || l.icon === FEATURE_ICONS.tower)} />}
         </>
       )}
     </Sheet>
+  );
+}
+
+/** Prêtresses : la région de la Tour d'Ivoire avant le déclin (celle retenue d'office est déjà cochée). */
+function TowerChoice({ g }: { g: GameState }) {
+  const tower = towerPreview(g);
+  if (!tower || canChooseTower(g)) return null;
+  const own = regionsOf(g, 'priestesses');
+  if (own.length < 2) return null;
+  return (
+    <div class="chips">
+      <span class="muted small">
+        {FEATURE_ICONS.tower} Tour d'Ivoire{tower.chosen ? '' : ' (proposée)'} :
+      </span>
+      {own.map((r) => (
+        <button key={r} class={`chip ${r === tower.region ? 'on' : ''}`} onClick={() => r !== tower.region && act({ type: 'tower', region: r })}>
+          {cut(g.map.regions[r]!.name, 14)}
+        </button>
+      ))}
+    </div>
   );
 }
 

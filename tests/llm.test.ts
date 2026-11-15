@@ -102,6 +102,45 @@ describe('parties pour un LLM', () => {
     expect(kept!.expert).toEqual(['test']);
   });
 
+  test('avec les extensions : prix réels, nouveaux coups proposés et acceptés, jamais d’Expert', async () => {
+    const expert = new FakeExpert();
+    const games = new LlmGames({ experts: new Map([[DEFAULT_EXPERT_LAB, expert]]), archive: null, dir: null });
+    expect((await rejected(games.create({ model: 'm', expansions: ['nope'] }))).status).toBe(400);
+    let v = await games.create({ model: 'claude-test', players: 3, seat: 0, seed: 9, expansions: ['beNotAfraid', 'cursed', 'grandDames'] });
+    expect(v.text).toContain('Extensions : Même pas peur');
+    expect(v.text).toContain('/llm.md?extensions=beNotAfraid,cursed,grandDames');
+    expect(games.game(v.id).players.map((p) => p.ai)).toEqual(['normal', 'difficile', 'difficile']);
+    // en tête du marché, une combinaison qui a des coups d'extension (Farfadets Mercenaires)
+    const g0 = games.game(v.id);
+    g0.raceDeck = g0.raceDeck.filter((r) => r !== 'leprechauns');
+    g0.powerDeck = g0.powerDeck.filter((p) => p !== 'mercenary');
+    g0.market = g0.market.filter((m) => m.race !== 'leprechauns' && m.power !== 'mercenary');
+    g0.market.unshift({ race: 'leprechauns', power: 'mercenary', coins: 0 });
+    g0.market.length = Math.min(g0.market.length, 6);
+    v = games.view(v.id);
+    // les coups d'extension, une fois par tour chacun (le choix de la Tour d'Ivoire se répète sans fin)
+    const NEW: Action['type'][] = ['catapult', 'hire', 'regroup', 'cauldron', 'tower'];
+    const seen = new Set<string>();
+    const played = new Set<string>();
+    let moves = 0;
+    while (!v.gameOver) {
+      const g = games.game(v.id);
+      for (const l of v.legal) {
+        expect(() => applyAction(g, l.action)).not.toThrow();
+        seen.add(l.action.type);
+      }
+      const turn = `${g.round}:${g.current}`;
+      const extra = v.legal.find((l) => NEW.includes(l.action.type) && !played.has(`${turn}:${l.action.type}`));
+      if (extra) played.add(`${turn}:${extra.action.type}`);
+      v = await games.act(v.id, extra?.action ?? choose(v));
+      expect(++moves).toBeLessThan(3000);
+    }
+    expect(expert.calls).toBe(0);
+    expect(games.game(v.id).expansions).toEqual(['beNotAfraid', 'cursed', 'grandDames']);
+    expect(seen.has('hire')).toBe(true);
+    expect(seen.has('cauldron')).toBe(true);
+  });
+
   test('le modèle est obligatoire ; le bilan attend la fin de la partie', async () => {
     const games = new LlmGames({ experts: new Map(), archive: null, dir: null });
     expect((await rejected(games.create({ players: 2 }))).status).toBe(400);
@@ -238,8 +277,17 @@ describe('parties pour un LLM', () => {
     expect(played.status).toBe(200);
     expect(await routes['/llm.md']().text()).toBe('règles');
 
-    const guide = llmRules(await Bun.file(new URL('../src/server/llm.md', import.meta.url)).text());
+    const template = await Bun.file(new URL('../src/server/llm.md', import.meta.url)).text();
+    const guide = llmRules(template);
     expect(guide).not.toContain('<!-- peuples et pouvoirs -->');
     for (const id of RACE_IDS) expect(guide).toContain(`**${RACES[id].name}**`);
+    // le guide d'une partie : le jeu de base et ses extensions seulement
+    const cursed = llmRules(template, ['cursed']);
+    expect(cursed).toContain('**Kobolds**');
+    expect(cursed).not.toContain('**Farfadets**');
+    expect(llmRules(template, [])).not.toContain('**Kobolds**');
+    const all = llmRoutes(games, (xs) => llmRules(template, xs));
+    expect(await all['/llm.md'](new Request('http://x/llm.md?extensions=grandDames')).text()).toContain('**Prêtresses**');
+    expect(await all['/llm.md'](new Request('http://x/llm.md?extensions=grandDames')).text()).not.toContain('**Kobolds**');
   });
 });

@@ -1,15 +1,28 @@
 import { describe, expect, test } from 'bun:test';
-import { applyAction, createGame } from '../src/engine/game';
+import { EXPANSION_IDS } from '../src/engine/data';
+import { applyAction, createGame, narrate } from '../src/engine/game';
+import { actionWords, readAction, readEvents, readState, stateWords } from '../src/engine/kernel';
+import { engine } from '../src/engine/engine';
 import { PRESETS } from '../src/engine/maps';
 import { previewConquest, previewDecline, previewEndTurn } from '../src/engine/preview';
-import { analyzeTarget, cloneState, defenseValue, regionsOf, scoreBreakdown } from '../src/engine/rules';
-import type { GameState, PowerId, RaceId } from '../src/engine/types';
+import {
+  analyzeTarget,
+  canChooseTower,
+  canRegroup,
+  catapultShots,
+  cloneState,
+  defenseValue,
+  regionsOf,
+  scoreBreakdown,
+} from '../src/engine/rules';
+import type { Action, GameState, PowerId, RaceId } from '../src/engine/types';
 
-function game(n = 2): GameState {
+function game(n = 2, expansions = false): GameState {
   return createGame({
     players: Array.from({ length: n }, (_, i) => ({ name: `J${i + 1}`, color: '#000', kind: 'human' as const, ai: 'normal' as const })),
     mapSeed: PRESETS[n]!.seed,
     seed: 7,
+    ...(expansions ? { expansions: [...EXPANSION_IDS] } : {}),
   });
 }
 
@@ -318,5 +331,119 @@ describe('pouvoirs et peuples', () => {
     const gain = scoreBreakdown(after, 0).total - before;
     expect(pv.lines.some((l) => l.text.startsWith(`+${gain} pièce`))).toBe(true);
     expect(gain).toBe(3); // région +1, Orques +1, Pillards +1
+  });
+});
+
+describe('extensions', () => {
+  test('les nouvelles actions passent par le format du noyau', () => {
+    const g = game(2, true);
+    const actions: Action[] = [
+      { type: 'catapult', from: 3, region: 7 },
+      { type: 'hire', region: 4 },
+      { type: 'regroup' },
+      { type: 'cauldron', region: 5 },
+      { type: 'tower', region: 6 },
+    ];
+    for (const a of actions) expect(readAction(actionWords(a, g.regions.length), g)).toEqual(a);
+  });
+
+  test("l'état des extensions fait l'aller-retour par le noyau", () => {
+    // 39 régions : les régions abandonnées s'écrivent sur deux mots
+    let g = pick(game(4, true), 'leprechauns', 'mercenary');
+    g = cloneState(g);
+    const [a, b] = g.map.regions.filter((r) => r.entry && !r.lostTribe && g.regions[r.id]!.race === null).map((r) => r.id);
+    g.regions[a!] = { ...g.regions[a!]!, race: 'leprechauns', tokens: 2, cauldron: true, catapult: true };
+    g.regions[b!] = { ...g.regions[b!]!, race: 'leprechauns', tokens: 2, ladies: true };
+    g.races.leprechauns = { ...g.races.leprechauns!, aside: 3, cauldrons: 12 };
+    g.market[0] = { ...g.market[0]!, tokens: 2 };
+    g.turn = { ...g.turn, catapultUsed: true, regrouped: true, abandoned: [1, 35], tower: a!, hire: b! };
+    const k = engine();
+    k.use(g);
+    expect(Array.from(k.stateWords())).toEqual(Array.from(stateWords(g)));
+    const back = readState(stateWords(g), g);
+    expect(back.regions[a!]).toMatchObject({ cauldron: true, catapult: true, ladies: false });
+    expect(back.races.leprechauns).toMatchObject({ aside: 3, cauldrons: 12 });
+    expect(back.market[0]!.tokens).toBe(2);
+    expect(back.turn).toMatchObject({ catapultUsed: true, regrouped: true, abandoned: [1, 35], tower: a, hire: b });
+  });
+
+  test('les nouveaux événements sont lus et racontés', () => {
+    const g = game(2, true);
+    const words = [7, 9, 1, 14, 1, 3, 2, 8, 10, 1, 15, 0, 0, 1, 1, 8, 10, 1, 15, 2, -1, 0, 1];
+    const events = readEvents(Uint32Array.from(words.map((w) => w >>> 0)));
+    expect(events).toEqual([
+      { seq: 9, round: 1, type: 'pygmies', player: 1, value: 3, tokens: 2 },
+      { seq: 10, round: 1, type: 'paid', kind: 'bribe', from: 0, to: 1, coins: 1 },
+      { seq: 10, round: 1, type: 'paid', kind: 'cauldron', from: null, to: 0, coins: 1 },
+    ]);
+    const log = narrate(g, events);
+    expect(log.length).toBe(3);
+    expect(log[1]!.text).toContain('Corrompus');
+    expect(log[2]!.short).toBe('+1 💰 (Chaudron des Farfadets pris)');
+  });
+
+  test('Kobolds : une conquête coûte au moins 2', () => {
+    let g = pick(game(2, true), 'kobolds', 'commando');
+    const r = entryRegion(g);
+    const t = analyzeTarget(g, r);
+    expect(t.cost).toBe(2);
+    expect(t.parts.some((p) => p.label === 'Minimum 2 jetons (Kobolds)')).toBe(true);
+    g = applyAction(g, { type: 'conquer', region: r });
+    expect(g.regions[r]!.tokens).toBe(2);
+  });
+
+  test('Barbares : pas de redéploiement, les jetons restés en main attendent le prochain tour', () => {
+    let g = pick(game(2, true), 'barbarians', 'alchemist');
+    g = applyAction(g, { type: 'conquer', region: entryRegion(g) });
+    const hand = g.races.barbarians!.hand;
+    g = applyAction(g, { type: 'endConquest' });
+    expect(g.races.barbarians!).toMatchObject({ hand: 0, aside: hand });
+    expect(() => applyAction(g, { type: 'autoDeploy', all: true })).toThrow('ne redéploie pas');
+    g = applyAction(g, { type: 'endTurn' });
+    expect(g.current).toBe(1);
+  });
+
+  test('Farfadets : Chaudrons posés au redéploiement', () => {
+    let g = pick(game(2, true), 'leprechauns', 'alchemist');
+    const r = entryRegion(g);
+    g = applyAction(g, { type: 'conquer', region: r });
+    g = applyAction(g, { type: 'endConquest' });
+    g = applyAction(g, { type: 'cauldron', region: r });
+    expect(g.regions[r]!.cauldron).toBe(true);
+    expect(g.races.leprechauns!.cauldrons).toBe(15);
+  });
+
+  test('Mercenaires : 1 pièce pour 2 jetons de moins', () => {
+    let g = pick(game(2, true), 'humans', 'mercenary');
+    const r = entryRegion(g);
+    const t = analyzeTarget(g, r);
+    expect(t).toMatchObject({ cost: 2, hire: true, hired: 1, hireReason: null });
+    const coins = g.players[0]!.coins;
+    g = applyAction(g, { type: 'hire', region: r });
+    expect(g.players[0]!.coins).toBe(coins - 1);
+    expect(g.regions[r]!.tokens).toBe(1);
+    expect(g.log.some((l) => l.text.includes('Mercenaires'))).toBe(true);
+  });
+
+  test('Catapultés : un tir par-dessus une région, qui protège la région de tir', () => {
+    let g = pick(game(2, true), 'humans', 'catapult');
+    g = applyAction(g, { type: 'conquer', region: entryRegion(g) });
+    const shots = catapultShots(g);
+    expect(shots.length).toBeGreaterThan(0);
+    const { from, region, cost } = shots[0]!;
+    expect(g.map.regions[from]!.adj).not.toContain(region);
+    g = applyAction(g, { type: 'catapult', from, region });
+    expect(g.regions[region]!.tokens).toBe(cost);
+    expect(g.regions[from]!.catapult).toBe(true);
+    expect(g.log.at(-1)!.how).toBe('catapult');
+    expect(catapultShots(g)).toEqual([]);
+  });
+
+  test('Intrépides : reprendre ses jetons une fois par tour', () => {
+    let g = pick(game(2, true), 'humans', 'marauding');
+    expect(canRegroup(g)).toBeNull();
+    g = applyAction(g, { type: 'regroup' });
+    expect(canRegroup(g)).toContain('déjà repris');
+    expect(canChooseTower(g)).toBe('Votre peuple actif ne possède pas ce pouvoir.');
   });
 });

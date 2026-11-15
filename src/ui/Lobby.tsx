@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { AI_LEVELS, PLAYER_COLORS } from '../engine/data';
+import { PLAYER_COLORS } from '../engine/data';
 import { otherMap, PRESETS } from '../engine/maps';
 import { EXPERT_LABS } from '../shared/experts';
+import type { ExpansionId } from '../engine/types';
+import { ExpansionChoice, LevelChoice, toggleExpansion } from './components/Expansions';
 import { MapPreview } from './components/MapPreview';
 import { QrCode } from './components/QrCode';
 import { saveMe } from './me';
@@ -49,6 +51,16 @@ function Room({ s }: { s: UIState }) {
   const [name, setName] = useState(mySeat.name);
   const nameTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [confirmLeave, setConfirmLeave] = useState(false);
+  // extensions : ce que l'hôte vient de cocher, en attendant la réponse du serveur (deux touchers rapprochés)
+  const [asked, setAsked] = useState<ExpansionId[] | null>(null);
+  const shared = room.expansions ?? [];
+  useEffect(() => setAsked(null), [shared.join()]);
+  const expansions = asked ?? shared;
+  const toggle = (x: ExpansionId, on: boolean) => {
+    const next = toggleExpansion(expansions, x, on);
+    setAsked(next);
+    onlineSend({ t: 'lobby', expansions: next });
+  };
 
   const sendName = (v: string) => {
     setName(v);
@@ -168,13 +180,7 @@ function Room({ s }: { s: UIState }) {
             {room.size > 2 && (
               <div class="extra-ai">
                 <div class="small">Niveau des IA qui complètent la table :</div>
-                <div class="seg">
-                  {AI_LEVELS.map((l) => (
-                    <button key={l.id} class={room.aiLevel === l.id ? 'on' : ''} onClick={() => onlineSend({ t: 'lobby', aiLevel: l.id })}>
-                      {l.label}
-                    </button>
-                  ))}
-                </div>
+                <LevelChoice level={room.aiLevel} expansions={room.expansions ?? []} onPick={(l) => onlineSend({ t: 'lobby', aiLevel: l })} />
                 {room.aiLevel === 'expert' && EXPERT_LABS.length > 1 && (
                   <div class="seg">
                     {EXPERT_LABS.map((l) => (
@@ -204,6 +210,13 @@ function Room({ s }: { s: UIState }) {
             </>
           )}
         </MapPreview>
+      </section>
+
+      <section class="card">
+        <h2>Extensions</h2>
+        {/* l'hôte les coche ; les autres voient le réglage en direct */}
+        <ExpansionChoice value={expansions} onToggle={host ? toggle : undefined} />
+        {!host && <p class="small muted">L'hôte choisit les extensions.</p>}
       </section>
 
       {host ? (

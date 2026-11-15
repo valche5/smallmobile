@@ -35,6 +35,14 @@ impl Table {
     /// Une partie neuve. Le niveau des places ne sert qu'aux IA du jeu.
     pub fn game(&self, seed: u32) -> Game<'_> {
         let levels = vec![Level::Hard; self.players];
-        Game::create(&self.map, self.lost, &levels, self.rounds, seed, &mut NoJournal)
+        Game::create(
+            &self.map,
+            self.lost,
+            &levels,
+            self.rounds,
+            seed,
+            smallmobile_kernel::Expansions::NONE,
+            &mut NoJournal,
+        )
     }
 }

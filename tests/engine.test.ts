@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { aiAction } from '../src/engine/ai';
-import { RACES, RACE_IDS } from '../src/engine/data';
+import { EXPANSION_IDS, POWER_IDS, RACES, RACE_IDS, powersIn, racesIn } from '../src/engine/data';
 import { applyAction, createGame, type PlayerSetup } from '../src/engine/game';
+import { engine } from '../src/engine/engine';
+import { readState, stateWords } from '../src/engine/kernel';
 import { getMap, PRESETS } from '../src/engine/maps';
 import {
   allTargets,
@@ -32,7 +34,7 @@ function checkInvariants(g: GameState) {
   g.regions.forEach((r, i) => {
     if (r.race === null) {
       expect(r.tokens).toBe(0);
-      expect(r.lair || r.fortress || r.hero || r.dragon || r.hole || r.camps > 0).toBe(false);
+      expect(r.lair || r.fortress || r.hero || r.dragon || r.hole || r.camps > 0 || !!r.catapult || !!r.cauldron || !!r.ladies).toBe(false);
     } else {
       expect(r.tokens).toBeGreaterThanOrEqual(1);
       if (r.race !== 'lost') {
@@ -48,7 +50,10 @@ function checkInvariants(g: GameState) {
   });
   for (const [race, rs] of Object.entries(g.races)) {
     expect(rs!.hand).toBeGreaterThanOrEqual(0);
-    expect(tokensOnBoard(g, race as RaceId) + rs!.hand).toBeLessThanOrEqual(RACES[race as RaceId].max);
+    // de la Horde : 2 jetons de plus tant que le peuple est actif ; Barbares et Fées : jetons hors du plateau
+    const box = RACES[race as RaceId].max + (rs!.power === 'hordes' && !rs!.declined ? 2 : 0);
+    expect(rs!.aside ?? 0).toBeGreaterThanOrEqual(0);
+    expect(tokensOnBoard(g, race as RaceId) + rs!.hand + (rs!.aside ?? 0)).toBeLessThanOrEqual(box);
     const p = g.players[rs!.owner]!;
     if (rs!.declined) expect(p.declined).toContain(race as RaceId);
     else expect(p.active).toBe(race as RaceId);
@@ -60,7 +65,7 @@ function checkInvariants(g: GameState) {
   }
   const all = [...g.raceDeck, ...g.market.map((m) => m.race), ...(Object.keys(g.races) as RaceId[])];
   expect(new Set(all).size).toBe(all.length);
-  expect(all.length).toBe(RACE_IDS.length);
+  expect(all.sort()).toEqual(racesIn(g.expansions).sort());
   expect(g.market.length).toBeLessThanOrEqual(6);
 }
 
@@ -107,6 +112,14 @@ describe('parties complètes IA contre IA', () => {
       }, 30000);
     }
   }
+  for (const n of [2, 3, 4, 5]) {
+    test(`${n} joueurs, toutes les extensions`, () => {
+      const g0 = createGame({ players: setup(n, ['normal', 'facile', 'difficile']), mapSeed: PRESETS[n]!.seed, seed: 11 * n, expansions: [...EXPANSION_IDS] });
+      const { g } = playOut(g0);
+      expect(g.phase).toBe('gameOver');
+      expect(g.expansions).toEqual(EXPANSION_IDS);
+    }, 60000);
+  }
   test('beaucoup de parties rapides (robustesse)', () => {
     for (let seed = 10; seed < 50; seed++) {
       const n = 2 + (seed % 4);
@@ -115,6 +128,36 @@ describe('parties complètes IA contre IA', () => {
       expect(g.phase).toBe('gameOver');
     }
   }, 120000);
+});
+
+describe('extensions', () => {
+  test('sans extension : les 14 peuples et 20 pouvoirs du jeu de base', () => {
+    const g = createGame({ players: setup(3), mapSeed: PRESETS[3]!.seed, seed: 5 });
+    expect(g.expansions).toEqual([]);
+    expect(g.record!.expansions).toBeUndefined();
+    const races = [...g.raceDeck, ...g.market.map((m) => m.race)].sort();
+    const powers = [...g.powerDeck, ...g.market.map((m) => m.power)].sort();
+    expect(races).toEqual(RACE_IDS.filter((id) => !RACES[id].expansion).sort());
+    expect(races.length).toBe(14);
+    expect(powers.length).toBe(20);
+  });
+
+  test('avec extensions : leurs peuples et pouvoirs dans les pioches, et un aller-retour par le noyau', () => {
+    const g = createGame({ players: setup(3), mapSeed: PRESETS[3]!.seed, seed: 5, expansions: ['cursed', 'grandDames'] });
+    expect(g.expansions).toEqual(['cursed', 'grandDames']);
+    expect(g.record!.expansions).toEqual(['cursed', 'grandDames']);
+    const races = [...g.raceDeck, ...g.market.map((m) => m.race)].sort();
+    const powers = [...g.powerDeck, ...g.market.map((m) => m.power)].sort();
+    expect(races).toEqual(racesIn(['cursed', 'grandDames']).sort());
+    expect(powers).toEqual(powersIn(['cursed', 'grandDames']).sort());
+    expect(races).toContain('kobolds');
+    expect(races).not.toContain('barbarians');
+    expect(powers.length).toBe(POWER_IDS.length - 5);
+    const k = engine();
+    k.use(g);
+    expect(Array.from(k.stateWords())).toEqual(Array.from(stateWords(g)));
+    expect(readState(stateWords(g), g)).toEqual({ ...g });
+  });
 });
 
 function freshGame(): GameState {

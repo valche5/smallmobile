@@ -14,7 +14,18 @@ export type RaceId =
   | 'sorcerers'
   | 'tritons'
   | 'trolls'
-  | 'wizards';
+  | 'wizards'
+  // extensions (après le jeu de base, comme les numéros du noyau)
+  | 'barbarians'
+  | 'leprechauns'
+  | 'pixies'
+  | 'homunculi'
+  | 'pygmies'
+  | 'goblins'
+  | 'kobolds'
+  | 'whiteLadies'
+  | 'gypsies'
+  | 'priestesses';
 
 export type PowerId =
   | 'alchemist'
@@ -36,7 +47,23 @@ export type PowerId =
   | 'stout'
   | 'swamp'
   | 'underworld'
-  | 'wealthy';
+  | 'wealthy'
+  // extensions
+  | 'catapult'
+  | 'corrupt'
+  | 'imperial'
+  | 'mercenary'
+  | 'barricade'
+  | 'hordes'
+  | 'cursed'
+  | 'marauding'
+  | 'ransacking'
+  | 'were'
+  | 'historian'
+  | 'peaceLoving';
+
+/** Les extensions, dans l'ordre du noyau (`Expansion`) : Même pas peur, Maauuudits, Honneur aux Dames. */
+export type ExpansionId = 'beNotAfraid' | 'cursed' | 'grandDames';
 
 /** `expert` : l'IA du labo (recherche guidée par un réseau), jouée par le serveur. */
 export type AiLevel = 'facile' | 'normal' | 'difficile' | 'expert';
@@ -82,6 +109,12 @@ export interface RegionState {
   hero: boolean;
   dragon: boolean;
   hole: boolean;
+  /** Extensions (absents des anciennes sauvegardes : faux). La Catapulte : imprenable. */
+  catapult?: boolean;
+  /** Un Chaudron des Farfadets. */
+  cauldron?: boolean;
+  /** Région des Dames Blanches en déclin : imprenable. */
+  ladies?: boolean;
 }
 
 export interface RaceState {
@@ -93,6 +126,10 @@ export interface RaceState {
   hand: number;
   holesPlaced: number;
   pickedRound: number;
+  /** Jetons hors du plateau jusqu'au prochain tour du peuple (Barbares, Fées). Absent : 0. */
+  aside?: number;
+  /** Chaudrons des Farfadets pas encore posés. Absent : 0. */
+  cauldrons?: number;
 }
 
 export interface Player {
@@ -112,6 +149,8 @@ export interface ComboSlot {
   race: RaceId;
   power: PowerId;
   coins: number;
+  /** Homoncules ajoutés sur la combinaison (absent : 0). */
+  tokens?: number;
 }
 
 export type Phase = 'pick' | 'conquest' | 'redeploy' | 'defend' | 'gameOver';
@@ -137,6 +176,17 @@ export interface TurnState {
   amazonBonus: number;
   /** Jetons ramassés en début de tour, par région (pour restaurer les Goules si elles passent en déclin). */
   readied: Record<number, number>;
+  // --- extensions (absents des anciennes sauvegardes) ---
+  /** La Catapulte a tiré ce tour. */
+  catapultUsed?: boolean;
+  /** Les Intrépides ont repris leurs jetons ce tour. */
+  regrouped?: boolean;
+  /** Régions abandonnées par les Gitanes ce tour. */
+  abandoned?: number[];
+  /** Tour d'Ivoire choisie par les Prêtresses pour leur déclin. */
+  tower?: number | null;
+  /** Mercenaires : dé raté sur cette région, en attente du choix (payer 1 pièce ou renoncer). */
+  hire?: number | null;
 }
 
 export interface DefenseTask {
@@ -176,7 +226,7 @@ export interface LogEntry {
   /** Joueur qui a subi l'action, pour les récapitulatifs. */
   victim?: number;
   /** Données structurées, pour raconter l'action sans analyser le texte (absentes des anciennes sauvegardes). */
-  how?: 'conquer' | 'dragon' | 'sorcery' | 'die';
+  how?: 'conquer' | 'dragon' | 'sorcery' | 'die' | 'catapult';
   /** Jetons posés (conquête), en main (turn), du peuple (pick). */
   tokens?: number;
   /** Jetons perdus par la victime (0 = Elfes ; tous = peuple en déclin). */
@@ -194,6 +244,10 @@ export interface LogEntry {
   die?: { value: number; need: number; success: boolean | null };
   /** Jamais montré en direct (Amazones rendues, Squelettes levés, fin des Goules). */
   quiet?: boolean;
+  /** Extensions : des pièces changent de main (`from` / `to` null : la banque). */
+  pay?: { kind: 'bribe' | 'theft' | 'cauldron' | 'cauldrons' | 'historian' | 'hire'; from: number | null; to: number | null; coins: number };
+  /** Pygmées perdus : la valeur du dé de renfort (`tokens` : ceux qui reviennent). */
+  roll?: number;
 }
 
 export interface DieEvent {
@@ -209,6 +263,8 @@ export interface DieEvent {
 export interface GameState {
   version: 1;
   map: MapDef;
+  /** Extensions jouées (absent dans les anciennes sauvegardes : jeu de base). */
+  expansions?: ExpansionId[];
   players: Player[];
   races: Partial<Record<RaceId, RaceState>>;
   regions: RegionState[];
@@ -239,6 +295,8 @@ export interface GameState {
 export interface GameRecord {
   mapSeed: number;
   seed: number;
+  /** Extensions jouées (absent : jeu de base). */
+  expansions?: ExpansionId[];
   /** Début de la partie (ms depuis 1970). */
   startedAt: number;
   moves: RecordedMove[];
@@ -290,4 +348,15 @@ export type Action =
   | { type: 'hero'; region: number }
   | { type: 'endTurn'; peace?: number | null; stout?: boolean }
   | { type: 'endDefense' }
-  | { type: 'skipPick' };
+  | { type: 'skipPick' }
+  // --- extensions ---
+  /** Catapultés : conquête de `region` par-dessus une région voisine de `from` et de `region`. */
+  | { type: 'catapult'; from: number; region: number }
+  /** Mercenaires : conquête en payant 1 pièce (2 jetons de moins), ou payer après un dé raté (`turn.hire`). */
+  | { type: 'hire'; region: number }
+  /** Intrépides : reprendre ses jetons (un par région reste) et continuer à conquérir. */
+  | { type: 'regroup' }
+  /** Farfadets : pose ou retire un Chaudron. */
+  | { type: 'cauldron'; region: number }
+  /** Prêtresses : la Tour d'Ivoire de leur prochain déclin. */
+  | { type: 'tower'; region: number };

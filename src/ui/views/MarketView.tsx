@@ -1,5 +1,6 @@
 import { useState } from 'preact/hooks';
-import { POWERS, RACES } from '../../engine/data';
+import { POWERS, RACES, startingTokens } from '../../engine/data';
+import { pickCost } from '../../engine/rules';
 import type { GameState } from '../../engine/types';
 import { KIND_CLASS } from '../components/TopBar';
 import { ArtIcon } from '../components/ArtIcon';
@@ -22,18 +23,23 @@ export function MarketView({ g, human }: { g: GameState; human: boolean }) {
       </div>
       {help && (
         <p class="market-help" onClick={() => setHelp(false)}>
-          Le 1er peuple est gratuit. Plus bas, 1 💰 par peuple sauté ; vous ramassez les 💰 posées dessus.
+          Le 1er peuple est gratuit. Plus bas, 1 💰 par peuple sauté{g.market.some((m) => m.power === 'cursed') ? ' (3 💰 pour des Maudits)' : ''} ; vous
+          ramassez les 💰 posées dessus.
         </p>
       )}
       <div class="combo-list">
         {g.market.map((slot, i) => {
           const race = RACES[slot.race];
           const power = POWERS[slot.power];
-          const tokens = Math.min(race.tokens + power.tokens, race.max);
-          const net = slot.coins - i;
-          const affordable = p.coins >= i;
+          // jetons de départ : Homoncules ajoutés au marché, +2 de la Horde
+          const tokens = startingTokens(slot);
+          const cost = pickCost(g, i);
+          // Historiens : +1 pièce par peuple en déclin à la table, dès le choix
+          const historian = slot.power === 'historian' ? Object.values(g.races).filter((r) => r?.declined).length : 0;
+          const net = slot.coins + historian - cost;
+          const affordable = p.coins >= cost;
           const expanded = open === i;
-          const price = `${i === 0 ? 'Gratuit' : `−${i} 💰`}${slot.coins ? ` · +${slot.coins} posées` : ''}`;
+          const price = `${cost === 0 ? 'Gratuit' : `−${cost} 💰`}${slot.coins ? ` · +${slot.coins} posées` : ''}${historian ? ` · +${historian} ${POWERS.historian.icon}` : ''}`;
           return (
             <div key={`${slot.race}-${slot.power}`} class={`combo-card ${expanded ? 'open' : ''} ${canPick && !affordable ? 'locked' : ''}`}>
               <button class="combo-main" onClick={() => setOpen(expanded ? null : i)} aria-expanded={expanded}>
@@ -45,7 +51,9 @@ export function MarketView({ g, human }: { g: GameState; human: boolean }) {
                   <b class="combo-name">
                     {race.name} {power.name}
                   </b>
-                  <span class="combo-tokens">{tokens} jetons</span>
+                  <span class="combo-tokens">
+                    {tokens} jetons{slot.tokens ? ` (+${slot.tokens} ${race.icon})` : ''}
+                  </span>
                 </div>
                 <div class={`combo-eff k-${KIND_CLASS[race.kind]}`}>
                   <ArtIcon race={slot.race} size={20} /> {race.short}
@@ -69,7 +77,7 @@ export function MarketView({ g, human }: { g: GameState; human: boolean }) {
               </button>
               {canPick && (
                 <button class="btn primary take" disabled={!affordable} onClick={() => act({ type: 'pick', index: i })}>
-                  {!affordable ? `Il vous faut ${i} 💰` : net > 0 ? `Prendre · +${net} 💰` : net < 0 ? `Prendre · −${-net} 💰` : 'Prendre · gratuit'}
+                  {!affordable ? `Il vous faut ${cost} 💰` : net > 0 ? `Prendre · +${net} 💰` : net < 0 ? `Prendre · −${-net} 💰` : 'Prendre · gratuit'}
                 </button>
               )}
             </div>

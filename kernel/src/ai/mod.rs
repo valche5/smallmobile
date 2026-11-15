@@ -14,7 +14,7 @@ use crate::game::Game;
 use crate::ids::{Level, MAX_PLAYERS, MAX_REGIONS, Phase, Power, Race, Terrain};
 use crate::reason::Reason;
 use crate::rng::{self, Key};
-use crate::rules::{Target, TargetKind};
+use crate::rules::{Special, Target, TargetKind};
 use crate::state::{Combo, Occupant, Stage};
 use boost::Models;
 use features::{HOLD_DEFENSE, HOLD_TOKENS, HOLD_WORTH};
@@ -27,7 +27,8 @@ pub fn round_half_up(x: f64) -> f64 {
 }
 
 /// Ce que vaut chaque peuple et chaque pouvoir, en pièces finales par rapport à la moyenne, selon le
-/// moment : premier peuple, peuple suivant, fin de partie (4 tours ou moins). Mesuré par simulation.
+/// moment : premier peuple, peuple suivant, fin de partie (4 tours ou moins). Mesuré par simulation pour
+/// le jeu de base ; estimé d'après les fiches pour les extensions (pas encore mesuré par simulation).
 const RACE_VALUE: [[f64; 3]; Race::COUNT] = [
     [5.3, 10.1, 4.0],
     [-2.3, -5.0, -3.0],
@@ -43,6 +44,19 @@ const RACE_VALUE: [[f64; 3]; Race::COUNT] = [
     [3.5, 1.7, 1.2],
     [0.0, -1.8, -3.0],
     [-2.4, -2.4, 1.2],
+    // Même pas peur : Barbares, Farfadets, Fées, Homoncules, Pygmées
+    [2.0, 1.5, 1.0],
+    [0.0, 0.0, 1.0],
+    [2.0, 1.5, 0.5],
+    [-1.0, -1.0, -2.0],
+    [1.0, 0.5, 0.0],
+    // Maauuudits : Gobelins, Kobolds
+    [0.5, 1.0, 0.5],
+    [1.0, 0.0, -1.0],
+    // Honneur aux Dames : Dames Blanches, Gitanes, Prêtresses
+    [-4.0, -3.0, -1.0],
+    [-1.0, -1.0, 0.0],
+    [-2.0, -1.0, 1.0],
 ];
 
 const POWER_VALUE: [[f64; 3]; Power::COUNT] = [
@@ -66,6 +80,21 @@ const POWER_VALUE: [[f64; 3]; Power::COUNT] = [
     [-1.9, -1.6, 0.5],
     [1.6, 1.2, -0.2],
     [0.8, -0.5, 2.7],
+    // Même pas peur : Catapultés, Corrompus, Impériaux, Mercenaires, Retranchés
+    [1.0, 0.5, 0.0],
+    [0.0, 0.0, 0.5],
+    [1.0, 1.0, 1.5],
+    [1.0, 0.5, 0.5],
+    [-1.0, -0.5, 1.5],
+    // Maauuudits : de la Horde, Maudits, Intrépides, Voleurs, Garous
+    [1.5, 1.0, 0.0],
+    [-4.0, -4.0, -2.0],
+    [2.0, 1.0, 0.5],
+    [0.0, 0.5, 1.0],
+    [1.0, 0.5, 0.0],
+    // Honneur aux Dames : Historiens, Pacifistes
+    [0.0, 1.0, 1.5],
+    [-0.5, 0.0, 1.5],
 ];
 
 /// Amplitude du hasard ajouté aux décisions.
@@ -240,8 +269,8 @@ fn best_by<T: Copy>(items: impl IntoIterator<Item = T>, mut score: impl FnMut(T)
     best
 }
 
-/// Intérêt d'une combinaison du marché, en pièces : sa valeur propre, plus les pièces posées dessus,
-/// moins son prix.
+/// Intérêt d'une combinaison du marché, en pièces : sa valeur propre, plus les pièces posées dessus
+/// (et les Homoncules ajoutés), moins son prix.
 pub fn combo_value(g: &Game, slot: Combo, index: usize) -> f64 {
     let s = &g.state;
     let phase = if s.max_rounds - s.round + 1 > 4 {
@@ -254,7 +283,8 @@ pub fn combo_value(g: &Game, slot: Combo, index: usize) -> f64 {
         + POWER_VALUE[slot.power.index()][phase]
         + board_bonus(g, slot.race)
         + slot.coins as f64
-        - index as f64
+        + 0.5 * slot.tokens as f64
+        - g.pick_price(index) as f64
 }
 
 /// Ce que le plateau ajoute ou retire à un peuple dont la mécanique en dépend : des proies pour la
@@ -341,7 +371,8 @@ impl Seat<'_, '_, '_> {
     fn choose_combo(&self) -> Result<usize, Reason> {
         let s = &self.g.state;
         let t = self.tuning();
-        let open: Vec<usize> = (0..s.market.len()).filter(|&i| i as i32 <= s.players[self.pid].coins).collect();
+        let coins = s.players[self.pid].coins;
+        let open: Vec<usize> = (0..s.market.len()).filter(|&i| self.g.pick_price(i) <= coins).collect();
         // niveaux normal et difficile : le modèle appris donne la valeur de chaque combinaison dans ce contexte
         let learnt = self.level != Level::Easy && t.pick_model != 0.0;
         let base: Vec<f64> = if learnt {
@@ -356,7 +387,8 @@ impl Seat<'_, '_, '_> {
             .iter()
             .zip(base)
             .map(|(&i, value)| {
-                let value = if learnt { value + s.market[i].coins as f64 - i as f64 } else { value };
+                let price = self.g.pick_price(i) as f64;
+                let value = if learnt { value + s.market[i].coins as f64 - price } else { value };
                 value + self.noise("pick", Some(i as u64))
             })
             .collect();
@@ -528,8 +560,8 @@ impl Seat<'_, '_, '_> {
             .market
             .iter()
             .enumerate()
-            .filter(|&(i, _)| i as i32 <= p.coins)
-            .map(|(_, c)| c.race.starting_tokens(c.power))
+            .filter(|&(i, _)| g.pick_price(i) <= p.coins)
+            .map(|(_, c)| c.starting_tokens())
             .fold(0, i32::max);
         match self.level {
             Level::Easy => Ok(est == 0 || (est <= 1 && self.noise("decl", None) > 1.5)),
@@ -610,6 +642,10 @@ impl Seat<'_, '_, '_> {
         let turn = &s.turn;
         let army = turn.army.expect("peuple en action");
         let rs = *s.race(army);
+        // Mercenaires : le dé a raté, mais 1 pièce prend la région
+        if let Some(region) = turn.hire {
+            return Ok(Action::Hire { region: region.into() });
+        }
         if !no_decline && turn.stage == Stage::Active && self.should_decline()? {
             return Ok(Action::Decline);
         }
@@ -636,6 +672,11 @@ impl Seat<'_, '_, '_> {
 
         let affordable: ArrayTargets = targets.iter().filter(|x| x.kind == TargetKind::Normal).copied().collect();
         let normal = best_by(affordable.iter(), |x| self.target_score(army, x, &dom));
+        if !s.expansions.is_empty()
+            && let Some(action) = self.expansion_conquest(army, &targets, normal, &dom)
+        {
+            return Ok(action);
+        }
         if normal.is_some() && self.level != Level::Easy && t.entry_model != 0.0 && g.is_entry_choice() {
             // l'entrée d'un peuple neuf décide de tout son territoire : elle se choisit à part
             return Ok(Action::Conquer { region: self.choose_entry(&affordable)? });
@@ -674,6 +715,56 @@ impl Seat<'_, '_, '_> {
         Ok(Action::EndConquest)
     }
 
+    /// Les pouvoirs de conquête des extensions, joués simplement : la Catapulte quand son tir rend
+    /// mieux que la meilleure conquête, les Intrépides quand plus rien n'est à portée de la main, les
+    /// Mercenaires quand la pièce épargne au moins 2 jetons ou permet seule de conquérir.
+    fn expansion_conquest(
+        &self,
+        army: Race,
+        targets: &ArrayTargets,
+        normal: Option<&Target>,
+        dom: &[f64; MAX_PLAYERS],
+    ) -> Option<Action> {
+        let g = self.g;
+        let s = &g.state;
+        let rs = *s.race(army);
+        let power = self.tuning().cost_power;
+        let normal_score = normal.map(|x| self.target_score(army, x, dom));
+        if rs.has(Power::Catapult) && !s.turn.catapult_used {
+            let options = g.catapult_options();
+            let mine = |r: usize| g.owner_of(r) == Some(self.pid);
+            let score = |&(_, region, cost): &(usize, usize, i32)| {
+                self.region_value(army, region, dom) / (cost.max(1) as f64).powf(power)
+            };
+            let best = best_by(options.iter().filter(|o| !mine(o.1)), score);
+            if let Some(o @ &(from, region, _)) = best
+                && normal_score.is_none_or(|n| score(o) > n)
+            {
+                return Some(Action::Catapult { from, region });
+            }
+        }
+        if normal.is_none() && g.can_regroup().is_ok() && targets.iter().any(|x| x.reachable()) {
+            let floor = g.floor(army);
+            let spare: i32 = g.owned(army).iter().map(|r| (s.regions[r].tokens - floor).max(0)).sum();
+            if spare > 0 {
+                return Some(Action::Regroup);
+            }
+        }
+        if rs.has(Power::Mercenary) {
+            if let Some(x) = normal {
+                let (hire, hired) = g.hire_target(x);
+                return (hire.allowed() && x.effective - hired >= 2).then_some(Action::Hire { region: x.region });
+            }
+            let hired = targets.iter().filter_map(|x| match g.hire_target(x) {
+                (Special::Allowed, cost) => Some((x.region, cost)),
+                _ => None,
+            });
+            let best = best_by(hired, |(r, cost)| self.region_value(army, r, dom) / (cost.max(1) as f64).powf(power));
+            return best.map(|(region, _)| Action::Hire { region });
+        }
+        None
+    }
+
     // --- fin de tour -------------------------------------------------------------------------
 
     fn redeploy_step(&self, keep_placement: bool) -> Result<Action, Reason> {
@@ -707,8 +798,17 @@ impl Seat<'_, '_, '_> {
             {
                 return Ok(Action::Camp { region, delta: 1 });
             }
+            // Farfadets : un Chaudron partout, s'il reste un tour pour l'encaisser
+            if army == Race::Leprechauns && rs.cauldrons > 0 && s.round < s.max_rounds {
+                let empty = own.iter().filter(|&r| !s.regions[r].cauldron());
+                if let Some(region) = best_by(empty, |r| -g.threat(army, r)) {
+                    return Ok(Action::Cauldron { region });
+                }
+            }
         }
-        if !own.is_empty() && !keep_placement {
+        // Barbares et Fées actifs : rien à replacer à la fin de leur tour
+        let frozen = turn.stage == Stage::Active && !rs.declined && matches!(army, Race::Barbarians | Race::Pixies);
+        if !own.is_empty() && !keep_placement && !frozen {
             // tout reprendre et replacer : les jetons qui ont servi à conquérir sont rarement là où il faut
             let differs = |target: &Placement| rs.hand > 0 || own.iter().any(|r| s.regions[r].tokens != target.0[r]);
             if self.level == Level::Hard {
@@ -757,7 +857,7 @@ impl Seat<'_, '_, '_> {
             }
         }
         let mut stout = false;
-        if rs.has(Power::Stout) && s.max_rounds - s.round >= 1 {
+        if rs.has(Power::Stout) && s.max_rounds - s.round >= 1 && turn.abandoned.is_empty() {
             if self.level == Level::Hard {
                 let mut yes = *g;
                 yes.apply(&Action::EndTurn { peace, stout: true }, &mut NoJournal)?;
@@ -822,11 +922,15 @@ impl Seat<'_, '_, '_> {
         let g = self.g.levelled(race);
         let own = g.owned(race);
         let mut spare = g.state.race(race).hand;
+        let floor = g.floor(race);
         let mut tokens = Placement::default();
+        for r in own.iter() {
+            tokens.0[r] = floor;
+        }
         let open: Vec<usize> = own.iter().filter(|&r| !g.state.regions[r].is_immune()).collect();
         if open.is_empty() {
             if let Some(first) = own.first() {
-                tokens.0[first] = 1 + spare;
+                tokens.0[first] = floor + spare;
             }
             return tokens;
         }
@@ -844,8 +948,8 @@ impl Seat<'_, '_, '_> {
         let mut risks = [0.0; MAX_REGIONS];
         let mut next = [0.0; MAX_REGIONS];
         for &r in &open {
-            risks[r] = risk(r, 1);
-            next[r] = risk(r, 2);
+            risks[r] = risk(r, floor);
+            next[r] = risk(r, floor + 1);
         }
         while spare > 0 {
             let worth = |r: usize| inputs[r].expect("entrées de la région").at(HOLD_WORTH);

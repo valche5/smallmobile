@@ -28,7 +28,9 @@ for (const g of games) {
   });
   const state = coins ? '' : ` — en cours, ${g.record.moves.length} actions`;
   const nets = g.expert ? ` [${g.expert.join(', ')}]` : '';
-  console.log(`${g.id}${nets} : ${who.join(' · ')}${state}`);
+  // extensions jouées (absentes des parties d'avant les extensions : jeu de base)
+  const ext = g.record.expansions?.length ? ` {${g.record.expansions.join(', ')}}` : '';
+  console.log(`${g.id}${nets}${ext} : ${who.join(' · ')}${state}`);
 }
 
 // temps de décision : une décision = la première action d'un coup d'IA

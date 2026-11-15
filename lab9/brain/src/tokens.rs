@@ -222,8 +222,15 @@ mod tests {
             let map = generated.to_map().unwrap();
             let lost: RegionSet =
                 generated.regions.iter().enumerate().filter(|(_, r)| r.lost_tribe).map(|(i, _)| i).collect();
-            let mut g =
-                Game::create(&map, lost, &vec![Level::Normal; n], generated.rounds, game as u32, &mut NoJournal);
+            let mut g = Game::create(
+                &map,
+                lost,
+                &vec![Level::Normal; n],
+                generated.rounds,
+                game as u32,
+                smallmobile_kernel::Expansions::NONE,
+                &mut NoJournal,
+            );
             let mut k = Knowledge::default();
             let dist = distances(&map);
             for i in 0..map.len() {

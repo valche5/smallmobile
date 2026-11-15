@@ -454,6 +454,11 @@ function RegionMarks({ g, id, mark, s }: { g: GameState; id: number; mark?: Mark
   if (r.dragon) markers.push(FEATURE_ICONS.dragon);
   if (r.hole) markers.push(FEATURE_ICONS.hole);
   for (let i = 0; i < r.camps; i++) markers.push(FEATURE_ICONS.camp);
+  // extensions : Catapulte et Dames Blanches (imprenables), Chaudron (visible de tous), Tour d'Ivoire
+  if (r.catapult) markers.push(FEATURE_ICONS.catapult);
+  if (r.ladies) markers.push(FEATURE_ICONS.ladies);
+  if (r.cauldron) markers.push(FEATURE_ICONS.cauldron);
+  if (r.race === 'priestesses' && g.races.priestesses?.declined) markers.push(FEATURE_ICONS.tower);
 
   let badge = null;
   if (r.race === 'lost') {

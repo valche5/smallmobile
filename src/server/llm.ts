@@ -13,13 +13,25 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { aiAction } from '../engine/ai';
-import { AI_NAMES, PLAYER_COLORS, POWER_IDS, POWERS, RACE_IDS, RACES, TERRAINS } from '../engine/data';
+import {
+  AI_NAMES,
+  cleanExpansions,
+  EXPANSION_IDS,
+  EXPANSIONS,
+  expansionContent,
+  PLAYER_COLORS,
+  POWERS,
+  RACES,
+  startingTokens,
+  TERRAINS,
+} from '../engine/data';
 import { applyAction, createGame, RuleError } from '../engine/game';
 import { kernelFor } from '../engine/engine';
 import { KernelRefusal } from '../engine/kernel';
 import { randomSeed } from '../engine/rng';
-import { allTargets, currentActor, ranking, regionsOf, tokensOnBoard } from '../engine/rules';
-import type { Action, AiLevel, AiThought, GameState, RaceId } from '../engine/types';
+import { allTargets, catapultShots, currentActor, pickCost, ranking, regionsOf, tokensOnBoard } from '../engine/rules';
+import type { Action, AiLevel, AiThought, ExpansionId, GameState, RaceId } from '../engine/types';
+import { levelFor } from '../shared/protocol';
 import { EXPERT_LABS, expertLab } from '../shared/experts';
 import { expertNets, gameId, type ArchivedGame, type GameArchive } from './archive';
 import type { Experts } from './expert';
@@ -111,7 +123,8 @@ export class LlmGames {
    * Nouvelle partie. `model` (obligatoire) : le modèle qui joue ; `client` : l'outil qui le fait jouer ;
    * `players` : 2 à 5 ; `opponents` : un niveau pour tous, ou un par adversaire (facile, normal,
    * difficile, expert) ; `expert` : le labo de l'Expert (le plus récent sinon) ; `seat` : la place du
-   * joueur (au hasard sinon) ; `seed` : pour rejouer la même carte et le même hasard.
+   * joueur (au hasard sinon) ; `seed` : pour rejouer la même carte et le même hasard ; `expansions` : les
+   * extensions jouées (aucune par défaut ; l'Expert ne connaît que le jeu de base, l'IA Difficile le remplace).
    */
   async create(body: unknown): Promise<LlmView> {
     const b = (body ?? {}) as Record<string, unknown>;
@@ -131,7 +144,10 @@ export class LlmGames {
     const seed = b.seed === undefined ? randomSeed() : Number(b.seed);
     if (!Number.isSafeInteger(seed) || seed < 0) throw new LlmError(400, '`seed` : un entier positif.');
     const name = typeof b.name === 'string' && b.name.trim() ? b.name.trim().slice(0, 14) : 'LLM';
-    const levels = [...opponents] as AiLevel[];
+    if (b.expansions !== undefined && (!Array.isArray(b.expansions) || cleanExpansions(b.expansions).length !== b.expansions.length))
+      throw new LlmError(400, `\`expansions\` : une liste parmi ${EXPANSION_IDS.join(', ')}.`);
+    const expansions = cleanExpansions(b.expansions);
+    const levels = (opponents as AiLevel[]).map((l) => levelFor(l, expansions));
     const setup = Array.from({ length: players }, (_, i) =>
       i === seat
         ? { name, color: PLAYER_COLORS[i]!.color, kind: 'human' as const, ai: 'normal' as const }
@@ -145,7 +161,7 @@ export class LlmGames {
       seat,
       // La graine publique est celle de la carte ; le hasard de partie en dérive. Dans l'archive,
       // c'est donc `record.mapSeed` qui rejoue la partie, pas `record.seed`.
-      game: createGame({ players: setup, mapSeed: seed, seed: seed + 1 }),
+      game: createGame({ players: setup, mapSeed: seed, seed: seed + 1, expansions }),
       seen: 0,
       model,
       ...(client ? { client } : {}),
@@ -219,7 +235,8 @@ export class LlmGames {
       if (g.phase === 'gameOver' || who === null || who === entry.seat) return;
       const level = g.players[who]!.ai;
       const start = performance.now();
-      const expert = level === 'expert' ? this.opts.experts.get(entry.expertLab) : undefined;
+      // l'Expert ne connaît que le jeu de base
+      const expert = level === 'expert' && !g.expansions?.length ? this.opts.experts.get(entry.expertLab) : undefined;
       if (expert) {
         try {
           const move = await expert.decide(g);
@@ -285,18 +302,35 @@ export class LlmGames {
   }
 }
 
-/** Le mode d'emploi (`src/server/llm.md`), complété par les peuples et les pouvoirs du jeu. */
-export function llmRules(template: string): string {
-  const races = RACE_IDS.map((id) => {
-    const r = RACES[id];
-    return `- **${r.name}** (\`${id}\`, ${r.tokens} jetons, ${r.max} au plus) : ${r.desc}${r.inDecline ? ` En déclin : ${r.inDecline}.` : ''}`;
-  });
-  const powers = POWER_IDS.map((id) => {
-    const p = POWERS[id];
-    return `- **${p.name}** (\`${id}\`, +${p.tokens} jetons) : ${p.desc}`;
-  });
-  const glossary = [`### Les ${RACE_IDS.length} peuples`, '', ...races, '', `### Les ${POWER_IDS.length} pouvoirs`, '', ...powers].join('\n');
-  return template.replace('<!-- peuples et pouvoirs -->', glossary);
+/**
+ * Le mode d'emploi (`src/server/llm.md`), complété par les peuples et les pouvoirs du jeu de base, puis
+ * par ceux des extensions demandées (toutes par défaut).
+ */
+export function llmRules(template: string, expansions: readonly ExpansionId[] = EXPANSION_IDS): string {
+  const races = (ids: RaceId[]) =>
+    ids.map((id) => {
+      const r = RACES[id];
+      return `- **${r.name}** (\`${id}\`, ${r.tokens} jetons, ${r.max} au plus) : ${r.desc}${r.inDecline ? ` En déclin : ${r.inDecline}.` : ''}`;
+    });
+  const powers = (ids: ReturnType<typeof expansionContent>['powers']) =>
+    ids.map((id) => {
+      const p = POWERS[id];
+      return `- **${p.name}** (\`${id}\`, +${p.tokens} jetons) : ${p.desc}`;
+    });
+  const base = expansionContent(null);
+  const out = [`### Les ${base.races.length} peuples`, '', ...races(base.races), '', `### Les ${base.powers.length} pouvoirs`, '', ...powers(base.powers)];
+  for (const x of EXPANSION_IDS.filter((x) => expansions.includes(x))) {
+    const c = expansionContent(x);
+    out.push(
+      '',
+      `### Extension « ${EXPANSIONS[x].name} » (\`${x}\`), seulement dans les parties qui la jouent`,
+      '',
+      ...races(c.races),
+      '',
+      ...powers(c.powers),
+    );
+  }
+  return template.replace('<!-- peuples et pouvoirs -->', out.join('\n'));
 }
 
 const label = (x: unknown) => (typeof x === 'string' ? x.trim().replace(/\s+/g, ' ').slice(0, 80) : '');
@@ -328,7 +362,7 @@ function newId(): string {
 }
 
 /** Les réponses HTTP de l'API (montées par server.ts). */
-export function llmRoutes(games: LlmGames, rules: () => string) {
+export function llmRoutes(games: LlmGames, rules: (expansions?: ExpansionId[]) => string) {
   const answer = async (req: Request, work: () => Promise<LlmView> | LlmView): Promise<Response> => {
     try {
       const v = await work();
@@ -349,7 +383,11 @@ export function llmRoutes(games: LlmGames, rules: () => string) {
     }
   };
   return {
-    '/llm.md': () => text(rules(), 'text/markdown; charset=utf-8'),
+    // `?extensions=cursed,grandDames` : le jeu de base et ces extensions seulement (sans : toutes)
+    '/llm.md': (req?: Request) => {
+      const raw = req ? new URL(req.url).searchParams.get('extensions') : null;
+      return text(rules(raw === null ? undefined : cleanExpansions(raw.split(','))), 'text/markdown; charset=utf-8');
+    },
     '/api/llm/games': { POST: (req: Request) => answer(req, async () => games.create(await body(req))) },
     '/api/llm/games/:id': { GET: (req: Request & { params: { id: string } }) => answer(req, () => games.view(req.params.id)) },
     '/api/llm/games/:id/actions': {
@@ -402,6 +440,11 @@ function describe(entry: LlmGame, events: string[], legal: LlmView['legal'], fin
   const turn = g.phase === 'gameOver' ? '' : who === me ? ' — **à vous de jouer**' : ` — au tour de J${(who ?? g.current) + 1}`;
   out.push(`# Partie ${entry.id} : manche ${g.round}/${g.maxRounds}, phase ${PHASES[g.phase]}${turn}`);
   out.push(`Vous êtes **J${me + 1}** (${g.players[me]!.name}, modèle ${entry.model}).`);
+  const xs = g.expansions ?? [];
+  if (xs.length)
+    out.push(
+      `Extensions : ${xs.map((x) => `${EXPANSIONS[x].name} (\`${x}\`)`).join(', ')}. Leurs peuples et pouvoirs : \`GET /llm.md?extensions=${xs.join(',')}\`.`,
+    );
   if (events.length) out.push('', '## Depuis votre dernier coup (compris)', ...events.map((e) => `- ${e}`));
   if (final) {
     out.push('', '## Classement final');
@@ -425,7 +468,8 @@ function describe(entry: LlmGame, events: string[], legal: LlmView['legal'], fin
       const n = regionsOf(g, p.active).length;
       parts.push(
         `actif : ${RACES[p.active].name} + ${POWERS[rs.power].name} (${n} régions, ${tokensOnBoard(g, p.active)} jetons posés, ` +
-          `${rs.hand} en main, ${readied(g, p.active)} en main au début de son prochain tour)`,
+          `${rs.hand} en main, ${readied(g, p.active)} en main au début de son prochain tour` +
+          `${rs.aside ? `, dont ${rs.aside} hors du plateau d'ici là` : ''}${p.active === 'leprechauns' ? `, ${rs.cauldrons ?? 0} Chaudrons en réserve` : ''})`,
       );
     } else parts.push('aucun peuple actif');
     for (const d of p.declined) {
@@ -447,6 +491,13 @@ function describe(entry: LlmGame, events: string[], legal: LlmView['legal'], fin
       t.stage === 'ghouls' ? 'les Goules en déclin jouent avant le peuple actif' : '',
       t.berserkDie !== null ? `dé berserk lancé : ${t.berserkDie}` : '',
       t.amazonBonus ? `${t.amazonBonus} jetons prêtés aux Amazones pour conquérir` : '',
+      t.catapultUsed ? 'la Catapulte a tiré' : '',
+      t.regrouped ? 'les Intrépides ont repris leurs jetons' : '',
+      t.abandoned?.length ? `régions abandonnées par les Gitanes (pas de retour ce tour) : ${t.abandoned.join(', ')}` : '',
+      t.tower !== null && t.tower !== undefined ? `Tour d'Ivoire choisie : ${t.tower}` : '',
+      t.hire !== null && t.hire !== undefined
+        ? `**dé raté sur ${t.hire} : payez 1 pièce pour la prendre quand même (\`hire\`), ou renoncez (\`endConquest\`)**`
+        : '',
     ].filter(Boolean);
     out.push('', `Peuple en action : ${RACES[army].name}, ${g.races[army]!.hand} jetons en main ; ${extra.join(' ; ')}.`);
   }
@@ -455,9 +506,12 @@ function describe(entry: LlmGame, events: string[], legal: LlmView['legal'], fin
     out.push('', `Défense : J${d.player + 1} replace les jetons rendus de ses ${RACES[d.race].name} (${g.races[d.race]?.hand ?? 0} en main).`);
   }
 
-  out.push('', '## Marché (prendre la combinaison n coûte n pièces ; les pièces posées dessus sont gagnées)');
+  out.push('', '## Marché (prendre la combinaison n coûte 1 pièce par combinaison au-dessus, 3 pour une Maudite ; les pièces posées dessus sont gagnées)');
   g.market.forEach((m, i) =>
-    out.push(`${i}. ${RACES[m.race].name} + ${POWERS[m.power].name} : ${RACES[m.race].tokens + POWERS[m.power].tokens} jetons, ${m.coins} pièce(s) dessus, coût ${i}`),
+    out.push(
+      `${i}. ${RACES[m.race].name} + ${POWERS[m.power].name} : ${startingTokens(m)} jetons, ${m.coins} pièce(s) dessus, coût ${pickCost(g, i)}` +
+        `${m.tokens ? ` (dont ${m.tokens} Homoncules ajoutés)` : ''}`,
+    ),
   );
   out.push(`Pioche : ${g.raceDeck.length} peuples et ${g.powerDeck.length} pouvoirs (ordre caché).`);
 
@@ -485,6 +539,9 @@ function describe(entry: LlmGame, events: string[], legal: LlmView['legal'], fin
       r.hero ? 'héros' : '',
       r.dragon ? 'dragon' : '',
       r.hole ? 'terrier' : '',
+      r.catapult ? 'Catapulte (imprenable)' : '',
+      r.cauldron ? 'Chaudron' : '',
+      r.ladies ? 'Dames Blanches (imprenable)' : '',
     ].filter(Boolean);
     out.push(
       `${i} · ${def.name} · ${TERRAINS[def.terrain].name} · ${flags.join(', ') || '-'} · ${def.adj.join(', ')}` +
@@ -529,11 +586,17 @@ export function legalActions(g: GameState): LlmView['legal'] {
   switch (g.phase) {
     case 'pick':
       g.market.forEach((m, i) =>
-        add({ type: 'pick', index: i }, `prendre ${RACES[m.race].name} + ${POWERS[m.power].name} pour ${i} pièce(s), en gagner ${m.coins}`),
+        add({ type: 'pick', index: i }, `prendre ${RACES[m.race].name} + ${POWERS[m.power].name} pour ${pickCost(g, i)} pièce(s), en gagner ${m.coins}`),
       );
       add({ type: 'skipPick' }, 'passer (marché vide)');
       break;
     case 'conquest': {
+      // Mercenaires : après un dé raté, payer ou renoncer, rien d'autre
+      if (g.turn.hire !== null && g.turn.hire !== undefined) {
+        add({ type: 'hire', region: g.turn.hire }, `payer 1 pièce à vos Mercenaires : ${name(g.turn.hire)} est prise malgré le dé`);
+        add({ type: 'endConquest' }, 'renoncer et passer au redéploiement');
+        break;
+      }
       const targets = allTargets(g, true);
       for (const t of targets) {
         if (t.kind === 'normal') add({ type: 'conquer', region: t.region }, `conquérir ${name(t.region)} pour ${t.effective} jeton(s)`);
@@ -544,7 +607,12 @@ export function legalActions(g: GameState): LlmView['legal'] {
           );
         if (t.dragon) add({ type: 'dragon', region: t.region }, `conquérir ${name(t.region)} avec le dragon (1 jeton)`);
         if (t.sorcery) add({ type: 'sorcery', region: t.region }, `ensorceler ${name(t.region)} (remplace un jeton adverse seul)`);
+        if (t.hire) add({ type: 'hire', region: t.region }, `conquérir ${name(t.region)} pour ${t.hired} jeton(s) en payant 1 pièce (Mercenaires)`);
       }
+      for (const c of catapultShots(g))
+        add({ type: 'catapult', from: c.from, region: c.region }, `Catapulte depuis ${name(c.from)} : conquérir ${name(c.region)} pour ${c.cost} jeton(s)`);
+      add({ type: 'regroup' }, 'Intrépides : reprendre vos jetons (un reste par région) et conquérir encore');
+      for (const r of regions) add({ type: 'tower', region: r }, `Prêtresses : Tour d'Ivoire de votre prochain déclin sur ${name(r)}`);
       add({ type: 'berserkRoll' }, 'lancer le dé berserk avant la prochaine conquête');
       for (const r of regions) add({ type: 'abandon', region: r }, `abandonner ${name(r)} (ses jetons reviennent en main)`);
       add({ type: 'decline' }, 'passer le peuple actif en déclin (finit le tour)');
@@ -564,6 +632,8 @@ export function legalActions(g: GameState): LlmView['legal'] {
         add({ type: 'camp', region: r, delta: -1 }, `retirer un campement de ${name(r)}`);
         add({ type: 'fortress', region: r }, `forteresse sur ${name(r)} (ou la retirer si posée ce tour)`);
         add({ type: 'hero', region: r }, `héros sur ${name(r)} (ou le retirer)`);
+        add({ type: 'cauldron', region: r }, `Farfadets : poser un Chaudron sur ${name(r)} (ou le retirer)`);
+        if (g.turn.stage === 'active') add({ type: 'tower', region: r }, `Prêtresses : Tour d'Ivoire du déclin des Robustes sur ${name(r)}`);
       }
       if (g.turn.stage === 'ghouls') {
         // le noyau accepte paix et déclin des Robustes à la fin de l'étape des Goules, sans effet : on ne les propose pas

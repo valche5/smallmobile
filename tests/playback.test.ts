@@ -152,6 +152,7 @@ function roomView(g: GameState): RoomView {
     mapSeed: g.map.seed,
     aiLevel: 'normal',
     expertLab: 'lab1',
+    expansions: g.expansions ?? [],
     speed: 'normal',
     speedBy: null,
     started: true,

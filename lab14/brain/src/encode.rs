@@ -361,7 +361,7 @@ fn threat(g: &Game, me: usize, owned: &[RegionSet], on_board: &[i32], node: &mut
 }
 
 // garde-fous : les tailles des blocs one-hot suivent le jeu
-const _: () = assert!(Race::COUNT == 14 && Power::COUNT == 20 && MAX_PLAYERS == 5);
+const _: () = assert!(Race::BASE_COUNT == 14 && Power::BASE_COUNT == 20 && MAX_PLAYERS == 5);
 const _: () = assert!(N_POWER + 20 == N_TOKENS && P_POWER + 20 == P_HAND && M_POWER + 20 == M_COINS);
 const _: () = assert!(G_HABITS == 700 && GLOBAL == 820);
 const _: () = assert!(NODE == 93);
@@ -399,7 +399,15 @@ mod tests {
             let lost: RegionSet =
                 generated.regions.iter().enumerate().filter(|(_, r)| r.lost_tribe).map(|(i, _)| i).collect();
             let levels = vec![Level::Normal; n];
-            let mut g = Game::create(&map, lost, &levels, generated.rounds, game as u32, &mut NoJournal);
+            let mut g = Game::create(
+                &map,
+                lost,
+                &levels,
+                generated.rounds,
+                game as u32,
+                smallmobile_kernel::Expansions::NONE,
+                &mut NoJournal,
+            );
             let (mut k, mut by_action, mut by_move) =
                 (Knowledge::default(), Knowledge::default(), Knowledge::default());
             let mut events: Vec<Logged> = Vec::new();
@@ -487,7 +495,15 @@ mod tests {
             let lost: RegionSet =
                 generated.regions.iter().enumerate().filter(|(_, r)| r.lost_tribe).map(|(i, _)| i).collect();
             let levels = vec![Level::Normal; n];
-            let mut g = Game::create(&map, lost, &levels, generated.rounds, game as u32, &mut NoJournal);
+            let mut g = Game::create(
+                &map,
+                lost,
+                &levels,
+                generated.rounds,
+                game as u32,
+                smallmobile_kernel::Expansions::NONE,
+                &mut NoJournal,
+            );
             let mut k = Knowledge::default();
             while g.state.phase != Phase::GameOver {
                 let s = &g.state;

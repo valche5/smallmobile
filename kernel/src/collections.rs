@@ -196,6 +196,10 @@ impl PlayerSet {
     pub fn insert(&mut self, p: usize) {
         self.0 |= 1 << p;
     }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
 }
 
 #[cfg(test)]

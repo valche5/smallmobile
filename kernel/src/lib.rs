@@ -28,7 +28,7 @@ pub mod wire;
 pub use action::{Action, Event, Journal, NoJournal, Placement};
 pub use ai::{Ai, Restrictions, Tuning};
 pub use game::Game;
-pub use ids::{Level, Phase, Power, Race, Terrain};
+pub use ids::{Expansion, Expansions, Level, Phase, Power, Race, Terrain};
 pub use map::{Map, RegionDef};
 pub use reason::Reason;
 pub use state::State;

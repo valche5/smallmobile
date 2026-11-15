@@ -1,9 +1,9 @@
 import { useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
-import { FEATURE_ICONS, POWER_IDS, POWERS, RACE_IDS, RACES, TERRAINS } from '../../engine/data';
+import { EXPANSION_IDS, EXPANSIONS, expansionBlurb, expansionContent, FEATURE_ICONS, POWERS, RACES, TERRAINS } from '../../engine/data';
 import { setState } from '../store';
 import { ArtIcon } from '../components/ArtIcon';
-import type { Terrain } from '../../engine/types';
+import type { ExpansionId, PowerId, RaceId, Terrain } from '../../engine/types';
 
 function Section({ title, children, open = false }: { title: string; children: ComponentChildren; open?: boolean }) {
   const [isOpen, setOpen] = useState(open);
@@ -18,7 +18,40 @@ function Section({ title, children, open = false }: { title: string; children: C
   );
 }
 
-export function RulesView() {
+/** Les peuples, puis les pouvoirs, d'un ensemble (le jeu de base ou une extension). */
+function Glossary({ races, powers }: { races: RaceId[]; powers: PowerId[] }) {
+  return (
+    <ul class="glossary">
+      {races.map((id) => {
+        const r = RACES[id];
+        return (
+          <li key={id}>
+            <div class="g-head">
+              <ArtIcon race={id} size={32} /> <b>{r.name}</b> · {r.tag} <span class="muted small">{r.tokens} jetons</span>
+            </div>
+            <div class="small">{r.desc}</div>
+          </li>
+        );
+      })}
+      {powers.map((id) => {
+        const p = POWERS[id];
+        return (
+          <li key={id}>
+            <div class="g-head">
+              <ArtIcon power={id} size={32} /> <b>{p.name}</b> · {p.tag} <span class="muted small">+{p.tokens} jetons</span>
+            </div>
+            <div class="small">{p.desc}</div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** Les règles ; `expansions` : celles de la partie (absent, hors partie : toutes). */
+export function RulesView({ expansions = EXPANSION_IDS }: { expansions?: readonly ExpansionId[] }) {
+  const base = expansionContent(null);
+  const extra = EXPANSION_IDS.filter((x) => expansions.includes(x));
   return (
     <div class="view scroll">
       <div class="view-head">
@@ -103,38 +136,29 @@ export function RulesView() {
           <li>
             {FEATURE_ICONS.hero} Héros · {FEATURE_ICONS.dragon} Dragon · {FEATURE_ICONS.hole} Terrier : région imprenable
           </li>
+          {extra.length > 0 && (
+            <li>
+              {FEATURE_ICONS.catapult} Catapulte · {FEATURE_ICONS.ladies} Dames Blanches : région imprenable · {FEATURE_ICONS.cauldron} Chaudron des
+              Farfadets · {FEATURE_ICONS.tower} Tour d'Ivoire des Prêtresses
+            </li>
+          )}
         </ul>
       </Section>
-      <Section title={`🧝 Les ${RACE_IDS.length} peuples`}>
-        <ul class="glossary">
-          {RACE_IDS.map((id) => {
-            const r = RACES[id];
-            return (
-              <li key={id}>
-                <div class="g-head">
-                  <ArtIcon race={id} size={32} /> <b>{r.name}</b> · {r.tag} <span class="muted small">{r.tokens} jetons</span>
-                </div>
-                <div class="small">{r.desc}</div>
-              </li>
-            );
-          })}
-        </ul>
+      <Section title={`🧝 Les ${base.races.length} peuples`}>
+        <Glossary races={base.races} powers={[]} />
       </Section>
-      <Section title={`✨ Les ${POWER_IDS.length} pouvoirs`}>
-        <ul class="glossary">
-          {POWER_IDS.map((id) => {
-            const p = POWERS[id];
-            return (
-              <li key={id}>
-                <div class="g-head">
-                  <ArtIcon power={id} size={32} /> <b>{p.name}</b> · {p.tag} <span class="muted small">+{p.tokens} jetons</span>
-                </div>
-                <div class="small">{p.desc}</div>
-              </li>
-            );
-          })}
-        </ul>
+      <Section title={`✨ Les ${base.powers.length} pouvoirs`}>
+        <Glossary races={[]} powers={base.powers} />
       </Section>
+      {extra.map((x) => {
+        const c = expansionContent(x);
+        return (
+          <Section key={x} title={`📦 ${EXPANSIONS[x].name}`}>
+            <p class="muted small">Extension : {expansionBlurb(x)}.</p>
+            <Glossary races={c.races} powers={c.powers} />
+          </Section>
+        );
+      })}
       <Section title="📱 Astuces d'interface">
         <ul>
           <li>Touchez une région : le bouton donne le coût, « Détails ▾ » la formule et les conséquences.</li>

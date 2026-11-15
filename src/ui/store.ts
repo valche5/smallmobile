@@ -2,7 +2,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { applyAction, RuleError } from '../engine/game';
 import { RACES } from '../engine/data';
 import { currentActor } from '../engine/rules';
-import type { Action, AiLevel, DieEvent, GameState, LogEntry, MapDef, RaceId } from '../engine/types';
+import type { Action, AiLevel, DieEvent, ExpansionId, GameState, LogEntry, MapDef, RaceId } from '../engine/types';
 import {
   DIE_ROLL_MS,
   FACTOR,
@@ -25,7 +25,8 @@ export type { AiSpeed } from '../shared/protocol';
 export type Tab = 'map' | 'market' | 'log' | 'rules';
 
 export type Sheet =
-  | { kind: 'region'; region: number }
+  /** `from` : Catapultés, la région de tir choisie depuis la fiche de cette région. */
+  | { kind: 'region'; region: number; from?: number }
   | { kind: 'decline' }
   | { kind: 'endTurn' }
   | { kind: 'legend' }
@@ -806,10 +807,13 @@ export function canUndo(s: UIState = state): boolean {
 
 /** Actions qui tirent un dé : seul le serveur peut les résoudre. */
 const RANDOM = new Set<Action['type']>(['reinforce', 'berserkRoll']);
-const CLOSES_REGION_SHEET = new Set<Action['type']>(['conquer', 'dragon', 'sorcery', 'reinforce', 'abandon', 'pick', 'decline', 'endTurn', 'endDefense']);
+const CLOSES_REGION_SHEET = new Set<Action['type']>([
+  'conquer', 'dragon', 'sorcery', 'reinforce', 'abandon', 'pick', 'decline', 'endTurn', 'endDefense', 'catapult', 'hire', 'regroup',
+]);
 
 function sheetAfter(a: Action): Partial<UIState> {
-  // Après une action, on referme les fenêtres de confirmation
+  // Après une action, on referme les fenêtres de confirmation (sauf le choix de la Tour d'Ivoire, fait dedans)
+  if (a.type === 'tower') return {};
   if (state.sheet && state.sheet.kind !== 'region') return { sheet: null };
   if (state.sheet?.kind === 'region' && CLOSES_REGION_SHEET.has(a.type)) return { sheet: null };
   return {};
@@ -854,6 +858,12 @@ function actOnline(a: Action): boolean {
   } catch (e) {
     toast(e instanceof RuleError ? e.message : 'Erreur inattendue.', 'bad');
     return false;
+  }
+  if (newEvents(g, next).some((e) => e.roll !== undefined)) {
+    // des Pygmées perdus lancent le dé de renfort : seul le serveur connaît le hasard, on attend sa réponse
+    if (!conn().send({ t: 'action', id, action: a })) return lostConnection();
+    setState({ ...sheetAfter(a), online: { ...o, inflight: true } });
+    return true;
   }
   if (!conn().send({ t: 'action', id, action: a })) return lostConnection();
   // affichage immédiat, confirmé (ou corrigé) par le serveur ensuite
@@ -1079,6 +1089,7 @@ export function onlineCreate(p: {
   expertLab: string;
   mapSeed: number;
   opponent: 'human' | 'ai';
+  expansions?: ExpansionId[];
 }) {
   intro = { t: 'create', ...p };
   resumeShown = null;

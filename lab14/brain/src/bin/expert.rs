@@ -76,6 +76,10 @@ fn decide(net: &Arc<Net>, cfg: Config, request: &[u32]) -> Result<Vec<u32>, Stri
         return Err("demande trop courte".into());
     };
     let (map, state) = wire::decode_game(game).map_err(|e| format!("partie illisible : {}", e.0))?;
+    // le réseau et ses encodages ne connaissent que le jeu de base
+    if !state.expansions.is_empty() {
+        return Err("extensions non prises en charge : jeu de base seulement".into());
+    }
     let start = Instant::now();
     let expert = Expert::new(net.clone(), Config { iterations: (*iterations as usize).max(1), ..cfg });
     let seed = *seed_lo as u64 | (*seed_hi as u64) << 32;

@@ -1,4 +1,4 @@
-import type { Action, AiLevel, GameState, LogEntry, MapDef } from '../engine/types';
+import type { Action, AiLevel, ExpansionId, GameState, LogEntry, MapDef } from '../engine/types';
 
 /** Messages échangés entre les téléphones et le serveur (JSON sur WebSocket). */
 
@@ -24,6 +24,8 @@ export interface RoomView {
   aiLevel: AiLevel;
   /** Le labo dont l'Expert joue les sièges de niveau `expert` (`experts.ts`). */
   expertLab: string;
+  /** Extensions jouées (vide : jeu de base). L'Expert ne connaît que le jeu de base. */
+  expansions: ExpansionId[];
   speed: AiSpeed;
   /** Siège qui a réglé la vitesse en dernier (null : réglage d'origine). */
   speedBy: number | null;
@@ -54,11 +56,22 @@ export interface Replay {
 
 export type ClientMsg =
   /** `opponent` : 'ai' pour jouer seul contre l'IA (la partie commence aussitôt). */
-  | { t: 'create'; name: string; color: string; size: number; aiLevel: AiLevel; expertLab?: string; mapSeed: number; opponent?: 'human' | 'ai' }
+  | {
+      t: 'create';
+      name: string;
+      color: string;
+      size: number;
+      aiLevel: AiLevel;
+      expertLab?: string;
+      mapSeed: number;
+      opponent?: 'human' | 'ai';
+      /** Extensions à jouer (absent : aucune). */
+      expansions?: ExpansionId[];
+    }
   | { t: 'join'; code: string; name: string; color: string }
   /** `shown` : numéro de journal de la dernière trame affichée sur ce téléphone. */
   | { t: 'resume'; code: string; token: string; shown?: number }
-  | { t: 'lobby'; size?: number; aiLevel?: AiLevel; expertLab?: string; mapSeed?: number; name?: string; color?: string }
+  | { t: 'lobby'; size?: number; aiLevel?: AiLevel; expertLab?: string; mapSeed?: number; name?: string; color?: string; expansions?: ExpansionId[] }
   | { t: 'start' }
   | { t: 'action'; id: number; action: Action }
   | { t: 'undo' }
@@ -83,4 +96,9 @@ export function normalizeCode(raw: string): string {
     .toUpperCase()
     .replace(/[^A-Z]/g, '')
     .slice(0, CODE_LENGTH);
+}
+
+/** Le niveau d'IA permis avec ces extensions : l'Expert ne connaît que le jeu de base, il cède la place à Difficile. */
+export function levelFor(level: AiLevel, expansions: readonly ExpansionId[]): AiLevel {
+  return level === 'expert' && expansions.length ? 'difficile' : level;
 }

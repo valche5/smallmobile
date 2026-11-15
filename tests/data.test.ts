@@ -1,12 +1,20 @@
 import { describe, expect, test } from 'bun:test';
-import { FEATURE_ICONS, KIND_ORDER, POWER_IDS, POWERS, RACE_IDS, RACES, tagsOf } from '../src/engine/data';
+import { EXPANSION_IDS, FEATURE_ICONS, KIND_ORDER, POWER_IDS, POWERS, RACE_IDS, RACES, powersIn, racesIn, tagsOf } from '../src/engine/data';
 
 const ALL = [...RACE_IDS.map((id) => RACES[id]), ...POWER_IDS.map((id) => POWERS[id])];
 
 describe('étiquettes des peuples et pouvoirs', () => {
-  test('14 peuples et 20 pouvoirs', () => {
-    expect(RACE_IDS.length).toBe(14);
-    expect(POWER_IDS.length).toBe(20);
+  test('14 peuples et 20 pouvoirs dans le jeu de base, 24 et 32 avec les extensions', () => {
+    expect(racesIn().length).toBe(14);
+    expect(powersIn().length).toBe(20);
+    expect(RACE_IDS.length).toBe(24);
+    expect(POWER_IDS.length).toBe(32);
+    // les numéros du noyau : le jeu de base d'abord
+    expect(RACE_IDS.slice(0, 14)).toEqual(racesIn());
+    expect(POWER_IDS.slice(0, 20)).toEqual(powersIn());
+    expect(racesIn(EXPANSION_IDS)).toEqual(RACE_IDS);
+    expect(powersIn(EXPANSION_IDS)).toEqual(POWER_IDS);
+    expect(racesIn(['beNotAfraid']).slice(14)).toEqual(['barbarians', 'leprechauns', 'pixies', 'homunculi', 'pygmies']);
   });
 
   test('tag, foe et kind présents et assez courts', () => {
@@ -19,9 +27,9 @@ describe('étiquettes des peuples et pouvoirs', () => {
     }
   });
 
-  test('34 icônes distinctes, ni 💰 ni 🛡️', () => {
+  test('56 icônes distinctes, ni 💰 ni 🛡️', () => {
     const icons = ALL.map((d) => d.icon);
-    expect(new Set(icons).size).toBe(34);
+    expect(new Set(icons).size).toBe(56);
     expect(icons).not.toContain('💰');
     expect(icons).not.toContain('🛡️');
     expect(POWERS.merchant.icon).toBe('⚖️');

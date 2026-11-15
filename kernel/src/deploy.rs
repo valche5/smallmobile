@@ -100,19 +100,22 @@ impl<'m> Game<'m> {
         plan
     }
 
-    /// La même partie, tous les jetons du peuple repris en main sauf un par région.
+    /// La même partie, tous les jetons du peuple repris en main sauf un par région (deux pour des
+    /// Kobolds).
     pub fn levelled(&self, race: Race) -> Game<'m> {
         let mut g = *self;
         let mut hand = 0;
+        let floor = self.floor(race);
         for r in self.owned(race).iter() {
-            hand += g.state.regions[r].tokens - 1;
-            g.state.regions[r].tokens = 1;
+            hand += g.state.regions[r].tokens - floor;
+            g.state.regions[r].tokens = floor;
         }
         g.state.race_mut(race).hand += hand;
         g
     }
 
-    /// Placement complet de fin de tour : tous les jetons repris (un seul reste par région), puis
+    /// Placement complet de fin de tour : tous les jetons repris (un seul reste par région, deux pour
+    /// des Kobolds), puis
     /// répartis à plat. Renvoie le nombre de jetons visé par région.
     pub fn full_deployment(&self, race: Race) -> Placement {
         let g = self.levelled(race);
@@ -121,8 +124,9 @@ impl<'m> Game<'m> {
 
     fn placement_from(g: &Game, race: Race, plan: &Plan) -> Placement {
         let mut out = Placement::default();
+        let floor = g.floor(race);
         for r in g.owned(race).iter() {
-            out.0[r] = 1 + plan[r];
+            out.0[r] = floor + plan[r];
         }
         out
     }

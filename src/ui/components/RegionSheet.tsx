@@ -11,8 +11,10 @@ import {
   foeThreatReason,
   foeThreatText,
   iconFormula,
+  IMMUNE_TEXT,
   immuneKind,
   lostRegions,
+  noRedeployText,
   type AttackHow,
   type Line,
 } from '../../engine/preview';
@@ -21,8 +23,10 @@ import {
   analyzeTarget,
   campsOnBoard,
   canAbandon,
+  catapultShots,
   defenseParts,
   defenseValue,
+  floorOf,
   fortressesOnBoard,
   heroesOnBoard,
   isWater,
@@ -35,6 +39,8 @@ import { Consequences, CostTable, Details, Lines, plural, Sheet, type SheetSize 
 interface Props {
   g: GameState;
   region: number;
+  /** Catapultés : la région de tir choisie depuis sa propre fiche. */
+  from?: number;
   human: boolean;
   onClose: () => void;
 }
@@ -52,7 +58,7 @@ interface Section {
 
 
 /** Fiche d'une région : l'essentiel en quelques lignes, les chiffres sur les boutons, le détail à la demande. */
-export function RegionSheet({ g, region, human, onClose }: Props) {
+export function RegionSheet({ g, region, from, human, onClose }: Props) {
   const def = g.map.regions[region]!;
   const r = g.regions[region]!;
   const race = actingRace(g);
@@ -60,7 +66,7 @@ export function RegionSheet({ g, region, human, onClose }: Props) {
   const owner = r.race && r.race !== 'lost' ? g.players[raceOf(g, r.race).owner] : null;
 
   let section: Section;
-  if (human && g.phase === 'conquest' && race) section = r.race === race ? ownConquestSection(g, region, viewer) : attackSection(g, region);
+  if (human && g.phase === 'conquest' && race) section = r.race === race ? ownConquestSection(g, region, viewer) : attackSection(g, region, from);
   else if (human && (g.phase === 'redeploy' || g.phase === 'defend') && race && r.race === race)
     section = { size: 'peek', subtitle: false, occupant: false, body: <DeploySection g={g} region={region} me={viewer} /> };
   else section = viewSection(g, region, viewer);
@@ -120,6 +126,10 @@ function Occupant({ g, region, viewer }: { g: GameState; region: number; viewer:
   if (r.hero) markers.push(FEATURE_ICONS.hero);
   if (r.dragon) markers.push(FEATURE_ICONS.dragon);
   if (r.hole) markers.push(FEATURE_ICONS.hole);
+  if (r.catapult) markers.push(FEATURE_ICONS.catapult);
+  if (r.cauldron) markers.push(FEATURE_ICONS.cauldron);
+  if (r.ladies) markers.push(FEATURE_ICONS.ladies);
+  if (r.race === 'priestesses' && rs.declined) markers.push(FEATURE_ICONS.tower);
   const combo = rs.declined
     ? `${RACES[r.race].icon} ${RACES[r.race].name} en déclin`
     : `${RACES[r.race].icon} ${RACES[r.race].name} ${POWERS[rs.power].icon} ${POWERS[rs.power].name}`;
@@ -155,7 +165,7 @@ function viewSection(g: GameState, region: number, viewer: number | null): Secti
   const mine = viewer !== null && !!r.race && r.race !== 'lost' && raceOf(g, r.race).owner === viewer;
   let line: preact.ComponentChildren;
   if (mine) line = <ThreatLine g={g} region={region} me={viewer} />;
-  else if (immuneKind(r)) line = <div class="reason">⛔ Imprenable : {IMMUNE[immuneKind(r)!]}</div>;
+  else if (immuneKind(r)) line = <div class="reason">⛔ Imprenable : {IMMUNE_TEXT[immuneKind(r)!]}</div>;
   else if (isWater(def) && !r.race) line = <div class="reason">{def.terrain === 'sea' ? '⛔ Mer : seuls les Marins la prennent' : '⛔ Lac : seuls les Marins le prennent'}</div>;
   else line = <div class="reason">Défense {defenseValue(g, region)}</div>;
   return {
@@ -169,50 +179,65 @@ function viewSection(g: GameState, region: number, viewer: number | null): Secti
   };
 }
 
-const IMMUNE = { héros: 'un héros la garde', dragon: 'le dragon la garde', terrier: 'terrier des Semi-hommes' };
-
 /** Fiche d'attaque : formule s'il y a un modificateur, 3 conséquences au plus, Détails, puis les boutons. */
-function attackSection(g: GameState, region: number): Section {
+function attackSection(g: GameState, region: number, from?: number): Section {
   const info = analyzeTarget(g, region);
   const r = g.regions[region]!;
-  const hand = raceOf(g, g.turn.army!).hand;
+  const army = g.turn.army!;
+  const hand = raceOf(g, army).hand;
+  // Mercenaires : le dé vient de rater de peu sur cette région
+  if (g.turn.hire === region) return hireSection(g, region);
   const normal = info.kind === 'normal';
   const die = info.kind === 'die';
-  const how: AttackHow | null = info.sorcery ? 'sorcery' : normal ? 'conquer' : info.dragon ? 'dragon' : die ? 'die' : null;
+  // Catapultés : les tirs possibles sur cette région, celui depuis la région choisie d'abord
+  const shots = catapultShots(g).filter((x) => x.region === region);
+  const shot = shots.find((x) => x.from === from) ?? shots[0] ?? null;
+  // Mercenaires : payer 1 pièce n'a de sens que si la conquête coûte moins de jetons
+  const hire = info.hire && (!normal || info.hired < info.effective);
+  const how: AttackHow | null = info.sorcery ? 'sorcery' : normal ? 'conquer' : info.dragon ? 'dragon' : shot ? 'catapult' : hire ? 'hire' : die ? 'die' : null;
   if (!how) {
     // pas attaquable : une seule raison, en feuille basse
     return {
       size: 'peek',
       body: (
         <>
-          <div class="reason">{conquestBlock(g, region)}</div>
+          <div class="reason">{conquestBlock(g, region) ?? info.hireReason ?? info.reason}</div>
           {defenseDetails(g, region)}
         </>
       ),
     };
   }
+  const floor = floorOf(g, army);
   const owner = r.race && r.race !== 'lost' ? g.players[raceOf(g, r.race).owner]!.name : '';
   const head: Line[] = [];
   if (info.sorcery) head.push({ icon: RACES.sorcerers.icon, text: `Gratuit : un Sorcier remplace le jeton de ${owner}` });
   if (info.dragon) {
-    head.push({ icon: FEATURE_ICONS.dragon, text: '1 seul jeton, la région devient imprenable' });
+    head.push({ icon: FEATURE_ICONS.dragon, text: `${floor > 1 ? `${floor} jetons` : '1 seul jeton'}, la région devient imprenable` });
     const old = g.regions.findIndex((x) => x.dragon);
     if (old >= 0 && old !== region && how !== 'dragon')
       head.push({ icon: '⚠️', text: `Le dragon quittera « ${cut(g.map.regions[old]!.name)} »`, tone: 'warn' });
   }
+  if (hire && how !== 'hire')
+    head.push({ icon: POWERS.mercenary.icon, text: `Payer 1 💰 : ${plural(info.hired, 'jeton')} au lieu de ${info.effective}` });
+  if (shot && how !== 'catapult')
+    head.push({ icon: FEATURE_ICONS.catapult, text: `Catapulte : ${plural(shot.cost, 'jeton')}, une fois par tour` });
   if (die && !normal) head.push({ icon: '⛔', text: 'Dernière conquête · raté : jetons gardés', tone: 'warn' });
-  const brief = attackBrief(g, region, how);
+  if (die && !normal && info.chance > info.free)
+    head.push({ icon: POWERS.mercenary.icon, text: "Raté de peu : 1 💰 pour la prendre quand même" });
+  const brief = attackBrief(g, region, how, shot?.from);
   const all = [...head, ...brief.lines];
   const shown = all.slice(0, 3);
   const more = [...all.slice(3), ...brief.more];
 
   let formula: string | null = null;
   if (normal) formula = costLine(info.parts, info.effective);
+  else if (how === 'catapult') formula = `Coût ${info.effective} − 1 Catapulte = ${shot!.cost}`;
+  else if (how === 'hire') formula = `Coût ${info.effective} − 2 Mercenaires = ${info.hired} · 1 💰`;
   else if (die) formula = `Coût ${info.cost} · il vous manque ${info.need}`;
 
   const pct = `${Math.round(info.chance * 100)} %`;
   // l'option de pouvoir à gauche ; libellés raccourcis quand deux ou trois boutons se partagent la rangée
-  const count = [info.sorcery, info.dragon, normal, die].filter(Boolean).length;
+  const count = [info.sorcery, info.dragon, normal, !!shot, hire, die].filter(Boolean).length;
   const pair = count >= 2;
   const tight = count >= 3;
   const buttons = [];
@@ -224,8 +249,20 @@ function attackSection(g: GameState, region: number): Section {
     );
   if (info.dragon)
     buttons.push(
-      <button key="d" class="btn alt" aria-label="Dragon · 1 jeton" onClick={() => act({ type: 'dragon', region })}>
-        {FEATURE_ICONS.dragon} {tight ? '1' : pair ? '1 jeton' : 'Dragon · 1 jeton'}
+      <button key="d" class="btn alt" aria-label={`Dragon · ${plural(floor, 'jeton')}`} onClick={() => act({ type: 'dragon', region })}>
+        {FEATURE_ICONS.dragon} {tight ? floor : pair ? plural(floor, 'jeton') : `Dragon · ${plural(floor, 'jeton')}`}
+      </button>,
+    );
+  if (shot)
+    buttons.push(
+      <button key="k" class="btn alt" aria-label={`Catapulte · ${plural(shot.cost, 'jeton')}`} onClick={() => act({ type: 'catapult', from: shot.from, region })}>
+        {FEATURE_ICONS.catapult} {tight ? shot.cost : pair ? `Catapulte · ${shot.cost}` : `Catapulte · ${plural(shot.cost, 'jeton')} · reste ${hand - shot.cost}`}
+      </button>,
+    );
+  if (hire)
+    buttons.push(
+      <button key="h" class="btn alt" aria-label={`Payer 1 pièce : ${plural(info.hired, 'jeton')}`} onClick={() => act({ type: 'hire', region })}>
+        {POWERS.mercenary.icon} {tight ? `1💰·${info.hired}` : pair ? `Payer 1 💰 · ${info.hired}` : `Payer 1 💰 : −2 jetons · ${plural(info.hired, 'jeton')}`}
       </button>,
     );
   if (normal)
@@ -246,15 +283,65 @@ function attackSection(g: GameState, region: number): Section {
     body: (
       <>
         {formula && <div class="formula">{formula}</div>}
+        {shots.length > 1 && (
+          // plusieurs régions peuvent tirer : on choisit d'où (la Catapulte y reste, imprenable)
+          <div class="chips">
+            <span class="muted small">{FEATURE_ICONS.catapult} Tirer depuis :</span>
+            {shots.map((x) => (
+              <button key={x.from} class={`chip ${x.from === shot!.from ? 'on' : ''}`} onClick={() => setState({ sheet: { kind: 'region', region, from: x.from } })}>
+                {cut(g.map.regions[x.from]!.name, 14)}
+              </button>
+            ))}
+          </div>
+        )}
         <Consequences lines={shown} />
         <Details>
           <CostTable parts={info.parts} title="Coût de la conquête" totalLabel="Jetons à engager" />
-          <Lines lines={[...attackDetails(g, region, how), ...more]} />
+          <Lines lines={[...attackDetails(g, region, how, shot?.from), ...more]} />
         </Details>
       </>
     ),
     footer: <div class="btn-row">{buttons}</div>,
   };
+}
+
+/** Mercenaires : le dé a raté de peu ; payer 1 pièce prend la région, renoncer passe au redéploiement. */
+function hireSection(g: GameState, region: number): Section {
+  const d = g.lastDie;
+  return {
+    size: 'peek',
+    body: (
+      <div class="reason warn">
+        🎲 {d ? `${d.value}, il fallait ${d.need}` : 'Raté'} · {POWERS.mercenary.icon} 1 💰 pour la prendre
+      </div>
+    ),
+    footer: (
+      <div class="btn-row">
+        <button class="btn ghost" onClick={() => act({ type: 'endConquest' })}>
+          Renoncer
+        </button>
+        <button class="btn primary" onClick={() => act({ type: 'hire', region })}>
+          {POWERS.mercenary.icon} Payer 1 💰
+        </button>
+      </div>
+    ),
+  };
+}
+
+/** Catapultés : depuis ma région, les cibles à portée de tir (toucher ouvre la fiche de la cible). */
+function CatapultRow({ g, region }: { g: GameState; region: number }) {
+  const shots = catapultShots(g).filter((x) => x.from === region);
+  if (!shots.length) return null;
+  return (
+    <div class="chips">
+      <span class="muted small">{FEATURE_ICONS.catapult} Tirer d'ici :</span>
+      {shots.map((x) => (
+        <button key={x.region} class="chip" onClick={() => setState({ sheet: { kind: 'region', region: x.region, from: region } })}>
+          {cut(g.map.regions[x.region]!.name, 14)} · {x.cost}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 /** Ma région pendant la conquête : abandon direct (annulable avec ↶), une alerte au plus. */
@@ -267,10 +354,18 @@ function ownConquestSection(g: GameState, region: number, viewer: number | null)
       size: 'peek',
       title,
       occupant: false,
-      body: viewer !== null ? <ThreatLine g={g} region={region} me={viewer} /> : null,
+      body: (
+        <>
+          {viewer !== null && <ThreatLine g={g} region={region} me={viewer} />}
+          <CatapultRow g={g} region={region} />
+        </>
+      ),
     };
   }
   const brief = abandonBrief(g, region);
+  const army = g.turn.army!;
+  // Gitanes : chaque abandon rapporte 1 pièce au décompte
+  const gypsies = army === 'gypsies' && !raceOf(g, army).declined;
   return {
     size: 'peek',
     title,
@@ -278,6 +373,7 @@ function ownConquestSection(g: GameState, region: number, viewer: number | null)
     body: (
       <>
         {brief.alert && <div class="reason warn">{brief.alert}</div>}
+        <CatapultRow g={g} region={region} />
         {brief.more.length > 0 && (
           <Details>
             <Lines lines={brief.more} />
@@ -288,7 +384,7 @@ function ownConquestSection(g: GameState, region: number, viewer: number | null)
     footer: (
       <div class="btn-row">
         <button class="btn danger" onClick={() => act({ type: 'abandon', region })}>
-          🏳️ Abandonner · +{r.tokens} en main
+          🏳️ Abandonner · +{r.tokens} en main{gypsies ? ' · +1 💰' : ''}
         </button>
       </div>
     ),
@@ -319,10 +415,30 @@ function DeploySection({ g, region, me }: { g: GameState; region: number; me: nu
   const power = g.phase === 'redeploy' && g.turn.stage === 'active' && !rs.declined ? rs.power : null;
   const camps = 5 - campsOnBoard(g, race);
   const heroes = heroesOnBoard(g, race);
+  const floor = floorOf(g, race);
+  // Barbares et Fées : rien à replacer
+  const frozen = noRedeployText(g);
+  if (frozen)
+    return (
+      <>
+        <div class="reason muted">
+          {plural(r.tokens, 'jeton')} · {frozen}
+        </div>
+        {me !== null && <ThreatLine g={g} region={region} me={me} />}
+      </>
+    );
+  // Kobolds : jamais moins de 2 par région, mais on peut la quitter (0 jeton) en fin de tour
+  const leave = () => {
+    const tokens: Record<number, number> = {};
+    g.regions.forEach((x, i) => {
+      if (x.race === race) tokens[i] = i === region ? 0 : x.tokens;
+    });
+    act({ type: 'place', tokens });
+  };
   return (
     <>
       <div class="deploy-row">
-        <button class="step" disabled={r.tokens <= 1} onClick={() => act({ type: 'deploy', region, delta: -1 })} aria-label="Retirer un jeton">
+        <button class="step" disabled={r.tokens <= floor} onClick={() => act({ type: 'deploy', region, delta: -1 })} aria-label="Retirer un jeton">
           −
         </button>
         <div class="step-value">{plural(r.tokens, 'jeton')}</div>
@@ -336,6 +452,28 @@ function DeploySection({ g, region, me }: { g: GameState; region: number; me: nu
         )}
       </div>
       {me !== null && <ThreatLine g={g} region={region} me={me} />}
+      {floor > 1 && g.phase === 'redeploy' && (
+        <div class="power-row">
+          <span class="muted ell">{RACES.kobolds.icon} Au moins 2 par région</span>
+          <button class="btn ghost" onClick={leave}>
+            🏳️ Quitter · +{r.tokens} en main
+          </button>
+        </div>
+      )}
+      {race === 'leprechauns' && g.phase === 'redeploy' && g.turn.stage === 'active' && !rs.declined && (
+        <div class="power-row">
+          {r.cauldron ? (
+            <button class="btn ghost" onClick={() => act({ type: 'cauldron', region })}>
+              Retirer le Chaudron
+            </button>
+          ) : (
+            <button class="btn alt" disabled={!rs.cauldrons} onClick={() => act({ type: 'cauldron', region })}>
+              {FEATURE_ICONS.cauldron} Chaudron ici · +1 💰 au prochain tour
+            </button>
+          )}
+          <span class="muted">· {rs.cauldrons ?? 0} en réserve</span>
+        </div>
+      )}
       {power === 'bivouacking' && (
         <div class="power-row">
           <span class="ell">{FEATURE_ICONS.camp} Campements</span>

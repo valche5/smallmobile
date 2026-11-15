@@ -5,7 +5,8 @@ import { applyAction } from '../src/engine/game';
 import { currentActor } from '../src/engine/rules';
 import { isShown } from '../src/shared/pacing';
 import type { GameState, MapDef } from '../src/engine/types';
-import { RoomManager, type Client, type Scheduler } from '../src/server/rooms';
+import type { ArchivedGame } from '../src/server/archive';
+import { RoomManager, type Client, type RoomData, type Scheduler } from '../src/server/rooms';
 import type { ClientMsg, ServerMsg } from '../src/shared/protocol';
 
 class Phone implements Client {
@@ -312,5 +313,133 @@ describe('parties en ligne', () => {
     expect(room.seats[1]!.name).toBe('Bobby');
     expect(room.seats[1]!.color).toBe(guest.last('room')!.room.seats[1]!.color);
     expect(new Set(room.seats.map((s) => s.color)).size).toBe(4);
+  });
+});
+
+describe('extensions', () => {
+  /** Un Expert qui compte ses appels et joue comme l'IA du jeu. */
+  function countingExpert() {
+    const calls = { n: 0 };
+    const expert = {
+      decide: async (g: GameState) => {
+        calls.n++;
+        return { actions: [aiAction(g)], value: 0.5, iterations: 1, computeMs: 0, net: 'test/net' };
+      },
+    };
+    return { calls, experts: new Map([['lab13', expert]]) };
+  }
+
+  test('la salle porte ses extensions, de la création à la partie', () => {
+    const sched = new ManualScheduler();
+    const rooms = new RoomManager(null, sched, { firstSeat: () => 0 });
+    const host = new Phone();
+    rooms.handle(host, {
+      t: 'create', name: 'Alice', color: PLAYER_COLORS[0]!.color, size: 3, aiLevel: 'expert', mapSeed: 7, opponent: 'ai',
+      // inconnues et doublons ignorés, ordre du noyau
+      expansions: ['grandDames', 'nope', 'cursed', 'cursed'] as never,
+    });
+    const room = host.last('room')!.room;
+    expect(room.expansions).toEqual(['cursed', 'grandDames']);
+    // l'Expert ne connaît que le jeu de base : Difficile à sa place
+    expect(room.aiLevel).toBe('difficile');
+    expect(room.seats.filter((s) => s.kind === 'ai').every((s) => s.ai === 'difficile')).toBe(true);
+    expect(host.game().expansions).toEqual(['cursed', 'grandDames']);
+  });
+
+  test("dans le salon : l'hôte coche, l'Expert retombe sur Difficile, les autres ne peuvent rien changer", () => {
+    const { host, guest, send } = setup(3);
+    send(host, { t: 'lobby', aiLevel: 'expert' });
+    expect(guest.last('room')!.room.aiLevel).toBe('expert');
+    send(host, { t: 'lobby', expansions: ['beNotAfraid'] });
+    let room = guest.last('room')!.room;
+    expect(room.expansions).toEqual(['beNotAfraid']);
+    expect(room.aiLevel).toBe('difficile');
+    expect(room.seats[2]!.ai).toBe('difficile');
+    // Expert demandé avec une extension : refusé d'office
+    send(host, { t: 'lobby', aiLevel: 'expert' });
+    expect(guest.last('room')!.room.aiLevel).toBe('difficile');
+    send(guest, { t: 'lobby', expansions: [] });
+    expect(guest.last('room')!.room.expansions).toEqual(['beNotAfraid']);
+    // sans extension, l'Expert redevient possible
+    send(host, { t: 'lobby', expansions: [] });
+    send(host, { t: 'lobby', aiLevel: 'expert' });
+    room = guest.last('room')!.room;
+    expect(room.expansions).toEqual([]);
+    expect(room.aiLevel).toBe('expert');
+    send(host, { t: 'lobby', expansions: ['beNotAfraid', 'cursed', 'grandDames'] });
+    send(host, { t: 'start' });
+    expect(host.game().expansions).toEqual(['beNotAfraid', 'cursed', 'grandDames']);
+    expect(host.game().players[2]!.ai).toBe('difficile');
+  });
+
+  test("jamais d'Expert pour une partie avec extensions, même d'une salle sauvegardée incohérente", () => {
+    const { calls, experts } = countingExpert();
+    // une salle de 2 joueurs (humain + IA Expert) avec extensions, sauvegardée avant la règle
+    const sched0 = new ManualScheduler();
+    const saved: RoomData[] = [];
+    const store = { save: (d: RoomData) => saved.push(structuredClone(d)), remove: () => {}, loadAll: () => [] };
+    const r0 = new RoomManager(store, sched0, { firstSeat: () => 0 });
+    const host = new Phone();
+    r0.handle(host, { t: 'create', name: 'Alice', color: PLAYER_COLORS[0]!.color, size: 2, aiLevel: 'normal', mapSeed: 3, opponent: 'ai', expansions: ['cursed'] });
+    const data = structuredClone(saved.at(-1)!);
+    data.aiLevel = 'expert';
+    for (const s of data.seats) s.ai = 'expert';
+    for (const p of data.game!.players) p.ai = 'expert';
+    delete data.expansions; // seule la partie en garde la trace
+    const sched = new ManualScheduler();
+    const rooms = new RoomManager({ save: () => {}, remove: () => {}, loadAll: () => [data] }, sched, { experts, firstSeat: () => 0 });
+    const phone = new Phone();
+    rooms.handle(phone, { t: 'resume', code: data.code, token: data.seats[0]!.token! });
+    expect(phone.last('room')!.room.expansions).toEqual(['cursed']);
+    expect(phone.last('room')!.room.aiLevel).toBe('difficile');
+    let id = 0;
+    for (let k = 0; k < 400; k++) {
+      sched.run();
+      const g = phone.game();
+      if (g.phase === 'gameOver' || g.round > 3) break;
+      if (currentActor(g) === 0) rooms.handle(phone, { t: 'action', id: ++id, action: aiAction(g) });
+    }
+    expect(phone.game().round).toBeGreaterThan(1);
+    expect(calls.n).toBe(0);
+  });
+
+  test("sans extension, l'Expert joue comme avant", () => {
+    const { calls, experts } = countingExpert();
+    const sched = new ManualScheduler();
+    const rooms = new RoomManager(null, sched, { experts, firstSeat: () => 1 });
+    const host = new Phone();
+    rooms.handle(host, { t: 'create', name: 'Alice', color: PLAYER_COLORS[0]!.color, size: 2, aiLevel: 'expert', mapSeed: 3, opponent: 'ai' });
+    expect(host.last('room')!.room.aiLevel).toBe('expert');
+    // l'IA commence : sa réflexion part au premier tour d'ordonnanceur
+    sched.run(1);
+    expect(calls.n).toBe(1);
+  });
+
+  test('une salle et une archive d’avant les extensions se relisent comme le jeu de base', () => {
+    const saved: RoomData[] = [];
+    const archived: ArchivedGame[] = [];
+    const store = { save: (d: RoomData) => saved.push(structuredClone(d)), remove: () => {}, loadAll: () => [] };
+    const r0 = new RoomManager(store, new ManualScheduler(), { firstSeat: () => 0, archive: { save: (a) => archived.push(structuredClone(a)) } });
+    const host = new Phone();
+    r0.handle(host, { t: 'create', name: 'Alice', color: PLAYER_COLORS[0]!.color, size: 2, aiLevel: 'normal', mapSeed: 3, opponent: 'ai', expansions: ['grandDames'] });
+    // la nouvelle archive garde les extensions avec de quoi rejouer la partie
+    expect(saved.at(-1)!.expansions).toEqual(['grandDames']);
+    expect(archived.at(-1)!.record.expansions).toEqual(['grandDames']);
+    // une ancienne salle : ni `expansions` dans la salle ni dans la partie (ni dans l'archive)
+    const base = new Phone();
+    r0.handle(base, { t: 'create', name: 'Bob', color: PLAYER_COLORS[1]!.color, size: 2, aiLevel: 'normal', mapSeed: 4, opponent: 'ai' });
+    expect(archived.at(-1)!.record.expansions).toBeUndefined();
+    const old = structuredClone(saved.at(-1)!);
+    delete old.expansions;
+    delete old.game!.expansions;
+    delete old.game!.record!.expansions;
+    const sched = new ManualScheduler();
+    const rooms = new RoomManager({ save: () => {}, remove: () => {}, loadAll: () => [old] }, sched, { firstSeat: () => 0 });
+    const phone = new Phone();
+    rooms.handle(phone, { t: 'resume', code: old.code, token: old.seats[0]!.token! });
+    expect(phone.last('room')!.room.expansions).toEqual([]);
+    const g = phone.game();
+    rooms.handle(phone, { t: 'action', id: 1, action: aiAction(g) });
+    expect(phone.last('error')).toBeUndefined();
   });
 });

@@ -29,7 +29,11 @@ export function reasonText(g: GameState, { code, arg }: Reason): string {
         ? 'Un héros protège cette région : elle est imprenable.'
         : arg === 1
           ? 'Un terrier de Semi-hommes protège cette région : elle est imprenable.'
-          : 'Un dragon garde cette région : elle est imprenable.';
+          : arg === 2
+            ? 'Un dragon garde cette région : elle est imprenable.'
+            : arg === 3
+              ? 'Les Dames Blanches en déclin sont imprenables.'
+              : 'La Catapulte protège cette région : elle est imprenable.';
     case 17: return "Première conquête : choisissez une région en bord de carte (ou sur la côte d'une mer en bordure).";
     case 18: return "Cette région n'est pas adjacente à vos régions.";
     case 19: return 'Le dé de renfort a été lancé : vos conquêtes sont terminées.';
@@ -71,6 +75,16 @@ export function reasonText(g: GameState, { code, arg }: Reason): string {
     case 55: return 'Vous avez attaqué ce joueur ce tour : pas de paix possible.';
     case 56: return 'Seuls les Robustes peuvent décliner en fin de tour.';
     case 57: return 'Région inconnue.';
+    case 58: return 'Ce peuple ne redéploie pas ses jetons à la fin de son tour.';
+    case 59: return 'Les Kobolds gardent au moins 2 jetons par région (0 : abandonner la région).';
+    case 60: return 'Les Gitanes ont abandonné cette région ce tour : pas de retour avant le prochain.';
+    case 61: return 'Après un abandon, les Gitanes ne peuvent plus passer en déclin ce tour.';
+    case 62: return "Le dé a échoué : payez 1 pièce pour prendre la région (Mercenaires), ou renoncez.";
+    case 63: return 'La Catapulte a déjà tiré ce tour.';
+    case 64: return 'La Catapulte tire par-dessus une seule région voisine des deux (pas une mer).';
+    case 65: return 'Les Intrépides ont déjà repris leurs jetons ce tour.';
+    case 66: return 'Les 16 Chaudrons sont déjà posés.';
+    case 67: return "La Tour d'Ivoire se choisit quand les Prêtresses peuvent passer en déclin.";
     default: return 'Action impossible.';
   }
 }

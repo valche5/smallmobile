@@ -382,7 +382,7 @@ pub fn chance(g: &Game, m: &Move) -> u64 {
     let s = &g.state;
     match m {
         Move::Pick(_) => s.market.iter().fold(1, |h: u64, c| {
-            (h ^ (c.race.index() * Power::COUNT + c.power.index()) as u64).wrapping_mul(0x0100_0000_01b3)
+            (h ^ (c.race.index() * Power::BASE_COUNT + c.power.index()) as u64).wrapping_mul(0x0100_0000_01b3)
         }),
         Move::Region(Kind::Reinforce, _) => 1 + s.last_die.and_then(|d| d.success).unwrap_or(false) as u64,
         Move::Berserk => 1 + s.turn.berserk_die.unwrap_or(0) as u64,
@@ -506,4 +506,4 @@ pub fn describe(g: &Game, m: &Move) -> String {
 }
 
 const _: () = assert!(KEYS == 608 && GLOBAL_KEYS > FORCED as usize && STOUT + 1 < FORCED);
-const _: () = assert!(Race::COUNT == 14);
+const _: () = assert!(Race::BASE_COUNT == 14);

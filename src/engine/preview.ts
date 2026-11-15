@@ -1,4 +1,5 @@
 import { DIE_FACES, FEATURE_ICONS, POWERS, RACES, TERRAINS } from './data';
+import { catapultShots, floorOf } from './rules';
 import { applyAction, declinePreviewState } from './game';
 import {
   allTargets,
@@ -102,12 +103,13 @@ export function previewConquest(g: GameState, region: number, how: ConquestHow):
   const r = g.regions[region]!;
   const after = applyAction(g, { type: how, region });
   const lines: Line[] = [];
-  const spend = how === 'conquer' ? info.effective : how === 'dragon' ? 1 : 0;
+  const floor = floorOf(g, army);
+  const spend = how === 'conquer' ? info.effective : how === 'dragon' ? floor : 0;
 
   if (how === 'conquer') {
     lines.push({ icon: '🖐️', text: `Vous posez ${pl(spend, 'jeton')} ici : il vous en restera ${rs.hand - spend} en main.` });
   } else if (how === 'dragon') {
-    lines.push({ icon: '🐉', text: `Le dragon prend la région avec 1 seul jeton au lieu de ${info.cost}. Il vous en restera ${rs.hand - 1} en main.`, tone: 'good' });
+    lines.push({ icon: '🐉', text: `Le dragon prend la région avec ${floor > 1 ? `${floor} jetons (Kobolds)` : '1 seul jeton'} au lieu de ${info.cost}. Il vous en restera ${rs.hand - floor} en main.`, tone: 'good' });
     lines.push({ icon: '🛡️', text: 'Région imprenable tant que le dragon y reste (jusqu\'à son prochain envol).', tone: 'good' });
     const old = g.regions.findIndex((x) => x.dragon);
     if (old >= 0 && old !== region) lines.push({ icon: '⚠️', text: `Le dragon quitte « ${g.map.regions[old]!.name} », qui redevient attaquable.`, tone: 'warn' });
@@ -181,11 +183,16 @@ export function cut(name: string, max = 18): string {
   return chars.length > max ? `${chars.slice(0, max).join('').trimEnd()}…` : name;
 }
 
-/** Une conquête possible sur cette région : conquête normale, dragon, sorcellerie ou dé de renfort. */
-export type AttackHow = ConquestHow | 'die';
+/** Une conquête possible sur cette région : conquête normale, dragon, sorcellerie, dé de renfort, tir de
+ * Catapulte (depuis `from`) ou conquête payée des Mercenaires. */
+export type AttackHow = ConquestHow | 'die' | 'catapult' | 'hire';
 
-/** État juste après la conquête (le dé est supposé réussi). */
-function conquestAfter(g: GameState, region: number, how: AttackHow): GameState {
+/** État juste après la conquête (le dé est supposé réussi). `from` : la région de la Catapulte. */
+function conquestAfter(g: GameState, region: number, how: AttackHow, from?: number): GameState {
+  if (how === 'catapult') {
+    const shot = catapultShots(g).find((s) => s.region === region && (from === undefined || s.from === from))!;
+    return applyAction(g, { type: 'catapult', from: shot.from, region });
+  }
   if (how !== 'die') return applyAction(g, { type: how, region });
   const c = cloneState(g);
   const rs = raceOf(c, c.turn.army!);
@@ -218,12 +225,12 @@ export interface AttackBrief {
   more: Line[];
 }
 
-export function attackBrief(g: GameState, region: number, how: AttackHow): AttackBrief {
+export function attackBrief(g: GameState, region: number, how: AttackHow, from?: number): AttackBrief {
   const me = g.current;
   const army = g.turn.army!;
   const rs = raceOf(g, army);
   const r = g.regions[region]!;
-  const after = conquestAfter(g, region, how);
+  const after = conquestAfter(g, region, how, from);
   const all: Line[] = [];
   const ds = r.race && r.race !== 'lost' ? raceOf(g, r.race) : null;
   const owner = ds ? g.players[ds.owner]!.name : '';
@@ -239,6 +246,19 @@ export function attackBrief(g: GameState, region: number, how: AttackHow): Attac
     all.push({ icon: FEATURE_ICONS.hole, text: `Terrier ${rs.holesPlaced + 1}/2 : imprenable ensuite`, tone: 'good' });
   if (ds && ds.owner !== me && r.race === 'elves' && !ds.declined && how !== 'sorcery')
     all.push({ icon: RACES.elves.icon, text: `Elfes : ${owner} ne perd aucun jeton`, tone: 'warn' });
+  if (how === 'catapult') {
+    const shot = catapultShots(g).find((x) => x.region === region && (from === undefined || x.from === from));
+    const at = shot ? `« ${cut(g.map.regions[shot.from]!.name)} »` : 'sa région';
+    all.push({ icon: FEATURE_ICONS.catapult, text: `Tir depuis ${at} (imprenable ensuite)`, tone: 'good' });
+  }
+  // pièces qui changent de main : pots-de-vin des Corrompus, vol des Voleurs, Chaudron pris
+  if (ds && ds.owner !== me) {
+    if (!ds.declined && r.race === 'pygmies') all.push({ icon: RACES.pygmies.icon, text: `Pygmées : ${owner} lance le dé de renfort`, tone: 'warn' });
+    if (!ds.declined && ds.power === 'corrupt') all.push({ icon: POWERS.corrupt.icon, text: `Corrompus : vous versez 1 💰 à ${owner}`, tone: 'warn' });
+    if (!ds.declined && rs.power === 'ransacking' && !rs.declined) all.push({ icon: POWERS.ransacking.icon, text: `Voleurs : vous volez 1 💰 à ${owner}`, tone: 'good' });
+  }
+  if (r.cauldron) all.push({ icon: FEATURE_ICONS.cauldron, text: 'Vous prenez le Chaudron : +1 💰', tone: 'good' });
+  if (how === 'hire') all.unshift({ icon: POWERS.mercenary.icon, text: 'Vous payez 1 💰 à vos Mercenaires', tone: 'warn' });
   // une région rapporte normalement 1 pièce : on ne parle du gain que s'il sort de l'ordinaire
   const gain = scoreBreakdown(after, me).total - scoreBreakdown(g, me).total;
   if (gain !== 1) {
@@ -249,10 +269,10 @@ export function attackBrief(g: GameState, region: number, how: AttackHow): Attac
 }
 
 /** Ce que « Détails ▾ » ajoute sous le tableau du coût : la victime, la défense ensuite, la suite du tour. */
-export function attackDetails(g: GameState, region: number, how: AttackHow): Line[] {
+export function attackDetails(g: GameState, region: number, how: AttackHow, from?: number): Line[] {
   const me = g.current;
   const r = g.regions[region]!;
-  const after = conquestAfter(g, region, how);
+  const after = conquestAfter(g, region, how, from);
   const lines: Line[] = [];
   if (r.race === 'lost') lines.push({ icon: FEATURE_ICONS.lost, text: 'La tribu oubliée est chassée' });
   else if (r.race) {
@@ -278,6 +298,8 @@ export function attackDetails(g: GameState, region: number, how: AttackHow): Lin
   if (how === 'die') {
     const info = analyzeTarget(g, region);
     lines.push({ icon: '🎲', text: `Faces : ${DIE_FACES.join(', ')} · il faut ${info.need} ou plus` });
+    if (info.chance > info.free)
+      lines.push({ icon: POWERS.mercenary.icon, text: `Mercenaires : s'il manque 1 ou 2, payez 1 💰 pour la prendre (${Math.round(info.chance * 100)} % en tout)` });
   } else {
     // dragon ou terrier : imprenable ensuite (déjà dit par sa propre ligne), pas de coût de reprise
     if (!immuneKind(after.regions[region]!))
@@ -314,6 +336,8 @@ const PART_ICONS: Record<string, string> = {
   Souterrains: POWERS.underworld.icon,
   Tritons: RACES.tritons.icon,
   Géants: RACES.giants.icon,
+  Gobelins: RACES.goblins.icon,
+  Garous: POWERS.were.icon,
   dé: '🎲',
 };
 
@@ -364,18 +388,27 @@ export function conquestBlock(g: GameState, region: number): string | null {
     return def.terrain === 'sea' ? '⛔ Mer : seuls les Marins la prennent' : '⛔ Lac : seuls les Marins le prennent';
   const immune = immuneKind(r);
   if (immune) return `⛔ Imprenable : ${IMMUNE_TEXT[immune]}`;
+  if (army === 'gypsies' && g.turn.abandoned?.includes(region)) return `⛔ Abandonnée ce tour : pas de retour (Gitanes)`;
   if (!info.reachable) return regionsOf(g, army).length ? '⛔ Pas voisine de vos régions' : '⛔ Première conquête : par le bord de la carte';
   if (rs.hand < 1) return '⛔ Plus de jeton en main';
   return `⛔ Il faut ${pl(info.effective, 'jeton')}, vous en avez ${rs.hand}`;
 }
 
-export type ImmuneKind = 'héros' | 'dragon' | 'terrier';
-const IMMUNE_TEXT: Record<ImmuneKind, string> = { héros: 'un héros la garde', dragon: 'le dragon la garde', terrier: 'terrier des Semi-hommes' };
+export type ImmuneKind = 'héros' | 'dragon' | 'terrier' | 'catapulte' | 'Dames Blanches';
+export const IMMUNE_TEXT: Record<ImmuneKind, string> = {
+  héros: 'un héros la garde',
+  dragon: 'le dragon la garde',
+  terrier: 'terrier des Semi-hommes',
+  catapulte: 'la Catapulte y est',
+  'Dames Blanches': 'Dames Blanches en déclin',
+};
 
 export function immuneKind(r: RegionState): ImmuneKind | null {
   if (r.hero) return 'héros';
   if (r.dragon) return 'dragon';
   if (r.hole) return 'terrier';
+  if (r.catapult) return 'catapulte';
+  if (r.ladies) return 'Dames Blanches';
   return null;
 }
 
@@ -452,8 +485,13 @@ export function powerStatus(g: GameState, pid: number, compact = false): string 
     if (rs.power === 'berserk' && g.turn.berserkDie !== null)
       return g.turn.berserkDie ? `🎲 −${g.turn.berserkDie} sur la prochaine` : '🎲 0 : aucun bonus';
     if (race === 'halflings' && rs.holesPlaced < 2) return `${FEATURE_ICONS.hole} Terriers : ${rs.holesPlaced}/2`;
+    if (rs.power === 'catapult' && !g.turn.catapultUsed) {
+      const n = new Set(catapultShots(g).map((x) => x.region)).size;
+      if (n) return `${FEATURE_ICONS.catapult} Catapulte : ${pl(n, 'cible')}`;
+    }
   } else if (g.phase === 'redeploy') {
     const left = powerLeft(g, race);
+    if (left.cauldrons > 0) return compact ? `${FEATURE_ICONS.cauldron} ${left.cauldrons} à poser` : `${FEATURE_ICONS.cauldron} Posez vos Chaudrons · ${rs.cauldrons ?? 0} en réserve`;
     // Bivouaqueurs : les campements se posent ET se déplacent à chaque redéploiement, même la réserve vide
     // (`compact` : la ligne dit déjà les jetons à placer, seule la réserve tient encore)
     if (rs.power === 'bivouacking' && regionsOf(g, race).length) {
@@ -467,11 +505,13 @@ export function powerStatus(g: GameState, pid: number, compact = false): string 
 }
 
 /** Ce que le pouvoir du peuple actif peut encore poser ce redéploiement, là où le moteur l'accepte (régions possédées). */
-function powerLeft(g: GameState, race: RaceId): { camps: number; fortress: boolean; heroes: number } {
+function powerLeft(g: GameState, race: RaceId): { camps: number; fortress: boolean; heroes: number; cauldrons: number } {
   const rs = raceOf(g, race);
   const own = regionsOf(g, race);
-  const none = { camps: 0, fortress: false, heroes: 0 };
+  const none = { camps: 0, fortress: false, heroes: 0, cauldrons: 0 };
   if (rs.declined || !own.length) return none;
+  // Farfadets : un Chaudron par région au plus, tant qu'il en reste
+  if (race === 'leprechauns') return { ...none, cauldrons: Math.min(rs.cauldrons ?? 0, own.filter((i) => !g.regions[i]!.cauldron).length) };
   if (rs.power === 'bivouacking') return { ...none, camps: 5 - campsOnBoard(g, race) };
   if (rs.power === 'fortified')
     return { ...none, fortress: g.turn.fortressRegion === null && fortressesOnBoard(g, race) < 6 && own.some((i) => !g.regions[i]!.fortress) };
@@ -489,6 +529,7 @@ export function endTurnReminder(g: GameState): string | null {
   if (left.fortress) return '⚠️ Forteresse pas encore bâtie';
   if (left.heroes > 0) return `⚠️ ${pl(left.heroes, 'héros non placé', 'héros non placés')}`;
   if (left.camps > 0) return `⚠️ ${pl(left.camps, 'campement')} en réserve`;
+  if (left.cauldrons > 0) return `⚠️ ${pl(left.cauldrons, 'Chaudron')} encore à poser`;
   return null;
 }
 
@@ -508,6 +549,31 @@ export function redeployNote(g: GameState): string | null {
 
 // --- Déclin et abandon -------------------------------------------------------------------
 
+/** Prêtresses : la région de la Tour d'Ivoire si elles passaient en déclin maintenant (celle choisie, sinon
+ * celle que le noyau retient), et le nombre de Prêtresses qui s'y empilent. */
+export function towerPreview(g: GameState): { region: number; tokens: number; chosen: boolean } | null {
+  const race = g.players[g.current]?.active;
+  if (race !== 'priestesses' || !regionsOf(g, race).length) return null;
+  const after = declinePreviewState(g);
+  const region = after.regions.findIndex((r) => r.race === 'priestesses');
+  if (region < 0) return null;
+  return { region, tokens: after.regions[region]!.tokens, chosen: g.turn.tower === region };
+}
+
+/** Ce qu'un déclin des peuples d'extension change en plus (Tour d'Ivoire, Dames Blanches, de la Horde). */
+function declineExtras(g: GameState, race: RaceId): Line[] {
+  const rs = raceOf(g, race);
+  const out: Line[] = [];
+  const tower = towerPreview(g);
+  if (tower) {
+    // court : le nom de la région compte plus que le reste
+    out.push({ icon: FEATURE_ICONS.tower, text: `« ${cut(g.map.regions[tower.region]!.name)} » : ${pl(tower.tokens, 'Prêtresse')}, +${tower.tokens} 💰/tour`, tone: 'good' });
+  }
+  if (race === 'whiteLadies') out.push({ icon: FEATURE_ICONS.ladies, text: 'Vos régions deviennent imprenables jusqu’à la fin.', tone: 'good' });
+  if (rs.power === 'hordes') out.push({ icon: POWERS.hordes.icon, text: 'Les 2 jetons de la Horde disparaissent.', tone: 'warn' });
+  return out;
+}
+
 export interface DeclineBrief {
   gain: number;
   /** Les 2 lignes toujours présentes, puis 2 au plus par priorité. */
@@ -526,9 +592,10 @@ export function declineBrief(g: GameState): DeclineBrief {
   const own = regionsOf(g, race).length;
   const lines: Line[] = [{ icon: '💰', text: `+${score.total} maintenant, puis votre tour s'arrête.` }];
   if (race === 'ghouls') lines.push({ icon: RACES.ghouls.icon, text: 'Vos Goules gardent leurs jetons et attaqueront encore.' });
+  else if (race === 'priestesses' && own) lines.push({ icon: '', text: "Une seule région reste : la Tour d'Ivoire." });
   else if (own) lines.push({ icon: '', text: own > 1 ? `Vos ${own} régions gardent 1 jeton chacune.` : 'Votre région garde 1 jeton.' });
   else lines.push({ icon: '', text: 'Aucune région ne reste sur la carte.' });
-  const extra: Line[] = [];
+  const extra: Line[] = declineExtras(g, race);
   const removed = p.declined.filter((r) => !after.players[me]!.declined.includes(r));
   for (const r of removed) extra.push({ icon: '🪦', text: `Vos ${RACES[r].icon} ${RACES[r].name} en déclin disparaissent.`, tone: 'bad' });
   if (rs.power === 'spirit' && p.declined.length && !removed.length)
@@ -562,6 +629,7 @@ export function abandonBrief(g: GameState, region: number): { alert: string | nu
   if (r.hole) alerts.push('⚠️ Le terrier sera perdu');
   if (r.fortress) alerts.push('⚠️ La forteresse sera détruite');
   if (r.lair) alerts.push('⚠️ La tanière sera détruite');
+  if (army === 'gypsies' && !rs.declined) alerts.push('🃏 +1 💰 au décompte, pas de retour');
   const more: Line[] = alerts.slice(1).map((a) => ({ icon: '', text: a }));
   if (r.hero) more.push({ icon: FEATURE_ICONS.hero, text: 'Le héros revient dans votre réserve' });
   if (r.camps) more.push({ icon: FEATURE_ICONS.camp, text: `${pl(r.camps, 'campement')} revien${r.camps > 1 ? 'nent' : 't'} dans votre réserve` });
@@ -605,6 +673,7 @@ export function previewDecline(g: GameState): DeclinePreview {
   if (markers.length) lines.push({ icon: '📦', text: `Retirés de la carte : ${markers.join(', ')}.`, tone: 'warn' });
   if (g.regions.some((r) => r.race === race && (r.fortress || r.lair)))
     lines.push({ icon: '🏰', text: 'Forteresses et tanières restent en place (défense seulement).' });
+  lines.push(...declineExtras(g, race));
   const removed = p.declined.filter((r) => !after.players[me]!.declined.includes(r));
   for (const r of removed) {
     const n = regionsOf(g, r).length;
@@ -643,6 +712,7 @@ export function previewEndTurn(g: GameState, opts: { peace?: number | null; stou
     const after = declinePreviewState(g);
     for (const r of p.declined.filter((r) => !after.players[me]!.declined.includes(r)))
       lines.push({ icon: '🪦', text: `Vos ${RACES[r].name} en déclin disparaîtront.`, tone: 'bad' });
+    lines.push(...declineExtras(g, p.active));
   }
   if (opts.peace !== undefined && opts.peace !== null && p.active)
     lines.push({
@@ -687,6 +757,8 @@ export function previewAbandon(g: GameState, region: number): Line[] {
   if (r.camps) lines.push({ icon: '⛺', text: `${pl(r.camps, 'campement')} revien${r.camps > 1 ? 'nent' : 't'} dans votre réserve.` });
   if (r.dragon) lines.push({ icon: '🐉', text: 'Le dragon quitte la région.' });
   const rs = raceOf(g, army);
+  if (army === 'gypsies' && !rs.declined)
+    lines.push({ icon: RACES.gypsies.icon, text: 'Gitanes : +1 pièce au décompte, mais pas de retour dans cette région ce tour.', tone: 'good' });
   const anywhere = !rs.declined && (rs.power === 'flying' || army === 'halflings');
   if (regionsOf(g, army).length === 1 && !anywhere)
     lines.push({ icon: '⚠️', text: 'C\'était votre dernière région : votre prochaine conquête devra repartir du bord de la carte.', tone: 'warn' });
@@ -705,4 +777,16 @@ export function lostRegions(g: GameState, pid: number): number[] {
     if (owner !== pid) out.add(l.region);
   }
   return [...out];
+}
+
+/** Barbares et Fées actifs : rien à replacer à la fin de leur tour ; la raison, en une ligne (`null` : on redéploie). */
+export function noRedeployText(g: GameState): string | null {
+  if (g.phase !== 'redeploy' || g.turn.stage !== 'active') return null;
+  const race = g.turn.army;
+  if ((race !== 'barbarians' && race !== 'pixies') || raceOf(g, race).declined) return null;
+  const aside = raceOf(g, race).aside ?? 0;
+  const out = aside ? ` · ${aside} hors plateau` : '';
+  return race === 'barbarians'
+    ? `${RACES.barbarians.icon} Barbares : jamais redéployés${out}`
+    : `${RACES.pixies.icon} Fées : une par région${out}`;
 }

@@ -4,11 +4,11 @@
  */
 import { POWERS, RACES, comboName } from './data';
 import { engine, kernelFor } from './engine';
-import { KernelRefusal, type KernelEvent } from './kernel';
+import { KernelRefusal, type KernelEvent, type Payment } from './kernel';
 import { getMap } from './maps';
 import { reasonText } from './reasons';
 import { currentActor, scoreLine } from './rules';
-import type { Action, AiLevel, AiThought, GameState, LogEntry, LogKind, TurnState } from './types';
+import type { Action, AiLevel, AiThought, ExpansionId, GameState, LogEntry, LogKind, TurnState } from './types';
 
 export class RuleError extends Error {}
 
@@ -23,6 +23,8 @@ export interface GameSetup {
   players: PlayerSetup[];
   mapSeed: number;
   seed: number;
+  /** Extensions jouées (par défaut aucune : jeu de base). */
+  expansions?: ExpansionId[];
 }
 
 /** Le journal ne garde que les dernières entrées. */
@@ -50,9 +52,11 @@ function freshTurn(): TurnState {
 export function createGame(setup: GameSetup): GameState {
   const n = setup.players.length;
   const map = getMap(n, setup.mapSeed);
+  const expansions = setup.expansions ?? [];
   const template: GameState = {
     version: 1,
     map,
+    expansions,
     players: setup.players.map((p, i) => ({ id: i, name: p.name, color: p.color, kind: p.kind, ai: p.ai, coins: 5, active: null, declined: [], lastIncome: 0 })),
     races: {},
     regions: map.regions.map(() => ({ race: null, tokens: 0, lair: false, fortress: false, camps: 0, hero: false, dragon: false, hole: false })),
@@ -78,7 +82,7 @@ export function createGame(setup: GameSetup): GameState {
   const events = k.newGame(template, setup.seed);
   const g = k.snapshot();
   g.log = narrate(g, events);
-  g.record = { mapSeed: setup.mapSeed, seed: setup.seed, startedAt: Date.now(), moves: [] };
+  g.record = { mapSeed: setup.mapSeed, seed: setup.seed, ...(expansions.length ? { expansions } : {}), startedAt: Date.now(), moves: [] };
   return g;
 }
 
@@ -156,8 +160,14 @@ export function narrate(g: GameState, events: KernelEvent[]): LogEntry[] {
         break;
       }
       case 'conquer': {
-        const verb = e.how === 'dragon' ? 'lâche son dragon sur' : e.how === 'sorcery' ? 'ensorcelle' : e.how === 'die' ? 'conquiert grâce au dé' : 'conquiert';
-        const shortVerb = e.how === 'dragon' ? 'prend avec son dragon' : e.how === 'sorcery' ? 'ensorcelle' : e.how === 'die' ? 'prend au dé' : 'prend';
+        const verbs = {
+          conquer: ['conquiert', 'prend'],
+          die: ['conquiert grâce au dé', 'prend au dé'],
+          dragon: ['lâche son dragon sur', 'prend avec son dragon'],
+          sorcery: ['ensorcelle', 'ensorcelle'],
+          catapult: ['bombarde avec sa Catapulte', 'prend à la Catapulte'],
+        } as const;
+        const [verb, shortVerb] = verbs[e.how];
         // un peuple en déclin (hors Goules) ne replace pas ses jetons : tout ce qui quitte la région est perdu
         const keeps = e.victimActive || e.victimRace === 'ghouls';
         log(e, e.player, 'conquer', `${name(e.player)} (${RACES[e.race].name}) ${verb} ${regionName(e.region)} avec ${plural(e.tokens, 'jeton')} — ${victimText(g, e)}.`, {
@@ -189,7 +199,14 @@ export function narrate(g: GameState, events: KernelEvent[]): LogEntry[] {
           });
         break;
       case 'abandon':
-        log(e, e.player, 'abandon', `${name(e.player)} abandonne ${regionName(e.region)}.`, { region: e.region, short: `abandonne ${regionName(e.region)}` });
+        // Gitanes : chaque région abandonnée rapporte 1 pièce au décompte
+        if (g.turn.abandoned?.includes(e.region))
+          log(e, e.player, 'abandon', `${name(e.player)} (Gitanes) abandonne ${regionName(e.region)} : +1 pièce au décompte.`, {
+            region: e.region,
+            short: `abandonne ${regionName(e.region)} (+1 💰, Gitanes)`,
+            race: 'gypsies',
+          });
+        else log(e, e.player, 'abandon', `${name(e.player)} abandonne ${regionName(e.region)}.`, { region: e.region, short: `abandonne ${regionName(e.region)}` });
         break;
       case 'decline': {
         const removed = e.removed.map((r) => RACES[r].name).join(', ');
@@ -238,6 +255,36 @@ export function narrate(g: GameState, events: KernelEvent[]): LogEntry[] {
       case 'defended':
         log(e, e.player, 'defense', `${name(e.player)} redéploie ses ${RACES[e.race].name}.`, { short: `replace ses ${RACES[e.race].name} après l'attaque` });
         break;
+      case 'pygmies':
+        log(e, e.player, 'power', `${name(e.player)} : les Pygmées lancent le dé de renfort (${e.value}) et récupèrent ${plural(e.tokens, 'jeton')}.`, {
+          short: `récupère ${plural(e.tokens, 'Pygmée')} (dé : ${e.value})`,
+          race: 'pygmies',
+          tokens: e.tokens,
+          roll: e.value,
+        });
+        break;
+      case 'paid': {
+        const why = PAYMENT_TEXT[e.kind];
+        const coins = plural(e.coins, 'pièce');
+        const from = e.from !== null ? name(e.from) : '';
+        const to = e.to !== null ? name(e.to) : '';
+        const text = {
+          bribe: `${from} verse ${coins} de pot-de-vin à ${to} (Corrompus).`,
+          theft: `${to} (Voleurs) vole ${coins} à ${from}.`,
+          cauldron: `${to} prend un Chaudron des Farfadets : +${coins}.`,
+          cauldrons: `${to} encaisse ${plural(e.coins, 'Chaudron')} des Farfadets : +${coins}.`,
+          historian: `${to} gagne ${coins} grâce à ses Historiens.`,
+          hire: `${from} paie ${coins} à ses Mercenaires.`,
+        }[e.kind];
+        // l'entrée revient à celui qui agit : il paie (pot-de-vin, Mercenaires) ou il gagne ; la victime d'un vol est marquée
+        const payer = e.kind === 'bribe' || e.kind === 'hire';
+        log(e, payer ? e.from : (e.to ?? e.from), 'power', text, {
+          short: payer ? `−${e.coins} 💰 (${why})` : `+${e.coins} 💰 (${why})`,
+          victim: e.kind === 'theft' && e.from !== null ? e.from : undefined,
+          pay: { kind: e.kind, from: e.from, to: e.to, coins: e.coins },
+        });
+        break;
+      }
       case 'over': {
         const best = [...g.players].sort((a, b) => b.coins - a.coins)[0]!;
         log(e, null, 'end', `Fin de la partie ! ${best.name} mène avec ${best.coins} pièces.`, { short: 'Fin de la partie' });
@@ -247,6 +294,16 @@ export function narrate(g: GameState, events: KernelEvent[]): LogEntry[] {
   }
   return out;
 }
+
+/** Les transferts de pièces des extensions, en quelques mots. */
+const PAYMENT_TEXT: Record<Payment, string> = {
+  bribe: 'Corrompus',
+  theft: 'Voleurs',
+  cauldron: 'Chaudron des Farfadets pris',
+  cauldrons: 'Chaudrons des Farfadets',
+  historian: 'Historiens',
+  hire: 'Mercenaires',
+};
 
 type Conquest = Extract<KernelEvent, { type: 'conquer' }>;
 

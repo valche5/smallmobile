@@ -7,16 +7,16 @@
 //!   mine, entrée, bord, côte), éloignement du centre en dixièmes, nombre de voisines, voisines ;
 //! - état : voir `encode_state`, qui l'écrit dans le même ordre.
 
-use crate::action::{Action, Event, How, IncomeKind, IncomeLine, Logged, Placement};
+use crate::action::{Action, Event, How, IncomeKind, IncomeLine, Logged, Payment, Placement};
 use crate::collections::{ArrayVec, PlayerSet, RegionSet};
 use crate::game::Game;
-use crate::ids::{Level, MAX_PLAYERS, MAX_REGIONS, Phase, Power, Race, Terrain};
+use crate::ids::{Expansions, Level, MAX_PLAYERS, MAX_REGIONS, Phase, Power, Race, Terrain};
 use crate::map::{Map, RegionDef};
 use crate::reason::Reason;
 use crate::rules::{AttackHint, AttackHow, Attacker, Modifier, Special, TargetKind, Via};
 use crate::state::{Combo, DefenseTask, DieRoll, Occupant, Peace, Player, RaceState, RegionState, Stage, State, Turn};
 
-pub const MAGIC: u32 = 0x534d_4b33; // « SMK3 »
+pub const MAGIC: u32 = 0x534d_4b34; // « SMK4 »
 const NONE_ID: u32 = 255;
 const LOST_ID: u32 = 254;
 
@@ -87,6 +87,11 @@ impl<'a> Reader<'a> {
 
     fn power(&mut self) -> Result<Power> {
         Power::from_index(self.word()? as usize).ok_or(BAD)
+    }
+
+    /// Un ensemble d'extensions : un bit par extension (`Expansion`).
+    fn expansions(&mut self) -> Result<Expansions> {
+        Expansions::from_bits(self.upto(u8::MAX as usize)? as u8).ok_or(BAD)
     }
 
     fn list<T: Copy + Default, const N: usize>(
@@ -221,6 +226,7 @@ pub fn decode_state(r: &mut Reader, map: &Map) -> Result<State> {
     let phase = Phase::from_index(r.word()? as usize).ok_or(BAD)?;
     let round = r.count()?;
     let max_rounds = r.count()?;
+    let expansions = r.expansions()?;
     let seq = r.word()?;
     let rng = r.word()?;
     let last_region = r.index_or_none(n)?;
@@ -259,9 +265,11 @@ pub fn decode_state(r: &mut Reader, map: &Map) -> Result<State> {
         let hand = r.int()?;
         let holes_placed = r.upto(2)? as i32;
         let picked_round = r.count()?;
+        let aside = r.upto(u8::MAX as usize)? as u8;
+        let cauldrons = r.upto(16)? as u8;
         if power != NONE_ID {
             let power = Power::from_index(power as usize).ok_or(BAD)?;
-            *slot = Some(RaceState { power, owner, declined, hand, holes_placed, picked_round });
+            *slot = Some(RaceState { power, owner, declined, hand, holes_placed, picked_round, aside, cauldrons });
         }
     }
     let mut regions = [RegionState::default(); MAX_REGIONS];
@@ -272,7 +280,7 @@ pub fn decode_state(r: &mut Reader, map: &Map) -> Result<State> {
             i => Occupant::Race(Race::from_index(i as usize).ok_or(BAD)?),
         };
         let tokens = r.count()?;
-        let flags = r.upto(31)?;
+        let flags = r.upto(255)?;
         let camps = r.count()?;
         *region = RegionState {
             occupant,
@@ -283,9 +291,10 @@ pub fn decode_state(r: &mut Reader, map: &Map) -> Result<State> {
             hero: flags & 4 != 0,
             dragon: flags & 8 != 0,
             hole: flags & 16 != 0,
+            marks: (flags >> 5) as u8,
         };
     }
-    let market = r.list(|r| Ok(Combo { race: r.race()?, power: r.power()?, coins: r.count()? }))?;
+    let market = r.list(|r| Ok(Combo { race: r.race()?, power: r.power()?, coins: r.count()?, tokens: r.count()? }))?;
     let race_deck: ArrayVec<Race, { Race::COUNT }> = r.list(|r| r.race())?;
     let power_deck: ArrayVec<Power, { Power::COUNT }> = r.list(|r| r.power())?;
     let race_tail = r.upto(race_deck.len())? as u8;
@@ -309,6 +318,11 @@ pub fn decode_state(r: &mut Reader, map: &Map) -> Result<State> {
         picked: r.flag()?,
         amazon_bonus: r.count()?,
         readied: [0; MAX_REGIONS],
+        catapult_used: r.flag()?,
+        regrouped: r.flag()?,
+        abandoned: RegionSet(r.word()? as u64 | (r.word()? as u64) << 32),
+        tower: r.index_or_none(n)?.map(|i| i as u8),
+        hire: r.index_or_none(n)?.map(|i| i as u8),
     };
     for readied in turn.readied.iter_mut().take(n) {
         *readied = r.count()?;
@@ -326,6 +340,7 @@ pub fn decode_state(r: &mut Reader, map: &Map) -> Result<State> {
         power_tail,
         round,
         max_rounds,
+        expansions,
         current,
         phase,
         turn,
@@ -376,6 +391,16 @@ fn validate(s: &State, map: &Map) -> Result<()> {
         ok(s.races[task.race.index()].is_some_and(|rs| rs.owner == task.player), "défense d'un peuple absent")?;
     }
     ok(s.peace.len() <= s.players.len(), "trop de paix imposées")?;
+    ok(s.turn.abandoned.iter().all(|i| i < map.len()), "région abandonnée hors de la carte")?;
+    ok(s.turn.hire.is_none() || s.phase == Phase::Conquest, "choix des Mercenaires hors des conquêtes")?;
+    let x = s.expansions;
+    ok(
+        Race::ALL.iter().all(|&r| x.has_race(r) || !in_play(r))
+            && s.race_deck.iter().all(|&r| x.has_race(r))
+            && s.power_deck.iter().all(|&p| x.has_power(p))
+            && s.market.iter().all(|c| x.has_race(c.race) && x.has_power(c.power)),
+        "peuple ou pouvoir d'une extension qui n'est pas jouée",
+    )?;
     Ok(())
 }
 
@@ -385,6 +410,7 @@ pub fn encode_state(s: &State, n: usize, w: &mut Writer) {
         .word(s.phase.index() as u32)
         .int(s.round)
         .int(s.max_rounds)
+        .word(s.expansions.bits() as u32)
         .word(s.seq)
         .word(s.rng)
         .opt(s.last_region)
@@ -408,8 +434,10 @@ pub fn encode_state(s: &State, n: usize, w: &mut Writer) {
                 .word(rs.declined as u32)
                 .int(rs.hand)
                 .int(rs.holes_placed)
-                .int(rs.picked_round),
-            None => w.word(NONE_ID).word(0).word(0).int(0).int(0).int(0),
+                .int(rs.picked_round)
+                .int(rs.aside.into())
+                .int(rs.cauldrons.into()),
+            None => w.word(NONE_ID).word(0).word(0).int(0).int(0).int(0).int(0).int(0),
         };
     }
     for r in &s.regions[..n] {
@@ -422,12 +450,13 @@ pub fn encode_state(s: &State, n: usize, w: &mut Writer) {
             | (r.fortress as u32) << 1
             | (r.hero as u32) << 2
             | (r.dragon as u32) << 3
-            | (r.hole as u32) << 4;
+            | (r.hole as u32) << 4
+            | (r.marks as u32) << 5;
         w.word(occupant).int(r.tokens).word(flags).int(r.camps);
     }
     w.word(s.market.len() as u32);
     for c in &s.market {
-        w.word(c.race.index() as u32).word(c.power.index() as u32).int(c.coins);
+        w.word(c.race.index() as u32).word(c.power.index() as u32).int(c.coins).int(c.tokens);
     }
     w.word(s.race_deck.len() as u32);
     for &r in &s.race_deck {
@@ -451,7 +480,13 @@ pub fn encode_state(s: &State, n: usize, w: &mut Writer) {
         .word(t.die_rolled as u32)
         .word(t.declined as u32)
         .word(t.picked as u32)
-        .int(t.amazon_bonus);
+        .int(t.amazon_bonus)
+        .word(t.catapult_used as u32)
+        .word(t.regrouped as u32)
+        .word(t.abandoned.0 as u32)
+        .word((t.abandoned.0 >> 32) as u32)
+        .opt(t.tower.map(usize::from))
+        .opt(t.hire.map(usize::from));
     for &r in &t.readied[..n] {
         w.int(r);
     }
@@ -508,12 +543,14 @@ pub struct NewGame {
     pub levels: Vec<Level>,
     pub seed: u32,
     pub rounds: i32,
+    pub expansions: Expansions,
     pub map: Map,
     pub lost: RegionSet,
 }
 
-/// Une nouvelle partie : nombre de joueurs, niveaux, graine de la partie, nombre de tours, la carte
-/// (`decode_map`), puis pour chaque région 1 si une tribu oubliée l'occupe, 0 sinon.
+/// Une nouvelle partie : nombre de joueurs, niveaux, graine de la partie, nombre de tours, extensions
+/// jouées (un bit par extension, 0 : jeu de base), la carte (`decode_map`), puis pour chaque région 1
+/// si une tribu oubliée l'occupe, 0 sinon.
 pub fn decode_new_game(r: &mut Reader) -> Result<NewGame> {
     let count = r.upto(MAX_PLAYERS)?;
     if count < 2 {
@@ -522,6 +559,7 @@ pub fn decode_new_game(r: &mut Reader) -> Result<NewGame> {
     let levels = (0..count).map(|_| Level::from_index(r.word()? as usize).ok_or(BAD)).collect::<Result<Vec<_>>>()?;
     let seed = r.word()?;
     let rounds = r.count()?;
+    let expansions = r.expansions()?;
     let map = decode_map(r)?;
     let mut lost = RegionSet::default();
     for region in 0..map.len() {
@@ -529,10 +567,11 @@ pub fn decode_new_game(r: &mut Reader) -> Result<NewGame> {
             lost.insert(region);
         }
     }
-    Ok(NewGame { levels, seed, rounds, map, lost })
+    Ok(NewGame { levels, seed, rounds, expansions, map, lost })
 }
 
-/// Une action : type, deux arguments, puis pour `Place` un nombre de jetons par région.
+/// Une action : type, deux arguments, puis pour `Place` un nombre de jetons par région. Catapulte :
+/// région de tir, puis cible.
 pub fn decode_action(words: &[u32], n: usize) -> Result<Action> {
     let mut r = Reader::new(words);
     let kind = r.word()?;
@@ -565,6 +604,11 @@ pub fn decode_action(words: &[u32], n: usize) -> Result<Action> {
         15 => Action::EndTurn { peace: (a >= 0).then_some(at), stout: b != 0 },
         16 => Action::EndDefense,
         17 => Action::SkipPick,
+        18 => Action::Catapult { from: at, region: if b < 0 { usize::MAX } else { b as usize } },
+        19 => Action::Hire { region: at },
+        20 => Action::Regroup,
+        21 => Action::Cauldron { region: at },
+        22 => Action::Tower { region: at },
         _ => return Err(BAD),
     };
     r.done()?;
@@ -591,6 +635,11 @@ pub fn encode_action(a: &Action, n: usize, w: &mut Writer) {
         Action::EndTurn { peace, stout } => (15, peace.map_or(-1, |p| p as i32), stout as i32),
         Action::EndDefense => (16, 0, 0),
         Action::SkipPick => (17, 0, 0),
+        Action::Catapult { from, region } => (18, from as i32, region as i32),
+        Action::Hire { region } => (19, region as i32, 0),
+        Action::Regroup => (20, 0, 0),
+        Action::Cauldron { region } => (21, region as i32, 0),
+        Action::Tower { region } => (22, region as i32, 0),
     };
     w.word(kind).int(x).int(y);
     if let Action::Place(p) = a {
@@ -627,12 +676,15 @@ fn modifier_bit(m: Modifier) -> u32 {
         Modifier::Underworld => 2,
         Modifier::Tritons => 3,
         Modifier::Giants => 4,
+        Modifier::Goblins => 5,
+        Modifier::Were => 6,
     }
 }
 
 /// Par région : raison du blocage (2 mots), coût, coût effectif, type (0 aucun, 1 normal, 2 dé),
-/// jetons manquants, dragon puis sorcellerie (0 sans objet, 1 permis, 2 refusé, et la raison), et
-/// les modificateurs du peuple qui conquiert (bits : Commandos, Montés, Souterrains, Tritons, Géants).
+/// jetons manquants, dragon puis sorcellerie (0 sans objet, 1 permis, 2 refusé, et la raison), les
+/// modificateurs du peuple qui conquiert (bits : Commandos, Montés, Souterrains, Tritons, Géants,
+/// Gobelins, Garous), puis la conquête payée des Mercenaires (comme le dragon) et son coût.
 pub fn encode_targets(g: &Game, w: &mut Writer) {
     let army = g.state.turn.army.filter(|_| g.state.phase == Phase::Conquest);
     for t in g.targets() {
@@ -647,12 +699,15 @@ pub fn encode_targets(g: &Game, w: &mut Writer) {
         encode_special(t.dragon, w);
         encode_special(t.sorcery, w);
         w.word(mods);
+        let (hire, hired) = g.hire_target(&t);
+        encode_special(hire, w);
+        w.int(hired);
     }
 }
 
 /// Les attaquants d'une région : joueur, peuple (255 : un peuple à choisir), coût, manière (0
 /// conquête, 1 dragon, 2 sorcellerie), aide (0 aucune, 1 modificateur, 2 Berserks) et modificateur,
-/// accès lointain (0 voisin, 1 Volants, 2 cavernes).
+/// accès lointain (0 voisin, 1 Volants, 2 cavernes, 3 Catapulte).
 pub fn encode_attackers(attackers: &[Attacker], w: &mut Writer) {
     for a in attackers {
         let how = match a.how {
@@ -669,6 +724,7 @@ pub fn encode_attackers(attackers: &[Attacker], w: &mut Writer) {
             None => 0,
             Some(Via::Flying) => 1,
             Some(Via::Cavern) => 2,
+            Some(Via::Catapult) => 3,
         };
         w.word(a.player as u32).race(a.race).int(a.cost).word(how).word(hint).word(modifier).word(via);
     }
@@ -723,6 +779,7 @@ pub fn encode_events(events: &[Logged], w: &mut Writer) {
                     How::Die => 1,
                     How::Dragon => 2,
                     How::Sorcery => 3,
+                    How::Catapult => 4,
                 };
                 let occupant = match victim_occupant {
                     Occupant::Empty => NONE_ID,
@@ -769,6 +826,20 @@ pub fn encode_events(events: &[Logged], w: &mut Writer) {
             Event::GameStarted => {
                 w.word(13);
             }
+            Event::PygmiesReturned { player, value, tokens } => {
+                w.word(14).word(player as u32).int(value).int(tokens);
+            }
+            Event::Paid { kind, from, to, coins } => {
+                let kind = match kind {
+                    Payment::Bribe => 0,
+                    Payment::Theft => 1,
+                    Payment::Cauldron => 2,
+                    Payment::Cauldrons => 3,
+                    Payment::Historian => 4,
+                    Payment::Hire => 5,
+                };
+                w.word(15).word(kind).opt(from).opt(to).int(coins);
+            }
         }
         let len = w.len() - start;
         w.out[start] = len as u32;
@@ -786,12 +857,65 @@ mod tests {
         let generated = mapgen::generate(3, 77).unwrap();
         let map = generated.to_map().unwrap();
         let lost = generated.regions.iter().enumerate().filter(|(_, r)| r.lost_tribe).map(|(i, _)| i).collect();
-        let g = Game::create(&map, lost, &[Level::Normal; 3], generated.rounds, 5, &mut NoJournal);
+        let g = Game::create(&map, lost, &[Level::Normal; 3], generated.rounds, 5, Expansions::NONE, &mut NoJournal);
         let mut buf = vec![0; 8192];
         let mut w = Writer::new(&mut buf);
         encode_game(&map, &g.state, &mut w);
         let (map2, state2) = decode_game(w.written()).unwrap();
         assert_eq!(state2, g.state);
         assert_eq!(map2.regions, map.regions);
+    }
+
+    /// Une partie avec extensions, jouée un peu par l'IA (marché, pioches, peuples en jeu), fait
+    /// l'aller-retour ; un état qui en contient sans les déclarer est refusé.
+    #[test]
+    fn games_with_expansions_round_trip() {
+        use crate::ai::{Ai, Restrictions, Tuning};
+        use crate::ids::Expansion;
+        let generated = mapgen::generate(4, 21).unwrap();
+        let map = generated.to_map().unwrap();
+        let lost = generated.regions.iter().enumerate().filter(|(_, r)| r.lost_tribe).map(|(i, _)| i).collect();
+        let x = Expansions::NONE.with(Expansion::BeNotAfraid).with(Expansion::GrandDames);
+        let mut g = Game::create(&map, lost, &[Level::Normal; 4], generated.rounds, 9, x, &mut NoJournal);
+        let tuning = Tuning::default();
+        let mut buf = vec![0; 8192];
+        for _ in 0..12 {
+            let a = Ai::new(&tuning).decide(&g, Restrictions::default()).unwrap();
+            g.apply(&a, &mut NoJournal).unwrap();
+            let mut w = Writer::new(&mut buf);
+            encode_game(&map, &g.state, &mut w);
+            let (_, state2) = decode_game(w.written()).unwrap();
+            assert_eq!(state2, g.state);
+            assert_eq!(state2.expansions, x);
+        }
+        let mut forgotten = g.state;
+        forgotten.expansions = Expansions::NONE;
+        let mut w = Writer::new(&mut buf);
+        encode_game(&map, &forgotten, &mut w);
+        assert!(decode_game(w.written()).is_err());
+    }
+
+    /// La création d'une partie lit les extensions jouées après le nombre de tours.
+    #[test]
+    fn new_games_carry_their_expansions() {
+        let map = mapgen::generate(2, 3).unwrap().to_map().unwrap();
+        for bits in [0u32, 0b010, 0b111, 0b1000] {
+            let mut buf = vec![0; 4096];
+            let mut w = Writer::new(&mut buf);
+            w.word(2).word(Level::Normal.index() as u32).word(Level::Hard.index() as u32).word(77).int(8).word(bits);
+            encode_map(&map, &mut w);
+            for _ in 0..map.len() {
+                w.word(0);
+            }
+            let mut r = Reader::new(w.written());
+            match decode_new_game(&mut r) {
+                Ok(new) => {
+                    r.done().unwrap();
+                    assert_eq!(new.expansions.bits() as u32, bits);
+                    assert_eq!((new.seed, new.rounds, new.levels.len()), (77, 8, 2));
+                }
+                Err(_) => assert!(bits > Expansions::ALL.bits() as u32, "extensions {bits:#b} refusées"),
+            }
+        }
     }
 }

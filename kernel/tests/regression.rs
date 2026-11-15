@@ -8,7 +8,7 @@ use smallmobile_kernel::collections::RegionSet;
 use smallmobile_kernel::mapgen;
 use smallmobile_kernel::rng::Key;
 use smallmobile_kernel::state::Occupant;
-use smallmobile_kernel::{Game, Level, Phase};
+use smallmobile_kernel::{Expansions, Game, Level, Phase};
 
 fn fingerprint(players: usize, games: u64) -> u32 {
     let tuning = Tuning::default();
@@ -19,8 +19,15 @@ fn fingerprint(players: usize, games: u64) -> u32 {
         let map = generated.to_map().unwrap();
         let lost: RegionSet =
             generated.regions.iter().enumerate().filter(|(_, r)| r.lost_tribe).map(|(i, _)| i).collect();
-        let mut g =
-            Game::create(&map, lost, &vec![Level::Normal; players], generated.rounds, seed as u32, &mut NoJournal);
+        let mut g = Game::create(
+            &map,
+            lost,
+            &vec![Level::Normal; players],
+            generated.rounds,
+            seed as u32,
+            Expansions::NONE,
+            &mut NoJournal,
+        );
         while g.state.phase != Phase::GameOver {
             let a = ai.decide(&g, Restrictions::default()).unwrap();
             g.apply(&a, &mut NoJournal).unwrap();

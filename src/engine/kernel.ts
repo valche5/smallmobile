@@ -3,12 +3,12 @@
  * compilé en WebAssembly pour le téléphone et le serveur : des mots de 32 bits échangés dans un
  * tampon. Le format est décrit dans kernel/src/wire.rs ; les deux fichiers vont ensemble.
  */
-import { NOUNS, POWER_IDS, RACE_IDS, SUFFIXES } from './data';
-import type { Action, AiLevel, GameState, MapDef, Phase, PowerId, RaceId, RegionDef, Terrain } from './types';
+import { EXPANSION_IDS, NOUNS, POWER_IDS, RACE_IDS, SUFFIXES } from './data';
+import type { Action, AiLevel, ExpansionId, GameState, MapDef, Phase, PowerId, RaceId, RegionDef, Terrain } from './types';
 
 /** Version du protocole attendue (`ABI_VERSION` côté Rust). */
-export const KERNEL_ABI = 4;
-const MAGIC = 0x534d4b33;
+export const KERNEL_ABI = 5;
+const MAGIC = 0x534d4b34;
 const NONE = 255;
 const LOST = 254;
 
@@ -18,6 +18,7 @@ const LEVELS: AiLevel[] = ['facile', 'normal', 'difficile', 'expert'];
 const ACTIONS: Action['type'][] = [
   'pick', 'conquer', 'reinforce', 'berserkRoll', 'dragon', 'sorcery', 'abandon', 'decline', 'endConquest',
   'deploy', 'autoDeploy', 'place', 'camp', 'fortress', 'hero', 'endTurn', 'endDefense', 'skipPick',
+  'catapult', 'hire', 'regroup', 'cauldron', 'tower',
 ];
 
 const raceIndex = (r: RaceId) => RACE_IDS.indexOf(r);
@@ -26,7 +27,22 @@ const raceOrNull = (w: number): RaceId | null => (w === NONE ? null : RACE_IDS[w
 const occupantWord = (r: RaceId | 'lost' | null) => (r === 'lost' ? LOST : raceWord(r));
 const occupantOf = (w: number): RaceId | 'lost' | null => (w === LOST ? 'lost' : raceOrNull(w));
 const mask = (players: number[]) => players.reduce((m, p) => m | (1 << p), 0);
-const regionFlags = (r: GameState['regions'][number]) => +r.lair | (+r.fortress << 1) | (+r.hero << 2) | (+r.dragon << 3) | (+r.hole << 4);
+/** Un ensemble d'extensions : un bit par extension, dans l'ordre du noyau. */
+const expansionBits = (xs: readonly ExpansionId[] = []) => xs.reduce((m, x) => m | (1 << EXPANSION_IDS.indexOf(x)), 0);
+const expansionsOf = (bits: number): ExpansionId[] => EXPANSION_IDS.filter((_, i) => bits & (1 << i));
+const regionFlags = (r: GameState['regions'][number]) =>
+  +r.lair | (+r.fortress << 1) | (+r.hero << 2) | (+r.dragon << 3) | (+r.hole << 4) | (+!!r.catapult << 5) | (+!!r.cauldron << 6) | (+!!r.ladies << 7);
+/** Un ensemble de régions (au plus 64) : deux mots de bits. */
+function regionBits(regions: readonly number[] = []): [number, number] {
+  let lo = 0;
+  let hi = 0;
+  for (const r of regions) {
+    if (r < 32) lo |= 1 << r;
+    else hi |= 1 << (r - 32);
+  }
+  return [lo >>> 0, hi >>> 0];
+}
+const regionsOf = (lo: number, hi: number, n: number) => Array.from({ length: n }, (_, i) => i).filter((i) => (i < 32 ? lo >>> i : hi >>> (i - 32)) & 1);
 
 /** Lecture séquentielle d'une réponse du noyau. */
 class Words {
@@ -125,19 +141,21 @@ export function readGeneratedRegions(xs: Uint32Array): { seed: number; rounds: n
 
 /** L'état de la partie, dans l'ordre de `wire::encode_state`. */
 export function stateWords(g: GameState): Uint32Array {
-  const out: number[] = [g.players.length, g.current, PHASES.indexOf(g.phase), g.round, g.maxRounds, g.seq, g.rng, g.lastRegion ?? -1];
+  const out: number[] = [
+    g.players.length, g.current, PHASES.indexOf(g.phase), g.round, g.maxRounds, expansionBits(g.expansions), g.seq, g.rng, g.lastRegion ?? -1,
+  ];
   const d = g.lastDie;
   out.push(+!!d);
   if (d) out.push(d.seq, d.player, d.value, d.need, d.success === null ? -1 : +d.success, d.region ?? -1, +d.berserk);
   for (const p of g.players) out.push(LEVELS.indexOf(p.ai), p.coins, raceWord(p.active), p.lastIncome, p.declined.length, ...p.declined.map(raceIndex));
   for (const id of RACE_IDS) {
     const rs = g.races[id];
-    if (rs) out.push(POWER_IDS.indexOf(rs.power), rs.owner, +rs.declined, rs.hand, rs.holesPlaced, rs.pickedRound);
-    else out.push(NONE, 0, 0, 0, 0, 0);
+    if (rs) out.push(POWER_IDS.indexOf(rs.power), rs.owner, +rs.declined, rs.hand, rs.holesPlaced, rs.pickedRound, rs.aside ?? 0, rs.cauldrons ?? 0);
+    else out.push(NONE, 0, 0, 0, 0, 0, 0, 0);
   }
   for (const r of g.regions) out.push(occupantWord(r.race), r.tokens, regionFlags(r), r.camps);
   out.push(g.market.length);
-  for (const s of g.market) out.push(raceIndex(s.race), POWER_IDS.indexOf(s.power), s.coins);
+  for (const s of g.market) out.push(raceIndex(s.race), POWER_IDS.indexOf(s.power), s.coins, s.tokens ?? 0);
   out.push(g.raceDeck.length, ...g.raceDeck.map(raceIndex), g.powerDeck.length, ...g.powerDeck.map((p) => POWER_IDS.indexOf(p)));
   // anciennes sauvegardes : rien de connu au fond des pioches
   out.push(Math.min(g.raceTail ?? 0, g.raceDeck.length), Math.min(g.powerTail ?? 0, g.powerDeck.length));
@@ -145,6 +163,7 @@ export function stateWords(g: GameState): Uint32Array {
   out.push(
     +(t.stage === 'ghouls'), raceWord(t.army), t.conquests, t.nonEmpty, mask(t.attacked), mask(t.sorcery), +t.dragonUsed,
     t.fortressRegion ?? -1, t.berserkDie ?? -1, +t.dieRolled, +t.declined, +t.picked, t.amazonBonus,
+    +!!t.catapultUsed, +!!t.regrouped, ...regionBits(t.abandoned), t.tower ?? -1, t.hire ?? -1,
   );
   for (let i = 0; i < g.regions.length; i++) out.push(t.readied[i] ?? 0);
   out.push(g.defense.length);
@@ -175,6 +194,7 @@ export function readState(xs: Uint32Array, template: GameState): GameState {
   const phase = PHASES[r.u()]!;
   const round = r.i();
   const maxRounds = r.i();
+  const expansions = expansionsOf(r.u());
   const seq = r.u();
   const rng = r.u();
   const lastRegion = r.opt();
@@ -193,8 +213,8 @@ export function readState(xs: Uint32Array, template: GameState): GameState {
   }));
   const races: GameState['races'] = {};
   for (const id of RACE_IDS) {
-    const [power, owner, declined, hand, holesPlaced, pickedRound] = [r.u(), r.u(), r.yes(), r.i(), r.i(), r.i()];
-    if (power !== NONE) races[id] = { race: id, power: POWER_IDS[power]!, owner, declined, hand, holesPlaced, pickedRound };
+    const [power, owner, declined, hand, holesPlaced, pickedRound, aside, cauldrons] = [r.u(), r.u(), r.yes(), r.i(), r.i(), r.i(), r.i(), r.i()];
+    if (power !== NONE) races[id] = { race: id, power: POWER_IDS[power]!, owner, declined, hand, holesPlaced, pickedRound, aside, cauldrons };
   }
   const regions = template.map.regions.map(() => {
     const [occupant, tokens, flags, camps] = [r.u(), r.i(), r.u(), r.i()];
@@ -206,10 +226,13 @@ export function readState(xs: Uint32Array, template: GameState): GameState {
       hero: !!(flags & 4),
       dragon: !!(flags & 8),
       hole: !!(flags & 16),
+      catapult: !!(flags & 32),
+      cauldron: !!(flags & 64),
+      ladies: !!(flags & 128),
       camps,
     };
   });
-  const market = list(() => ({ race: RACE_IDS[r.u()]!, power: POWER_IDS[r.u()]!, coins: r.i() }));
+  const market = list(() => ({ race: RACE_IDS[r.u()]!, power: POWER_IDS[r.u()]!, coins: r.i(), tokens: r.i() }));
   const raceDeck = list(() => RACE_IDS[r.u()]!);
   const powerDeck = list(() => POWER_IDS[r.u()]!);
   const raceTail = r.u();
@@ -220,6 +243,8 @@ export function readState(xs: Uint32Array, template: GameState): GameState {
   const [conquests, nonEmpty, attacked, sorcery, dragonUsed, fortressRegion, berserkDie, dieRolled, declined, picked, amazonBonus] = [
     r.i(), r.i(), members(r.u()), members(r.u()), r.yes(), r.opt(), r.opt(), r.yes(), r.yes(), r.yes(), r.i(),
   ];
+  const [catapultUsed, regrouped, lo, hi, tower, hire] = [r.yes(), r.yes(), r.u(), r.u(), r.opt(), r.opt()];
+  const abandoned = regionsOf(lo, hi, regions.length);
   const readied: Record<number, number> = {};
   for (let i = 0; i < regions.length; i++) {
     const x = r.i();
@@ -240,6 +265,7 @@ export function readState(xs: Uint32Array, template: GameState): GameState {
     powerTail,
     round,
     maxRounds,
+    expansions,
     current,
     phase,
     seq,
@@ -248,13 +274,16 @@ export function readState(xs: Uint32Array, template: GameState): GameState {
     lastDie,
     defense,
     peace,
-    turn: { stage, army, conquests, nonEmpty, attacked, sorcery, dragonUsed, fortressRegion, berserkDie, dieRolled, declined, picked, amazonBonus, readied },
+    turn: {
+      stage, army, conquests, nonEmpty, attacked, sorcery, dragonUsed, fortressRegion, berserkDie, dieRolled, declined, picked, amazonBonus, readied,
+      catapultUsed, regrouped, abandoned, tower, hire,
+    },
   };
 }
 
 // --- actions -----------------------------------------------------------------------------------
 
-/** Une action, dans l'ordre de `wire::decode_action` : type, deux arguments, puis les jetons d'un placement. */
+/** Une action, dans l'ordre de `wire::decode_action` : type, deux arguments (Catapulte : région de tir, cible), puis les jetons d'un placement. */
 export function actionWords(a: Action, regions: number): Uint32Array {
   const kind = ACTIONS.indexOf(a.type);
   if (kind < 0) throw new Error('Action inconnue.');
@@ -266,7 +295,12 @@ export function actionWords(a: Action, regions: number): Uint32Array {
       x = a.index;
       break;
     case 'conquer': case 'reinforce': case 'dragon': case 'sorcery': case 'abandon': case 'fortress': case 'hero':
+    case 'hire': case 'cauldron': case 'tower':
       x = a.region;
+      break;
+    case 'catapult':
+      x = a.from;
+      y = a.region;
       break;
     case 'deploy': case 'camp':
       x = a.region;
@@ -297,7 +331,10 @@ export function readAction(xs: Uint32Array, g: GameState): Action {
     case 'pick':
       return { type, index: x };
     case 'conquer': case 'reinforce': case 'dragon': case 'sorcery': case 'abandon': case 'fortress': case 'hero':
+    case 'hire': case 'cauldron': case 'tower':
       return { type, region: x };
+    case 'catapult':
+      return { type, from: x, region: y };
     case 'deploy': case 'camp':
       return { type, region: x, delta: y };
     case 'autoDeploy':
@@ -341,7 +378,7 @@ function special(r: Words): Special {
 }
 
 /** Ce qui baisse le coût d'une conquête, dans l'ordre du noyau. */
-export const MODIFIERS = ['commando', 'mounted', 'underworld', 'tritons', 'giants'] as const;
+export const MODIFIERS = ['commando', 'mounted', 'underworld', 'tritons', 'giants', 'goblins', 'were'] as const;
 export type Modifier = (typeof MODIFIERS)[number];
 const modifiersOf = (bits: number) => MODIFIERS.filter((_, i) => bits & (1 << i));
 
@@ -356,6 +393,9 @@ export interface KernelTarget {
   dragon: Special;
   sorcery: Special;
   modifiers: Modifier[];
+  /** Mercenaires : conquête en payant 1 pièce, au coût `hired`. */
+  hire: Special;
+  hired: number;
 }
 
 export function readTargets(xs: Uint32Array): KernelTarget[] {
@@ -366,7 +406,10 @@ export function readTargets(xs: Uint32Array): KernelTarget[] {
     const [cost, effective, kind, need] = [r.i(), r.i(), r.u(), r.i()];
     const dragon = special(r);
     const sorcery = special(r);
-    out.push({ region: out.length, block, cost, effective, kind: kind === 1 ? 'normal' : kind === 2 ? 'die' : 'none', need, dragon, sorcery, modifiers: modifiersOf(r.u()) });
+    const modifiers = modifiersOf(r.u());
+    const hire = special(r);
+    const hired = r.i();
+    out.push({ region: out.length, block, cost, effective, kind: kind === 1 ? 'normal' : kind === 2 ? 'die' : 'none', need, dragon, sorcery, modifiers, hire, hired });
   }
   return out;
 }
@@ -378,7 +421,7 @@ export interface KernelAttacker {
   cost: number;
   how: 'conquer' | 'dragon' | 'sorcery';
   hint: { kind: 'modifier'; modifier: Modifier } | { kind: 'berserk' } | null;
-  via: 'flying' | 'cavern' | null;
+  via: 'flying' | 'cavern' | 'catapult' | null;
 }
 
 export function readAttackers(xs: Uint32Array): KernelAttacker[] {
@@ -392,7 +435,7 @@ export function readAttackers(xs: Uint32Array): KernelAttacker[] {
       cost,
       how: (['conquer', 'dragon', 'sorcery'] as const)[how]!,
       hint: hint === 1 ? { kind: 'modifier', modifier: modifiersOf(modifier)[0]! } : hint === 2 ? { kind: 'berserk' } : null,
-      via: via === 1 ? 'flying' : via === 2 ? 'cavern' : null,
+      via: via === 1 ? 'flying' : via === 2 ? 'cavern' : via === 3 ? 'catapult' : null,
     });
   }
   return out;
@@ -401,6 +444,7 @@ export function readAttackers(xs: Uint32Array): KernelAttacker[] {
 /** Les lignes du décompte, dans l'ordre du noyau (`IncomeKind`). */
 export const INCOME_KINDS = [
   'regions', 'mines', 'farms', 'magic', 'orcLoot', 'alchemist', 'forests', 'hills', 'swamps', 'merchant', 'pillage', 'fortresses', 'wealthy',
+  'abandoned', 'tower', 'imperial', 'barricade', 'peaceLoving',
 ] as const;
 export interface IncomeLine {
   kind: (typeof INCOME_KINDS)[number];
@@ -430,7 +474,7 @@ export type KernelEvent = { seq: number; round: number } & (
       player: number;
       race: RaceId;
       region: number;
-      how: 'conquer' | 'die' | 'dragon' | 'sorcery';
+      how: 'conquer' | 'die' | 'dragon' | 'sorcery' | 'catapult';
       tokens: number;
       victim: number | null;
       victimRace: RaceId | 'lost' | null;
@@ -448,7 +492,16 @@ export type KernelEvent = { seq: number; round: number } & (
   | { type: 'ghoulsDone'; player: number }
   | { type: 'defended'; player: number; race: RaceId }
   | { type: 'over' }
+  /** Pygmées perdus : dé de renfort (`value`), `tokens` Pygmées reviennent en main. */
+  | { type: 'pygmies'; player: number; value: number; tokens: number }
+  /** Des pièces changent de main (`null` : la banque). */
+  | { type: 'paid'; kind: Payment; from: number | null; to: number | null; coins: number }
 );
+
+/** Pourquoi des pièces changent de main, dans l'ordre du noyau (`Payment`) : Corrompus, Voleurs,
+ * Chaudron pris, Chaudrons encaissés, Historiens, Mercenaires. */
+export const PAYMENTS = ['bribe', 'theft', 'cauldron', 'cauldrons', 'historian', 'hire'] as const;
+export type Payment = (typeof PAYMENTS)[number];
 
 export function readEvents(xs: Uint32Array): KernelEvent[] {
   const out: KernelEvent[] = [];
@@ -472,7 +525,7 @@ export function readEvents(xs: Uint32Array): KernelEvent[] {
         const [player, by, region, how, tokens, victim, occupant, victimActive, lost, returned] = [
           r.u(), race(), r.u(), r.u(), r.i(), r.opt(), r.u(), r.yes(), r.i(), r.i(),
         ];
-        const hows = ['conquer', 'die', 'dragon', 'sorcery'] as const;
+        const hows = ['conquer', 'die', 'dragon', 'sorcery', 'catapult'] as const;
         e = { ...head, type: 'conquer', player, race: by, region, how: hows[how]!, tokens, victim, victimRace: occupantOf(occupant), victimActive, lost, returned };
         break;
       }
@@ -511,6 +564,12 @@ export function readEvents(xs: Uint32Array): KernelEvent[] {
       case 13:
         e = { ...head, type: 'started' };
         break;
+      case 14:
+        e = { ...head, type: 'pygmies', player: r.u(), value: r.i(), tokens: r.i() };
+        break;
+      case 15:
+        e = { ...head, type: 'paid', kind: PAYMENTS[r.u()]!, from: r.opt(), to: r.opt(), coins: r.i() };
+        break;
       default:
         throw new Error(`Événement inconnu du noyau : ${kind}`);
     }
@@ -548,6 +607,7 @@ export interface KernelExports {
   kernel_threat(race: number, region: number): number;
   kernel_full_deployment(race: number): number;
   kernel_decline_preview(): number;
+  kernel_catapults(): number;
 }
 
 /** Un noyau chargé : ses fonctions, et une vue sur son tampon d'échange (à redemander après chaque appel). */
@@ -638,10 +698,10 @@ export class Kernel {
     return readGeneratedRegions(this.reply(this.x.kernel_read_map(this.send(words))));
   }
 
-  /** Crée et charge une partie sur la carte de `template` ; renvoie les événements du début. */
+  /** Crée et charge une partie sur la carte de `template`, avec ses extensions ; renvoie les événements du début. */
   newGame(template: GameState, seed: number): KernelEvent[] {
     const { map, players } = template;
-    const words = [players.length, ...players.map((p) => LEVELS.indexOf(p.ai)), seed >>> 0, map.rounds];
+    const words = [players.length, ...players.map((p) => LEVELS.indexOf(p.ai)), seed >>> 0, map.rounds, expansionBits(template.expansions)];
     mapWords(map, words);
     words.push(...map.regions.map((r) => +r.lostTribe));
     const events = readEvents(this.reply(this.x.kernel_new_game(this.send(Uint32Array.from(words)))));
@@ -667,13 +727,26 @@ export class Kernel {
     return readIncome(this.reply(this.x.kernel_income(player)));
   }
 
-  /** Raison de refuser le déclin, puis l'abandon de chaque région (`null` : permis). */
-  permissions(): { decline: Reason | null; abandon: (Reason | null)[] } {
+  /**
+   * Raisons de refuser le déclin, la reprise des jetons des Intrépides et le choix de la Tour d'Ivoire
+   * des Prêtresses, puis l'abandon de chaque région (`null` : permis).
+   */
+  permissions(): { decline: Reason | null; regroup: Reason | null; tower: Reason | null; abandon: (Reason | null)[] } {
     const r = new Words(this.reply(this.x.kernel_permissions()));
     const decline = reason(r);
+    const regroup = reason(r);
+    const tower = reason(r);
     const abandon: (Reason | null)[] = [];
     while (!r.done) abandon.push(reason(r));
-    return { decline, abandon };
+    return { decline, regroup, tower, abandon };
+  }
+
+  /** Les tirs de Catapulte permis maintenant : région de tir, cible, coût. */
+  catapults(): { from: number; region: number; cost: number }[] {
+    const r = new Words(this.reply(this.x.kernel_catapults()));
+    const out: { from: number; region: number; cost: number }[] = [];
+    while (!r.done) out.push({ from: r.u(), region: r.u(), cost: r.i() });
+    return out;
   }
 
   threat(race: RaceId, region: number): number {

@@ -1,14 +1,15 @@
 import { aiAction } from '../engine/ai';
-import { AI_NAMES, PLAYER_COLORS } from '../engine/data';
+import { AI_NAMES, cleanExpansions, PLAYER_COLORS } from '../engine/data';
 import { applyAction, createGame, RuleError } from '../engine/game';
 import { PRESETS } from '../engine/maps';
 import { randomSeed } from '../engine/rng';
 import { currentActor } from '../engine/rules';
-import type { Action, AiLevel, AiThought, GameState } from '../engine/types';
+import type { Action, AiLevel, AiThought, ExpansionId, GameState } from '../engine/types';
 import { FACTOR, isShown, newEvents, playbackMs, REDEPLOY_MS, splitFrames, thinkDelay } from '../shared/pacing';
 import {
   CODE_ALPHABET,
   CODE_LENGTH,
+  levelFor,
   normalizeCode,
   type AiSpeed,
   type ClientMsg,
@@ -50,6 +51,8 @@ export interface RoomData {
   aiLevel: AiLevel;
   /** Le labo dont l'Expert joue les sièges de niveau `expert` (`src/shared/experts.ts`). */
   expertLab: string;
+  /** Extensions jouées (absent dans les salles d'avant les extensions : aucune). */
+  expansions?: ExpansionId[];
   speed: AiSpeed;
   /** Siège qui a réglé la vitesse en dernier. */
   speedBy?: number | null;
@@ -58,6 +61,7 @@ export interface RoomData {
 }
 
 interface Room extends RoomData {
+  expansions: ExpansionId[];
   clients: Set<Client>;
   undo: GameState[];
   timer: unknown;
@@ -85,7 +89,10 @@ export interface RoomStore {
   loadAll(): RoomData[];
 }
 
-const IRREVERSIBLE = new Set<Action['type']>(['reinforce', 'berserkRoll', 'decline', 'endTurn', 'endDefense', 'skipPick']);
+/** Actions qu'on ne peut pas annuler : elles tirent un dé, finissent le tour ou paient (Mercenaires). Une autre
+ * action le devient si elle a tiré un dé (renforts des Pygmées) ou fait changer des pièces de main (Corrompus,
+ * Voleurs, Chaudron pris) : voir `action`. */
+const IRREVERSIBLE = new Set<Action['type']>(['reinforce', 'berserkRoll', 'decline', 'endTurn', 'endDefense', 'skipPick', 'hire']);
 const LEVELS: AiLevel[] = ['facile', 'normal', 'difficile', 'expert'];
 const SPEEDS: AiSpeed[] = ['lent', 'normal', 'rapide'];
 
@@ -136,10 +143,12 @@ export class RoomManager {
     this.log = services.log ?? ((line) => console.log(line));
     this.firstSeat = services.firstSeat ?? ((players) => Math.floor(Math.random() * players));
     for (const data of store?.loadAll() ?? []) {
-      // salles sauvegardées avant les variantes de l'Expert : celle par défaut
+      // salles sauvegardées avant les variantes de l'Expert : celle par défaut ; avant les extensions : aucune
+      const expansions = cleanExpansions(data.expansions ?? data.game?.expansions);
       const room: Room = {
         ...data,
         expertLab: expertLab(data.expertLab),
+        expansions,
         clients: new Set(),
         undo: [],
         timer: null,
@@ -148,6 +157,8 @@ export class RoomManager {
         history: [],
         plan: null,
       };
+      // salle incohérente (Expert et extensions) : l'IA Difficile tient les sièges de l'Expert
+      this.fitLevels(room);
       this.rooms.set(room.code, room);
       this.scheduleAi(room);
     }
@@ -220,7 +231,8 @@ export class RoomManager {
 
   private create(client: Client, msg: Extract<ClientMsg, { t: 'create' }>) {
     const size = PRESETS[msg.size] ? msg.size : 2;
-    const aiLevel = LEVELS.includes(msg.aiLevel) ? msg.aiLevel : 'normal';
+    const expansions = cleanExpansions(msg.expansions);
+    const aiLevel = levelFor(LEVELS.includes(msg.aiLevel) ? msg.aiLevel : 'normal', expansions);
     const solo = msg.opponent === 'ai';
     const code = this.newCode();
     const token = crypto.randomUUID();
@@ -233,6 +245,7 @@ export class RoomManager {
       mapSeed: Number.isInteger(msg.mapSeed) ? msg.mapSeed : PRESETS[size]!.seed,
       aiLevel,
       expertLab: expertLab(msg.expertLab),
+      expansions,
       speed: 'normal',
       seats: [
         { name: cleanName(msg.name, 'Joueur 1'), color: validColor(msg.color) ?? PLAYER_COLORS[0]!.color, kind: 'human', ai: aiLevel, token, replaced: false },
@@ -323,10 +336,13 @@ export class RoomManager {
         room.mapSeed = PRESETS[msg.size]!.seed;
         this.resizeSeats(room);
       }
+      if (msg.expansions !== undefined) room.expansions = cleanExpansions(msg.expansions);
       if (msg.aiLevel !== undefined && LEVELS.includes(msg.aiLevel)) {
         room.aiLevel = msg.aiLevel;
         room.seats.forEach((s) => (s.ai = msg.aiLevel!));
       }
+      // des extensions cochées : l'Expert retombe sur Difficile
+      this.fitLevels(room);
       if (EXPERT_LABS.some((l) => l.id === msg.expertLab)) room.expertLab = msg.expertLab!;
       if (msg.mapSeed !== undefined && Number.isInteger(msg.mapSeed)) room.mapSeed = msg.mapSeed;
     }
@@ -346,6 +362,7 @@ export class RoomManager {
       players: room.seats.map((s) => ({ name: s.name, color: s.color, kind: s.kind, ai: s.ai })),
       mapSeed: room.mapSeed,
       seed: randomSeed(),
+      expansions: room.expansions,
     });
     room.undo = [];
     room.history = [];
@@ -374,7 +391,9 @@ export class RoomManager {
       client.send({ t: 'error', message: e instanceof RuleError ? e.message : 'Action invalide.' });
       return this.sendState(client, room, null);
     }
-    const irreversible = IRREVERSIBLE.has(action.type) || currentActor(next) !== actor;
+    // un dé tiré (renforts des Pygmées) ou des pièces données ne s'annulent pas : on verrait le dé avant de rejouer
+    const fresh = newEvents(g, next);
+    const irreversible = IRREVERSIBLE.has(action.type) || currentActor(next) !== actor || fresh.some((e) => e.roll !== undefined || e.pay !== undefined);
     room.undo = irreversible ? [] : [...room.undo.slice(-30), g];
     room.game = next;
     this.markBusy(room, g, next);
@@ -475,7 +494,8 @@ export class RoomManager {
       const planned = room.plan?.seq === cur.seq ? room.plan.actions[0] : undefined;
       room.plan = null;
       if (planned && this.play(room, cur, planned)) return;
-      const expert = level === 'expert' ? this.experts.get(room.expertLab) : undefined;
+      // l'Expert ne connaît que le jeu de base : jamais appelé pour une partie avec extensions
+      const expert = level === 'expert' && !cur.expansions?.length ? this.experts.get(room.expertLab) : undefined;
       if (expert) return this.askExpert(room, cur, who, expert);
       const start = performance.now();
       let action: Action;
@@ -598,6 +618,7 @@ export class RoomManager {
       mapSeed: room.mapSeed,
       aiLevel: room.aiLevel,
       expertLab: room.expertLab,
+      expansions: room.expansions,
       speed: room.speed,
       speedBy: room.speedBy ?? null,
       started: !!room.game,
@@ -677,6 +698,15 @@ export class RoomManager {
       c.seat = (c.seat! - first + n) % n;
       c.send({ t: 'joined', code: room.code, token: room.seats[c.seat]!.token!, seat: c.seat });
     }
+  }
+
+  /** Avec des extensions, l'Expert (jeu de base seulement) cède la place à l'IA Difficile : réglage de la salle,
+   * sièges, et joueurs d'une partie déjà lancée (salle sauvegardée incohérente). */
+  private fitLevels(room: Room) {
+    const xs = room.game ? (room.game.expansions ?? []) : room.expansions;
+    room.aiLevel = levelFor(room.aiLevel, xs);
+    for (const s of room.seats) s.ai = levelFor(s.ai, xs);
+    for (const p of room.game?.players ?? []) p.ai = levelFor(p.ai, xs);
   }
 
   private resizeSeats(room: Room) {

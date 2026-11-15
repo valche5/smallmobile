@@ -1,4 +1,4 @@
-import type { AiLevel, PowerId, RaceId, Terrain } from './types';
+import type { AiLevel, ExpansionId, PowerId, RaceId, Terrain } from './types';
 
 export interface RaceDef {
   id: RaceId;
@@ -15,6 +15,8 @@ export interface RaceDef {
   /** Ce que ce peuple peut vous faire, vu de l'adversaire (52 caractères au plus). */
   foe: string;
   kind: EffectKind;
+  /** L'extension du peuple (absent : jeu de base). */
+  expansion?: ExpansionId;
 }
 
 /** Nature d'un effet : attaque, défense, revenu, spécial. */
@@ -36,7 +38,18 @@ export interface PowerDef {
   /** Ce que ce pouvoir permet contre vous, vu de l'adversaire (52 caractères au plus). */
   foe: string;
   kind: EffectKind;
+  /** L'extension du pouvoir (absent : jeu de base). */
+  expansion?: ExpansionId;
 }
+
+/** Les extensions, dans l'ordre du noyau (qui joue leurs règles). */
+export const EXPANSIONS: Record<ExpansionId, { name: string }> = {
+  beNotAfraid: { name: 'Même pas peur' },
+  cursed: { name: 'Maauuudits' },
+  grandDames: { name: 'Honneur aux Dames' },
+};
+
+export const EXPANSION_IDS = Object.keys(EXPANSIONS) as ExpansionId[];
 
 export const RACES: Record<RaceId, RaceDef> = {
   amazons: {
@@ -209,6 +222,141 @@ export const RACES: Record<RaceId, RaceDef> = {
     desc: 'Chaque Source magique occupée rapporte 1 pièce de plus à la fin du tour (tant que les Mages sont actifs).',
     foe: '+1 💰 par Source magique',
     kind: 'revenu',
+  },
+  // --- Même pas peur ---
+  barbarians: {
+    id: 'barbarians',
+    name: 'Barbares',
+    tokens: 9,
+    max: 14,
+    icon: '⚔️',
+    tag: 'jamais redéployés',
+    short: 'Nombreux, mais ne redéploient jamais',
+    desc: "À la fin de leur tour, les Barbares ne redéploient pas leurs jetons : chacun reste dans la région qu'il a conquise.",
+    foe: 'Nombreux, mais figés là où ils ont conquis',
+    kind: 'attaque',
+    expansion: 'beNotAfraid',
+  },
+  leprechauns: {
+    id: 'leprechauns',
+    name: 'Farfadets',
+    tokens: 6,
+    max: 11,
+    icon: '🍀',
+    tag: '+1 💰 par Chaudron',
+    short: 'Posent des Chaudrons : +1 💰 chacun',
+    desc: "Au redéploiement, posent des Chaudrons dans leurs régions. Au début de leur tour suivant, chaque Chaudron encore là rapporte 1 pièce ; l'adversaire qui prend la région prend aussi le Chaudron.",
+    foe: 'Prenez leurs régions pour voler leurs Chaudrons',
+    kind: 'revenu',
+    expansion: 'beNotAfraid',
+  },
+  pixies: {
+    id: 'pixies',
+    name: 'Fées',
+    tokens: 11,
+    max: 16,
+    icon: '🧚',
+    tag: 'une par région',
+    short: 'Très nombreuses, une seule par région entre deux tours',
+    desc: "Au redéploiement, une seule Fée reste dans chaque région ; les autres quittent le plateau jusqu'au début du tour suivant.",
+    foe: 'Une seule Fée par région entre deux tours',
+    kind: 'attaque',
+    expansion: 'beNotAfraid',
+  },
+  homunculi: {
+    id: 'homunculi',
+    name: 'Homoncules',
+    tokens: 5,
+    max: 15,
+    icon: '🧪',
+    tag: '+1 jeton si sautés',
+    short: "+1 jeton chaque fois qu'on choisit plus bas",
+    desc: "Tant qu'ils attendent au marché, chaque joueur qui choisit une combinaison plus bas que la leur y ajoute un Homoncule (15 au plus).",
+    foe: 'Grossissent quand vous les laissez au marché',
+    kind: 'spécial',
+    expansion: 'beNotAfraid',
+  },
+  pygmies: {
+    id: 'pygmies',
+    name: 'Pygmées',
+    tokens: 6,
+    max: 11,
+    icon: '🪃',
+    tag: 'renforts si pertes',
+    short: 'Chaque Pygmée perdu : dé de renfort',
+    desc: "Chaque fois qu'un Pygmée est perdu, lancez le dé de renfort : autant de Pygmées reviennent de la réserve.",
+    foe: 'Reviennent au dé quand vous leur prenez des jetons',
+    kind: 'défense',
+    expansion: 'beNotAfraid',
+  },
+  // --- Maauuudits ---
+  goblins: {
+    id: 'goblins',
+    name: 'Gobelins',
+    tokens: 6,
+    max: 11,
+    icon: '👺',
+    tag: '−1 contre déclin',
+    short: '−1 jeton contre les peuples en déclin',
+    desc: 'Conquérir une région occupée par un peuple en déclin leur coûte 1 jeton de moins (minimum 1).',
+    foe: '−1 pour attaquer vos peuples en déclin',
+    kind: 'attaque',
+    expansion: 'cursed',
+  },
+  kobolds: {
+    id: 'kobolds',
+    name: 'Kobolds',
+    tokens: 11,
+    max: 16,
+    icon: '🦎',
+    tag: 'au moins 2/région',
+    short: 'Très nombreux, jamais moins de 2 par région',
+    desc: 'Ne peuvent jamais occuper une région avec moins de 2 Kobolds, sauf en déclin.',
+    foe: "Au moins 2 par région tant qu'ils sont actifs",
+    kind: 'défense',
+    expansion: 'cursed',
+  },
+  // --- Honneur aux Dames ---
+  whiteLadies: {
+    id: 'whiteLadies',
+    name: 'Dames Blanches',
+    tokens: 2,
+    max: 7,
+    icon: '🤍',
+    tag: 'déclin imprenable',
+    short: 'En déclin, leurs régions sont imprenables',
+    desc: "Une fois en déclin, les régions des Dames Blanches sont imprenables jusqu'à la fin de la partie.",
+    inDecline: 'Leurs régions sont imprenables',
+    foe: 'En déclin, leurs régions sont imprenables',
+    kind: 'défense',
+    expansion: 'grandDames',
+  },
+  gypsies: {
+    id: 'gypsies',
+    name: 'Gitanes',
+    tokens: 6,
+    max: 11,
+    icon: '🃏',
+    tag: '+1 💰 par abandon',
+    short: '+1 💰 par région abandonnée',
+    desc: "Chaque région qu'elles abandonnent rapporte 1 pièce ; elles ne peuvent pas la reprendre pendant ce tour.",
+    foe: '+1 💰 pour chaque région abandonnée',
+    kind: 'revenu',
+    expansion: 'grandDames',
+  },
+  priestesses: {
+    id: 'priestesses',
+    name: 'Prêtresses',
+    tokens: 4,
+    max: 9,
+    icon: '🗼',
+    tag: "Tour d'Ivoire",
+    short: "En déclin, une Tour d'Ivoire qui rapporte",
+    desc: "En passant en déclin, reçoivent autant de Prêtresses que de régions, empilées en une Tour d'Ivoire dans une seule région ; chaque pion de la Tour rapporte 1 pièce.",
+    inDecline: "Tour d'Ivoire : +1 💰 par Prêtresse",
+    foe: "En déclin, leur Tour d'Ivoire rapporte gros",
+    kind: 'revenu',
+    expansion: 'grandDames',
   },
 };
 
@@ -433,10 +581,202 @@ export const POWERS: Record<PowerId, PowerDef> = {
     foe: '+7 💰 au tour où ils sont choisis',
     kind: 'revenu',
   },
+  // --- Même pas peur ---
+  catapult: {
+    id: 'catapult',
+    name: 'Catapultés',
+    tokens: 4,
+    icon: '☄️',
+    tag: 'tir par-dessus',
+    short: 'Une conquête par-dessus une région, à −1',
+    desc: 'Une fois par tour, conquièrent une région en passant par-dessus une autre, avec 1 jeton de moins (minimum 1). La région de la Catapulte est imprenable.',
+    foe: 'Attaquent par-dessus une région, à −1',
+    kind: 'attaque',
+    expansion: 'beNotAfraid',
+  },
+  corrupt: {
+    id: 'corrupt',
+    name: 'Corrompus',
+    tokens: 4,
+    icon: '💸',
+    tag: 'pots-de-vin',
+    short: 'Qui prend leurs régions leur paie 1 💰',
+    desc: 'Chaque adversaire qui conquiert une de leurs régions leur donne 1 pièce.',
+    foe: '1 💰 à leur payer pour chaque région prise',
+    kind: 'revenu',
+    expansion: 'beNotAfraid',
+  },
+  imperial: {
+    id: 'imperial',
+    name: 'Impériaux',
+    tokens: 4,
+    icon: '👑',
+    tag: '+1 💰 au-delà de 3',
+    short: '+1 💰 par région au-delà de 3',
+    desc: 'Chaque région occupée au-delà de la troisième rapporte 1 pièce de plus (tant que le peuple est actif).',
+    foe: '+1 💰 par région au-delà de 3',
+    kind: 'revenu',
+    expansion: 'beNotAfraid',
+  },
+  mercenary: {
+    id: 'mercenary',
+    name: 'Mercenaires',
+    tokens: 4,
+    icon: '🤝',
+    tag: '1 💰 pour −2',
+    short: 'Payer 1 💰 : conquête à −2',
+    desc: "Peuvent payer 1 pièce pour qu'une conquête leur coûte 2 jetons de moins (minimum 1).",
+    foe: 'Paient 1 💰 pour attaquer avec 2 jetons de moins',
+    kind: 'attaque',
+    expansion: 'beNotAfraid',
+  },
+  barricade: {
+    id: 'barricade',
+    name: 'Retranchés',
+    tokens: 4,
+    icon: '🚧',
+    tag: '+3 💰 (≤ 4 régions)',
+    short: '+3 💰 en finissant avec 4 régions ou moins',
+    desc: "Gagnent 3 pièces de plus à la fin d'un tour où ils occupent 4 régions ou moins (tant que le peuple est actif).",
+    foe: '+3 💰 quand ils tiennent 4 régions ou moins',
+    kind: 'revenu',
+    expansion: 'beNotAfraid',
+  },
+  // --- Maauuudits ---
+  hordes: {
+    id: 'hordes',
+    name: 'de la Horde',
+    tokens: 5,
+    icon: '👥',
+    tag: '+2 jetons',
+    short: '2 jetons de plus, perdus au déclin',
+    desc: 'Reçoivent 2 jetons de plus, retirés quand le peuple passe en déclin.',
+    foe: "Deux jetons de plus tant qu'ils sont actifs",
+    kind: 'attaque',
+    expansion: 'cursed',
+  },
+  cursed: {
+    id: 'cursed',
+    name: 'Maudits',
+    tokens: 0,
+    icon: '☠️',
+    tag: 'aucun avantage',
+    short: 'Aucun avantage ; les sauter coûte 3 💰',
+    desc: "N'apportent aucun avantage. Choisir une combinaison plus bas que celle des Maudits coûte 3 pièces au lieu de 1 pour passer par-dessus.",
+    foe: 'Aucun avantage',
+    kind: 'spécial',
+    expansion: 'cursed',
+  },
+  marauding: {
+    id: 'marauding',
+    name: 'Intrépides',
+    tokens: 5,
+    icon: '🏃',
+    tag: 'reconquièrent',
+    short: 'Reprennent leurs jetons et conquièrent encore',
+    desc: 'Avant le dé de renfort, peuvent reprendre leurs jetons (en laissant un par région) et conquérir encore.',
+    foe: "Repartent à l'attaque dans le même tour",
+    kind: 'attaque',
+    expansion: 'cursed',
+  },
+  ransacking: {
+    id: 'ransacking',
+    name: 'Voleurs',
+    tokens: 4,
+    icon: '🦹',
+    tag: 'volent 1 💰',
+    short: 'Volent 1 💰 par région prise à un peuple actif',
+    desc: 'Chaque région prise à un peuple actif adverse lui vole 1 pièce.',
+    foe: 'Volent 1 💰 par région prise à votre peuple actif',
+    kind: 'attaque',
+    expansion: 'cursed',
+  },
+  were: {
+    id: 'were',
+    name: 'Garous',
+    tokens: 4,
+    icon: '🐺',
+    tag: '−2 aux tours pairs',
+    short: '−2 jetons par conquête aux tours pairs',
+    desc: 'Aux tours pairs, chaque conquête leur coûte 2 jetons de moins (minimum 1).',
+    foe: '−2 pour attaquer, un tour sur deux',
+    kind: 'attaque',
+    expansion: 'cursed',
+  },
+  // --- Honneur aux Dames ---
+  historian: {
+    id: 'historian',
+    name: 'Historiens',
+    tokens: 5,
+    icon: '📜',
+    tag: '+1 💰 par déclin',
+    short: '+1 💰 par peuple en déclin',
+    desc: "Au choix, +1 pièce par peuple en déclin à la table ; ensuite +1 pièce chaque fois qu'un peuple passe en déclin, et +1 à leur propre déclin.",
+    foe: "+1 💰 chaque fois qu'un peuple passe en déclin",
+    kind: 'revenu',
+    expansion: 'grandDames',
+  },
+  peaceLoving: {
+    id: 'peaceLoving',
+    name: 'Pacifistes',
+    tokens: 4,
+    icon: '☮️',
+    tag: '+3 💰 sans attaque',
+    short: '+3 💰 par tour sans attaquer un peuple actif',
+    desc: "Gagnent 3 pièces à la fin de chaque tour où ils n'ont attaqué aucun peuple actif.",
+    foe: "+3 💰 s'ils n'attaquent aucun peuple actif",
+    kind: 'revenu',
+    expansion: 'grandDames',
+  },
 };
 
 export const RACE_IDS = Object.keys(RACES) as RaceId[];
 export const POWER_IDS = Object.keys(POWERS) as PowerId[];
+
+const inGame = (expansions: readonly ExpansionId[]) => (d: { expansion?: ExpansionId }) => !d.expansion || expansions.includes(d.expansion);
+
+/** Les peuples d'une partie : le jeu de base et les extensions jouées. */
+export function racesIn(expansions: readonly ExpansionId[] = []): RaceId[] {
+  return RACE_IDS.filter((id) => inGame(expansions)(RACES[id]));
+}
+
+/** Les pouvoirs d'une partie : le jeu de base et les extensions jouées. */
+export function powersIn(expansions: readonly ExpansionId[] = []): PowerId[] {
+  return POWER_IDS.filter((id) => inGame(expansions)(POWERS[id]));
+}
+
+/** Ce qu'apporte une extension (`null` : le jeu de base). */
+export function expansionContent(x: ExpansionId | null): { races: RaceId[]; powers: PowerId[] } {
+  return {
+    races: RACE_IDS.filter((id) => (RACES[id].expansion ?? null) === x),
+    powers: POWER_IDS.filter((id) => (POWERS[id].expansion ?? null) === x),
+  };
+}
+
+/** « 5 peuples, 5 pouvoirs » : ce qu'apporte une extension, en bref. */
+export function expansionBlurb(x: ExpansionId): string {
+  const { races, powers } = expansionContent(x);
+  const n = (k: number, w: string) => `${k} ${w}${k > 1 ? 's' : ''}`;
+  return `${n(races.length, 'peuple')}, ${n(powers.length, 'pouvoir')}`;
+}
+
+/** Une liste d'extensions reçue de l'extérieur (message, fichier) : connues, sans doublon, dans l'ordre du noyau. */
+export function cleanExpansions(raw: unknown): ExpansionId[] {
+  if (!Array.isArray(raw)) return [];
+  return EXPANSION_IDS.filter((x) => raw.includes(x));
+}
+
+/** Ce que coûte la combinaison `index` du marché : 1 pièce par combinaison au-dessus, 3 pour une Maudite
+ * (comme `pick_price` du noyau). */
+export function pickPrice(market: readonly { power: PowerId }[], index: number): number {
+  return market.slice(0, index).reduce((s, c) => s + (c.power === 'cursed' ? 3 : 1), 0);
+}
+
+/** Les jetons reçus en prenant la combinaison (Homoncules ajoutés compris ; de la Horde : +2). */
+export function startingTokens(slot: { race: RaceId; power: PowerId; tokens?: number }): number {
+  const base = Math.min(RACES[slot.race].tokens + POWERS[slot.power].tokens + (slot.tokens ?? 0), RACES[slot.race].max);
+  return base + (slot.power === 'hordes' ? 2 : 0);
+}
 
 export interface TagInfo {
   /** D'où vient l'étiquette : deux sujets peuvent partager le même emoji (Humains et Fermes). */
@@ -485,6 +825,11 @@ export const FEATURE_ICONS = {
   hero: '🦸',
   dragon: '🐉',
   hole: '🏡',
+  // extensions
+  catapult: '☄️',
+  cauldron: '🍯',
+  ladies: '🤍',
+  tower: '🗼',
 };
 
 /** Faces du dé de renfort. */

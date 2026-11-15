@@ -9,7 +9,8 @@ interface Base {
   onClose: () => void;
 }
 
-export function LegendSheet({ onClose }: Base) {
+/** `expansions` : les marqueurs des extensions de la partie s'ajoutent à la légende. */
+export function LegendSheet({ onClose, expansions = false }: Base & { expansions?: boolean }) {
   return (
     <Sheet onClose={onClose} title="Légende de la carte">
       <div class="legend-grid">
@@ -33,6 +34,14 @@ export function LegendSheet({ onClose }: Base) {
         <div class="legend-item">{FEATURE_ICONS.hero} Héros (imprenable)</div>
         <div class="legend-item">{FEATURE_ICONS.dragon} Dragon (imprenable)</div>
         <div class="legend-item">{FEATURE_ICONS.hole} Terrier (imprenable)</div>
+        {expansions && (
+          <>
+            <div class="legend-item">{FEATURE_ICONS.catapult} Catapulte (imprenable)</div>
+            <div class="legend-item">{FEATURE_ICONS.ladies} Dames Blanches (imprenable)</div>
+            <div class="legend-item">{FEATURE_ICONS.cauldron} Chaudron (+1 💰)</div>
+            <div class="legend-item">{FEATURE_ICONS.tower} Tour d'Ivoire</div>
+          </>
+        )}
       </div>
       <div class="legend-list">
         <div>

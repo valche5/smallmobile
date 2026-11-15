@@ -100,9 +100,11 @@ export function TopBar({ g, s }: { g: GameState; s: UIState }) {
   );
 }
 
-/** Les jetons du peuple encore en jeu : ceux en main et ceux sur la carte (baisse avec les pertes). */
+/** Les jetons du peuple encore en jeu : en main, sur la carte, et hors du plateau pour un tour (Barbares, Fées) ;
+ * baisse avec les pertes. */
 function inPlay(g: GameState, race: RaceId): number {
-  return (g.races[race]?.hand ?? 0) + regionsOf(g, race).reduce((n, r) => n + g.regions[r]!.tokens, 0);
+  const rs = g.races[race];
+  return (rs?.hand ?? 0) + (rs?.aside ?? 0) + regionsOf(g, race).reduce((n, r) => n + g.regions[r]!.tokens, 0);
 }
 
 /**

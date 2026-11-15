@@ -40,7 +40,7 @@ const rooms = new RoomManager(store, undefined, { experts, archive });
 for (const e of shared.__llmExperts?.values() ?? []) e.close();
 const llmExperts = (shared.__llmExperts = startExperts(() => {}));
 const llm = new LlmGames({ experts: llmExperts, archive, dir: process.env.LLM_DIR ?? './data/llm' });
-const llmGuide = llmRules(await Bun.file('./src/server/llm.md').text());
+const llmTemplate = await Bun.file('./src/server/llm.md').text();
 
 const lan = Object.values(networkInterfaces())
   .flat()
@@ -69,7 +69,7 @@ const server = Bun.serve<SocketData>({
       if (!PRESETS[players] || !Number.isSafeInteger(rank) || rank < 0) return new Response('Introuvable', { status: 404 });
       return new Response(mapRecord(players, rank), { headers: { 'Content-Type': 'application/octet-stream' } });
     },
-    ...llmRoutes(llm, () => llmGuide),
+    ...llmRoutes(llm, (expansions) => llmRules(llmTemplate, expansions)),
   },
   // une action d'un LLM attend que les adversaires aient joué : parfois plus que les 10 s par défaut
   idleTimeout: 120,

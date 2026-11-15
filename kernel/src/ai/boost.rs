@@ -269,6 +269,24 @@ mod tests {
         assert_eq!(Models::get().check(), Ok(()));
     }
 
+    /// Les modèles livrés, appris sur le jeu de base, ne lisent pas les cases des extensions (rangées
+    /// en fin de liste) : ils évaluent les parties du jeu de base comme avant.
+    #[test]
+    fn shipped_models_ignore_the_expansions() {
+        use crate::ids::{Power, Race};
+        let m = Models::get();
+        let extra: Vec<String> = Race::ALL[Race::BASE_COUNT..]
+            .iter()
+            .map(|r| format!("race:{}", r.key()))
+            .chain(Power::ALL[Power::BASE_COUNT..].iter().map(|p| format!("power:{}", p.key())))
+            .collect();
+        for model in [&m.pick, &m.entry, &m.conquest, &m.conquest_lead, &m.decline, &m.hold] {
+            assert!(model.inputs.iter().all(|name| !extra.contains(name)));
+        }
+        let layout = super::super::features::conquest_layout();
+        assert!(extra.iter().all(|name| layout.index(name).is_some_and(|i| i >= m.conquest.inputs.len())));
+    }
+
     #[test]
     fn evaluates_uneven_trees() {
         let leaf = Node::leaf;

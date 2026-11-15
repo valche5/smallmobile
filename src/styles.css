@@ -1261,6 +1261,24 @@ button {
   background: #fff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
+/* niveau impossible (Expert avec une extension) : grisé */
+.seg button.off {
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+.card h3.sub-head {
+  margin: 14px 0 2px;
+  font-size: 15px;
+}
+.expansions .stout-row {
+  padding: 4px 0;
+}
+.expansions .readonly {
+  cursor: default;
+}
+.cost-none rect {
+  fill: #77736c;
+}
 .colors {
   display: flex;
   gap: 8px;

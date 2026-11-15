@@ -80,6 +80,7 @@ function conquerMain(g: GameState, e: LogEntry, viewer: number | null, verb = 'p
   const at = where(g, e.region);
   // L2 tient sur une ligne : le nombre de jetons de l'attaquant compte moins que le nom de la région
   if (e.how === 'dragon') return `🐉 lâche son dragon sur ${at}`;
+  if (e.how === 'catapult') verb = 'catapulte';
   if (e.how === 'sorcery') {
     if (e.victim !== undefined && e.victim === viewer) return `🔮 ensorcelle votre ${at}`;
     return `🔮 ensorcelle ${at}${e.victim !== undefined ? ` de ${nameOf(g, e.victim)}` : ''}`;
@@ -119,7 +120,10 @@ export function narrate(g: GameState, frame: LogEntry[], viewer: number | null):
     case 'conquer': {
       out.region = e.region;
       if (e.how === undefined) break;
-      out.main = e.how === 'dragon' || e.how === 'sorcery' ? conquerMain(g, e, viewer) : `⚔️ ${conquerMain(g, e, viewer)}`;
+      out.main =
+        e.how === 'dragon' || e.how === 'sorcery'
+          ? conquerMain(g, e, viewer)
+          : `${e.how === 'catapult' ? FEATURE_ICONS.catapult : '⚔️'} ${conquerMain(g, e, viewer)}`;
       break;
     }
     case 'die': {
@@ -140,13 +144,15 @@ export function narrate(g: GameState, frame: LogEntry[], viewer: number | null):
       out.rolling = `il faut ${d.need} sur ${where(g, e.region)}`;
       const conquer = frame.find((x) => x.kind === 'conquer');
       if (success && conquer) out.main = `🎲 ${d.value} : réussi, ${conquerMain(g, conquer, viewer)}`;
+      // un dé raté se rattrape plus tard en payant 1 pièce (Mercenaires) : le dé se lit d'abord comme raté
+      else if (e.die?.success === false && g.turn.hire === e.region) out.main = `🎲 ${d.value} : raté · ${POWERS.mercenary.icon} peut payer 1 💰`;
       else if (success) out.main = `🎲 ${d.value} : réussi`;
       else out.main = `🎲 ${d.value} : raté · fin de ses conquêtes`;
       break;
     }
     case 'abandon':
       out.region = e.region;
-      if (e.region !== undefined) out.main = `🏳️ abandonne ${where(g, e.region)}`;
+      if (e.region !== undefined) out.main = `🏳️ abandonne ${where(g, e.region)}${e.race === 'gypsies' ? ' · +1 💰' : ''}`;
       break;
     case 'decline': {
       if (!e.race) break;
@@ -156,6 +162,18 @@ export function narrate(g: GameState, frame: LogEntry[], viewer: number | null):
       break;
     }
     case 'power': {
+      if (e.pay) {
+        Object.assign(out, payStory(g, e, viewer));
+        break;
+      }
+      if (e.roll !== undefined) {
+        // Pygmées perdus : le dé de renfort les fait revenir
+        const mine = who === viewer;
+        const back = e.tokens ?? 0;
+        out.main = `${RACES.pygmies.icon} dé des Pygmées : ${e.roll}`;
+        out.detail = back ? `${plural(back, 'Pygmée')} ${mine ? 'vous reviennent' : 'reviennent'} en main` : 'aucun Pygmée ne revient';
+        break;
+      }
       if (e.victim === undefined) break;
       if (e.victim === viewer) {
         out.main = '🕊️ vous impose la paix';
@@ -182,6 +200,31 @@ export function narrate(g: GameState, frame: LogEntry[], viewer: number | null):
     out.loss = hit.lost ?? 1;
   }
   return out;
+}
+
+/** Les pièces qui changent de main (extensions), vues du joueur de ce téléphone. */
+function payStory(g: GameState, e: LogEntry, viewer: number | null): Pick<Narration, 'main' | 'detail' | 'tone'> {
+  const p = e.pay!;
+  const coins = `${p.coins} 💰`;
+  const me = (pid: number | null) => pid !== null && pid === viewer;
+  switch (p.kind) {
+    case 'bribe':
+      return me(p.to)
+        ? { main: `${POWERS.corrupt.icon} vous verse ${coins} (Corrompus)`, tone: 'neutral' }
+        : { main: `${POWERS.corrupt.icon} verse ${coins} à ${nameOf(g, p.to)} (Corrompus)`, tone: 'neutral' };
+    case 'theft':
+      return me(p.from)
+        ? { main: `${POWERS.ransacking.icon} vous vole ${coins}`, detail: 'Voleurs : une pièce par région prise', tone: 'hit' }
+        : { main: `${POWERS.ransacking.icon} vole ${coins} à ${nameOf(g, p.from)}`, tone: 'neutral' };
+    case 'cauldron':
+      return { main: `${FEATURE_ICONS.cauldron} prend un Chaudron des Farfadets · +${coins}`, tone: 'neutral' };
+    case 'cauldrons':
+      return { main: `${FEATURE_ICONS.cauldron} encaisse ${plural(p.coins, 'Chaudron')} · +${coins}`, tone: 'neutral' };
+    case 'historian':
+      return { main: `${POWERS.historian.icon} Historiens · +${coins}`, tone: 'neutral' };
+    case 'hire':
+      return { main: `${POWERS.mercenary.icon} paie ${coins} à ses Mercenaires`, tone: 'neutral' };
+  }
 }
 
 /** Régions voisines des miennes (sans les miennes). */

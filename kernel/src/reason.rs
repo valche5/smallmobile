@@ -82,6 +82,24 @@ pub enum Reason {
     OnlyStout,
     // --- action mal formée -------------------------------------------------------------------
     InvalidRegion,
+    // --- extensions ----------------------------------------------------------------------------
+    /// Barbares et Fées : pas de redéploiement à la fin de leur tour.
+    NoRedeploy,
+    /// Kobolds actifs : jamais moins de 2 par région.
+    KeepTwoTokens,
+    /// Gitanes : région abandonnée ce tour.
+    AbandonedThisTurn,
+    /// Gitanes : plus de déclin après un abandon.
+    DeclineAfterAbandon,
+    /// Mercenaires : payer ou renoncer d'abord.
+    HirePending,
+    CatapultUsed,
+    /// Aucune région intermédiaire (hors mer) voisine de la région de tir et de la cible.
+    CatapultOutOfRange,
+    RegroupUsed,
+    AllCauldronsPlaced,
+    /// La Tour d'Ivoire se choisit avant le déclin (début de tour, ou fin de tour des Vaillants).
+    TowerNotNow,
 }
 
 impl Reason {
@@ -107,6 +125,8 @@ impl Reason {
             Immune(Immunity::Hero) => (16, 0),
             Immune(Immunity::Hole) => (16, 1),
             Immune(Immunity::Dragon) => (16, 2),
+            Immune(Immunity::Ladies) => (16, 3),
+            Immune(Immunity::Catapult) => (16, 4),
             FirstConquest => (17, 0),
             NotAdjacent => (18, 0),
             DieRolled => (19, 0),
@@ -148,6 +168,16 @@ impl Reason {
             AttackedThisTurn => (55, 0),
             OnlyStout => (56, 0),
             InvalidRegion => (57, 0),
+            NoRedeploy => (58, 0),
+            KeepTwoTokens => (59, 0),
+            AbandonedThisTurn => (60, 0),
+            DeclineAfterAbandon => (61, 0),
+            HirePending => (62, 0),
+            CatapultUsed => (63, 0),
+            CatapultOutOfRange => (64, 0),
+            RegroupUsed => (65, 0),
+            AllCauldronsPlaced => (66, 0),
+            TowerNotNow => (67, 0),
         };
         (code, arg)
     }

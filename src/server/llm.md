@@ -22,7 +22,8 @@ Une partie se joue à 2, 3, 4 ou 5 joueurs, en 10 manches à 2 et 3 joueurs, 9 �
 Un **peuple** (race) est associé à un **pouvoir** : la combinaison donne un nombre de jetons (ceux
 du peuple plus ceux du pouvoir) et des capacités. Le **marché** montre 6 combinaisons, numérotées
 de 0 à 5. Prendre la combinaison n coûte **n pièces** : vous posez 1 pièce sur chacune des
-combinaisons placées avant elle. Les pièces déjà posées sur la combinaison que vous prenez sont à
+combinaisons placées avant elle (avec l'extension Maauuudits, 3 pièces sur une combinaison des
+Maudits : le coût exact est donné dans la vue). Les pièces déjà posées sur la combinaison que vous prenez sont à
 vous. Le marché se complète ensuite depuis les pioches, dont l'ordre est caché.
 
 Vous avez au plus un **peuple actif**, et en général un seul peuple **en déclin**.
@@ -117,6 +118,10 @@ Les autres champs sont facultatifs :
 - `expert` : la version de l'IA Expert, un labo (`lab1`…) ; la plus récente par défaut ;
 - `seat` : votre place, de 0 (premier à jouer) à `players − 1` (au hasard par défaut) ;
 - `name` : votre nom dans la partie ;
+- `expansions` : les extensions à jouer, une liste parmi `beNotAfraid` (Même pas peur), `cursed`
+  (Maauuudits) et `grandDames` (Honneur aux Dames) ; aucune par défaut. Leurs peuples et pouvoirs
+  rejoignent les pioches (section 7, ou `GET /llm.md?extensions=…` pour ne lire que ceux de votre
+  partie). L'Expert ne connaît que le jeu de base : avec une extension, l'IA Difficile le remplace ;
 - `seed` : un entier positif, pour rejouer la même carte et le même hasard (pioches, dés). Avec les
   mêmes `players` et `seat`, on retrouve la même carte et le même marché de départ (les adversaires
   peuvent jouer autrement). La graine d'une partie finie est donnée dans sa vue (`seed`) ; avant,
@@ -203,6 +208,11 @@ carte sauf un par région, sans les bonus du tour (Amazones, Squelettes).
 | `{"type":"hero","region":r}` | `redeploy` | Héroïques : poser ou retirer un héros |
 | `{"type":"endTurn"}` | `redeploy` | finir le tour ; options `"peace": j` (Diplomates, j = place de l'adversaire) et `"stout": true` (Robustes : déclin après le décompte) |
 | `{"type":"endDefense"}` | `defend` | finir de replacer ses jetons rendus |
+| `{"type":"catapult","from":c,"region":r}` | `conquest` | Catapultés : conquérir r par-dessus une région, depuis votre région c |
+| `{"type":"hire","region":r}` | `conquest` | Mercenaires : conquérir r en payant 1 pièce (2 jetons de moins) ; après un dé raté, payer 1 pièce pour la prendre quand même |
+| `{"type":"regroup"}` | `conquest` | Intrépides : reprendre vos jetons (un reste par région) et conquérir encore |
+| `{"type":"cauldron","region":r}` | `redeploy` | Farfadets : poser ou retirer un Chaudron |
+| `{"type":"tower","region":r}` | `conquest`, `redeploy` | Prêtresses : la région de la Tour d'Ivoire de leur prochain déclin |
 
 La liste `legal` (et la section « Coups permis » du texte) donne les coups simples permis à
 l'instant, avec leur coût. `place` n'y figure pas (trop de combinaisons) mais reste toujours permis

@@ -2,7 +2,7 @@
 //! l'IA puissent en faire des copies à volonté.
 
 use crate::collections::{ArrayVec, PlayerSet, RegionSet};
-use crate::ids::{Level, MAX_PLAYERS, MAX_REGIONS, Phase, Power, Race};
+use crate::ids::{Expansions, Level, MAX_PLAYERS, MAX_REGIONS, Phase, Power, Race};
 
 /// Ce qui occupe une région.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -37,10 +37,42 @@ pub struct RegionState {
     pub hero: bool,
     pub dragon: bool,
     pub hole: bool,
+    /// Marqueurs des extensions (`RegionState::CATAPULT`, `CAULDRON`, `LADIES`), dans un seul octet
+    /// pour que l'état, copié sans cesse par les simulations, ne grossisse pas.
+    pub marks: u8,
 }
 
 impl RegionState {
-    /// Un héros, un dragon ou un terrier rend la région imprenable.
+    /// La Catapulte des Catapultés : la région d'où elle a tiré.
+    pub const CATAPULT: u8 = 1;
+    /// Un Chaudron des Farfadets.
+    pub const CAULDRON: u8 = 2;
+    /// Une région des Dames Blanches en déclin.
+    pub const LADIES: u8 = 4;
+
+    pub fn catapult(&self) -> bool {
+        self.marks & Self::CATAPULT != 0
+    }
+
+    pub fn cauldron(&self) -> bool {
+        self.marks & Self::CAULDRON != 0
+    }
+
+    pub fn ladies(&self) -> bool {
+        self.marks & Self::LADIES != 0
+    }
+
+    /// Pose ou retire un marqueur.
+    pub fn mark(&mut self, mark: u8, on: bool) {
+        if on {
+            self.marks |= mark;
+        } else {
+            self.marks &= !mark;
+        }
+    }
+
+    /// Un héros, un dragon, un terrier, la Catapulte ou des Dames Blanches en déclin rendent la région
+    /// imprenable.
     pub fn immunity(&self) -> Option<Immunity> {
         if self.hero {
             Some(Immunity::Hero)
@@ -48,13 +80,17 @@ impl RegionState {
             Some(Immunity::Hole)
         } else if self.dragon {
             Some(Immunity::Dragon)
+        } else if self.ladies() {
+            Some(Immunity::Ladies)
+        } else if self.catapult() {
+            Some(Immunity::Catapult)
         } else {
             None
         }
     }
 
     pub fn is_immune(&self) -> bool {
-        self.hero || self.hole || self.dragon
+        self.hero || self.hole || self.dragon || self.marks & (Self::LADIES | Self::CATAPULT) != 0
     }
 }
 
@@ -63,6 +99,9 @@ pub enum Immunity {
     Hero,
     Hole,
     Dragon,
+    /// Dames Blanches en déclin.
+    Ladies,
+    Catapult,
 }
 
 /// Un peuple en jeu (choisi par un joueur).
@@ -75,6 +114,11 @@ pub struct RaceState {
     pub hand: i32,
     pub holes_placed: i32,
     pub picked_round: i32,
+    /// Jetons hors du plateau jusqu'au prochain tour du peuple (Barbares, Fées) : ni en main, ni
+    /// dans la boîte. Un octet, comme `cauldrons`, pour que l'état ne grossisse pas.
+    pub aside: u8,
+    /// Chaudrons des Farfadets pas encore posés.
+    pub cauldrons: u8,
 }
 
 impl RaceState {
@@ -105,6 +149,17 @@ pub struct Combo {
     pub race: Race,
     pub power: Power,
     pub coins: i32,
+    /// Homoncules ajoutés sur la combinaison chaque fois qu'un joueur en choisit une plus bas.
+    pub tokens: i32,
+}
+
+impl Combo {
+    /// Jetons reçus en la choisissant : peuple et pouvoir (Homoncules ajoutés compris) dans la limite
+    /// de la boîte, plus 2 pour un peuple de la Horde.
+    pub fn starting_tokens(&self) -> i32 {
+        let base = (self.race.tokens() + self.power.tokens() + self.tokens).min(self.race.max());
+        base + if self.power == Power::Hordes { 2 } else { 0 }
+    }
 }
 
 /// Qui joue pendant le tour : les Goules en déclin passent avant le peuple actif.
@@ -136,6 +191,19 @@ pub struct Turn {
     pub amazon_bonus: i32,
     /// Jetons ramassés en début de tour, par région (pour rendre leurs jetons aux Goules qui déclinent).
     pub readied: [i32; MAX_REGIONS],
+    // --- extensions ---
+    /// La Catapulte a tiré ce tour.
+    pub catapult_used: bool,
+    /// Les Intrépides ont repris leurs jetons ce tour.
+    pub regrouped: bool,
+    /// Régions abandonnées par les Gitanes ce tour (1 pièce chacune ; pas de retour ce tour).
+    pub abandoned: RegionSet,
+    /// La Tour d'Ivoire choisie par les Prêtresses pour leur déclin (régions en octets, comme `hire` :
+    /// l'état reste petit).
+    pub tower: Option<u8>,
+    /// Mercenaires : le dé de renfort a échoué pour cette région, mais payer 1 pièce la prendrait ; le
+    /// joueur doit choisir (payer ou renoncer).
+    pub hire: Option<u8>,
 }
 
 impl Default for Turn {
@@ -155,6 +223,11 @@ impl Default for Turn {
             picked: false,
             amazon_bonus: 0,
             readied: [0; MAX_REGIONS],
+            catapult_used: false,
+            regrouped: false,
+            abandoned: RegionSet::EMPTY,
+            tower: None,
+            hire: None,
         }
     }
 }
@@ -200,6 +273,8 @@ pub struct State {
     pub power_tail: u8,
     pub round: i32,
     pub max_rounds: i32,
+    /// Les extensions jouées : leurs peuples et pouvoirs sont dans les pioches.
+    pub expansions: Expansions,
     pub current: usize,
     pub phase: Phase,
     pub turn: Turn,

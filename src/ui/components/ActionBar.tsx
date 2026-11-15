@@ -1,7 +1,19 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { RACES } from '../../engine/data';
-import { endTurnReminder, powerStatus, redeployNote } from '../../engine/preview';
-import { actingRace, allTargets, canDecline, currentActor, fullDeployment, raceOf, regionsOf, scoreBreakdown } from '../../engine/rules';
+import { POWERS, RACES } from '../../engine/data';
+import { cut, endTurnReminder, noRedeployText, powerStatus, redeployNote } from '../../engine/preview';
+import {
+  actingRace,
+  allTargets,
+  canDecline,
+  canRegroup,
+  catapultShots,
+  currentActor,
+  floorOf,
+  fullDeployment,
+  raceOf,
+  regionsOf,
+  scoreBreakdown,
+} from '../../engine/rules';
 import type { GameState } from '../../engine/types';
 import { act, canUndo, onlineSend, setState, undoLast, type UIState } from '../store';
 import { plural } from './common';
@@ -214,8 +226,20 @@ function planBar(s: UIState, g: GameState, arm: (kind: ConfirmKind) => void): { 
   const rs = raceOf(g, race);
 
   if (g.phase === 'conquest') {
+    const pending = g.turn.hire;
+    if (pending !== null && pending !== undefined) {
+      // Mercenaires : le dé a raté de peu, payer 1 pièce prend quand même la région
+      return {
+        hint: `🎲 Raté · ${POWERS.mercenary.icon} payer 1 💰 pour « ${cut(g.map.regions[pending]!.name, 14)} » ?`,
+        buttons: [
+          { icon: '', label: 'Renoncer', cls: 'ghost', onClick: () => act({ type: 'endConquest' }) },
+          { icon: POWERS.mercenary.icon, label: 'Payer 1 💰', cls: 'primary', main: true, onClick: () => act({ type: 'hire', region: pending }) },
+        ],
+      };
+    }
     const targets = allTargets(g);
-    const n = targets.filter((t) => t.kind === 'normal' || t.dragon || t.sorcery).length;
+    const shots = catapultShots(g);
+    const n = targets.filter((t) => t.kind === 'normal' || t.dragon || t.sorcery || t.hire).length + shots.length;
     const die = targets.some((t) => t.kind === 'die');
     const berserkReady = !rs.declined && rs.power === 'berserk' && g.turn.berserkDie === null && rs.hand > 0 && !g.turn.dieRolled;
     // Berserks : une cible trop chère peut encore tomber grâce au dé (jusqu'à −3)
@@ -238,6 +262,10 @@ function planBar(s: UIState, g: GameState, arm: (kind: ConfirmKind) => void): { 
     const skipping = more && !ghouls && !g.turn.conquests && !g.turn.dieRolled;
     const buttons: Btn[] = [];
     if (declinable) buttons.push({ icon: '💤', label: 'Déclin', fold: 1, onClick: () => setState({ sheet: { kind: 'decline' } }) });
+    // Intrépides : reprendre ses jetons pour conquérir encore (seulement s'il y a quelque chose à reprendre)
+    const floor = floorOf(g, race);
+    if (!canRegroup(g) && regionsOf(g, race).some((r) => g.regions[r]!.tokens > floor))
+      buttons.push({ icon: POWERS.marauding.icon, label: 'Reprendre mes jetons', fold: 1, cls: 'alt', onClick: () => act({ type: 'regroup' }) });
     if (berserkReady)
       buttons.push({ icon: '🎲', label: 'Dé', fold: 2, cls: 'alt', onClick: () => (declinable ? arm('berserk') : act({ type: 'berserkRoll' })) });
     buttons.push({
@@ -261,6 +289,15 @@ function planBar(s: UIState, g: GameState, arm: (kind: ConfirmKind) => void): { 
     };
   }
 
+  // Barbares et Fées : rien à replacer, le tour se termine
+  const frozen = noRedeployText(g);
+  if (frozen) {
+    const income = scoreBreakdown(g, g.current).total;
+    return {
+      hint: frozen,
+      buttons: [{ icon: '', label: `Fin du tour · +${income} 💰`, cls: 'primary', main: true, onClick: () => (needsEndTurnSheet(g) ? setState({ sheet: { kind: 'endTurn' } }) : arm('end')) }],
+    };
+  }
   // redéploiement : « Auto » reprend tous les jetons et les replace, donc utile même la main vide
   const target = own ? fullDeployment(g, race) : {};
   const placeAll: Btn = { ...auto, onClick: () => act({ type: 'autoDeploy', all: true }) };

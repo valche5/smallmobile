@@ -2,7 +2,7 @@
  * Ce que disent les règles d'une partie : le noyau répond (coûts, portée, attaquants, décompte…), ce
  * module met ses réponses en mots pour l'interface. S'y ajoutent de simples lectures de l'état.
  */
-import { POWERS, RACES, dieChance } from './data';
+import { POWERS, RACES, dieChance, pickPrice } from './data';
 import { kernelFor } from './engine';
 import type { IncomeLine, Modifier, Special } from './kernel';
 import { reasonText } from './reasons';
@@ -23,7 +23,13 @@ export function cloneState(g: GameState): GameState {
     market: g.market.map((s) => ({ ...s })),
     raceDeck: g.raceDeck.slice(),
     powerDeck: g.powerDeck.slice(),
-    turn: { ...t, attacked: t.attacked.slice(), sorcery: t.sorcery.slice(), readied: { ...t.readied } },
+    turn: {
+      ...t,
+      attacked: t.attacked.slice(),
+      sorcery: t.sorcery.slice(),
+      readied: { ...t.readied },
+      ...(t.abandoned ? { abandoned: t.abandoned.slice() } : {}),
+    },
     defense: g.defense.map((d) => ({ ...d })),
     peace: g.peace.map((x) => ({ ...x })),
     log: g.log.slice(),
@@ -94,7 +100,19 @@ export function isImmune(r: RegionState): string | null {
   if (r.hero) return 'Un héros protège cette région : elle est imprenable.';
   if (r.hole) return 'Un terrier de Semi-hommes protège cette région : elle est imprenable.';
   if (r.dragon) return 'Un dragon garde cette région : elle est imprenable.';
+  if (r.ladies) return 'Les Dames Blanches en déclin sont imprenables.';
+  if (r.catapult) return 'La Catapulte protège cette région : elle est imprenable.';
   return null;
+}
+
+/** Le moins de jetons par région et par conquête : 2 pour des Kobolds actifs, 1 sinon. */
+export function floorOf(g: GameState, race: RaceId): number {
+  return race === 'kobolds' && g.races.kobolds && !g.races.kobolds.declined ? 2 : 1;
+}
+
+/** Ce que coûte la combinaison `index` du marché (Maudits : 3 pièces pour passer par-dessus). */
+export function pickCost(g: GameState, index: number): number {
+  return pickPrice(g.market, index);
 }
 
 /** Classement final (pièces, puis jetons sur la carte). */
@@ -158,6 +176,8 @@ const MODIFIER_PARTS: Record<Modifier, CostPart> = {
   underworld: { label: 'Souterrains (Souterrain)', value: -1, short: 'Souterrains' },
   tritons: { label: 'Tritons (côte)', value: -1, short: 'Tritons' },
   giants: { label: 'Géants (près de leur Montagne)', value: -1, short: 'Géants' },
+  goblins: { label: 'Gobelins (peuple en déclin)', value: -1, short: 'Gobelins' },
+  were: { label: 'Garous (manche paire)', value: -2, short: 'Garous' },
 };
 
 const MODIFIER_ICONS: Record<Modifier, string> = {
@@ -166,6 +186,8 @@ const MODIFIER_ICONS: Record<Modifier, string> = {
   underworld: POWERS.underworld.icon,
   tritons: RACES.tritons.icon,
   giants: RACES.giants.icon,
+  goblins: RACES.goblins.icon,
+  were: POWERS.were.icon,
 };
 
 export type TargetKind = 'normal' | 'die' | 'none';
@@ -183,11 +205,18 @@ export interface TargetInfo {
   kind: TargetKind;
   /** Jetons manquants pour une tentative au dé. */
   need: number;
+  /** Chance de prendre la région au dé (Mercenaires : en payant 1 pièce si le dé ne suffit pas seul). */
   chance: number;
+  /** Chance de réussir au dé sans rien payer (égale à `chance` hors Mercenaires). */
+  free: number;
   dragon: boolean;
   dragonReason: string | null;
   sorcery: boolean;
   sorceryReason: string | null;
+  /** Mercenaires : conquête en payant 1 pièce, au coût `hired`. */
+  hire: boolean;
+  hireReason: string | null;
+  hired: number;
 }
 
 function specialReason(g: GameState, s: Special): string | null {
@@ -198,6 +227,10 @@ function specialReason(g: GameState, s: Special): string | null {
 export function allTargets(g: GameState, lean = false): TargetInfo[] {
   const conquest = g.phase === 'conquest' && !!g.turn.army;
   const hand = conquest ? (g.races[g.turn.army!]?.hand ?? 0) : 0;
+  // des Mercenaires qui ont une pièce paieront si le dé ne suffit pas seul (comme le noyau)
+  const army = conquest ? g.races[g.turn.army!] : undefined;
+  const hires = !!army && !army.declined && army.power === 'mercenary' && g.players[army.owner]!.coins >= 1;
+  const floor = conquest ? floorOf(g, g.turn.army!) : 1;
   return kernelFor(g)
     .targets()
     .map((t) => {
@@ -205,7 +238,8 @@ export function allTargets(g: GameState, lean = false): TargetInfo[] {
       if (conquest && !lean) {
         parts.push(...defenseParts(g, t.region), ...t.modifiers.map((m) => MODIFIER_PARTS[m]));
         const raw = parts.reduce((s, p) => s + p.value, 0);
-        if (raw < 1) parts.push({ label: 'Minimum 1 jeton', value: 1 - raw, short: 'minimum' });
+        // jamais moins de 1 jeton (2 pour des Kobolds actifs)
+        if (raw < t.cost) parts.push({ label: t.cost > 1 ? `Minimum ${t.cost} jetons (Kobolds)` : 'Minimum 1 jeton', value: t.cost - raw, short: 'minimum' });
         if (hasPower(g, g.turn.army, 'berserk') && g.turn.berserkDie !== null)
           parts.push({ label: `Dé berserk (${g.turn.berserkDie})`, value: t.effective - t.cost, short: 'dé' });
       }
@@ -218,11 +252,15 @@ export function allTargets(g: GameState, lean = false): TargetInfo[] {
         effective: t.effective,
         kind: t.kind,
         need: t.need,
-        chance: t.kind === 'die' ? dieChance(t.need) : 0,
+        chance: t.kind === 'die' ? dieChance(hires ? Math.max(t.cost - 2, floor) - hand : t.need) : 0,
+        free: t.kind === 'die' ? dieChance(t.need) : 0,
         dragon: t.dragon.kind === 'allowed',
         dragonReason: specialReason(g, t.dragon),
         sorcery: t.sorcery.kind === 'allowed',
         sorceryReason: specialReason(g, t.sorcery),
+        hire: t.hire.kind === 'allowed',
+        hireReason: specialReason(g, t.hire),
+        hired: t.hired,
       };
     });
 }
@@ -248,9 +286,9 @@ export interface Attacker {
   how: 'conquer' | 'dragon' | 'sorcery';
   /** Premier modificateur qui baisse le coût (« 🗡️ −1 »), ou le dé des Berserks. */
   mod: string | null;
-  /** Attaque possible seulement de loin (Volants, souterrains reliés). */
+  /** Attaque possible seulement de loin (Volants, souterrains reliés, Catapulte). */
   far: boolean;
-  via: 'flying' | 'cavern' | null;
+  via: 'flying' | 'cavern' | 'catapult' | null;
 }
 
 /** Les adversaires qui pourraient prendre cette région à `ownerPid` avant son prochain tour. */
@@ -262,7 +300,12 @@ export function attackersOf(g: GameState, region: number, ownerPid: number): Att
       race: a.race,
       cost: a.cost,
       how: a.how,
-      mod: a.hint?.kind === 'modifier' ? `${MODIFIER_ICONS[a.hint.modifier]} −1` : a.hint?.kind === 'berserk' ? `${POWERS.berserk.icon} jusqu'à −3` : null,
+      mod:
+        a.hint?.kind === 'modifier'
+          ? `${MODIFIER_ICONS[a.hint.modifier]} ${MODIFIER_PARTS[a.hint.modifier].value}`.replace('-', '−')
+          : a.hint?.kind === 'berserk'
+            ? `${POWERS.berserk.icon} jusqu'à −3`
+            : null,
       far: a.via !== null,
       via: a.via,
     }));
@@ -289,6 +332,23 @@ export function canDecline(g: GameState): string | null {
 export function canAbandon(g: GameState, region: number): string | null {
   const r = kernelFor(g).permissions().abandon[region];
   return r ? reasonText(g, r) : null;
+}
+
+/** Intrépides : reprendre ses jetons maintenant (`null` : permis). */
+export function canRegroup(g: GameState): string | null {
+  const r = kernelFor(g).permissions().regroup;
+  return r ? reasonText(g, r) : null;
+}
+
+/** Prêtresses : choisir la Tour d'Ivoire maintenant (`null` : permis). */
+export function canChooseTower(g: GameState): string | null {
+  const r = kernelFor(g).permissions().tower;
+  return r ? reasonText(g, r) : null;
+}
+
+/** Catapultés : les tirs permis maintenant (région de tir, cible, coût). */
+export function catapultShots(g: GameState): { from: number; region: number; cost: number }[] {
+  return kernelFor(g).catapults();
 }
 
 // --- décompte ----------------------------------------------------------------------------------
@@ -324,6 +384,11 @@ export function scoreLine(l: IncomeLine): ScoreLine {
     case 'pillage': return { label: `Pillards : ${n} région(s) non vide(s) conquise(s)`, value: n, icon: power('pillaging') };
     case 'fortresses': return { label: `Fortifiés : ${n} forteresse${s(n)}`, value: n, icon: power('fortified') };
     case 'wealthy': return { label: 'Fortunés (premier tour)', value: n, icon: power('wealthy') };
+    case 'abandoned': return { label: `Gitanes : ${n} région${s(n)} abandonnée${s(n)}`, value: n, icon: RACES.gypsies.icon };
+    case 'tower': return { label: `Tour d'Ivoire : ${n} Prêtresse${s(n)}`, value: n, icon: RACES.priestesses.icon };
+    case 'imperial': return { label: `Impériaux : ${n} région${s(n)} au-delà de 3`, value: n, icon: power('imperial') };
+    case 'barricade': return { label: 'Retranchés (4 régions ou moins)', value: n, icon: power('barricade') };
+    case 'peaceLoving': return { label: 'Pacifistes (aucune attaque)', value: n, icon: power('peaceLoving') };
   }
 }
 

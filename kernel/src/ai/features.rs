@@ -12,22 +12,31 @@ use crate::state::{Combo, Occupant};
 pub const MAX_INPUTS: usize = 128;
 
 /// Les noms des entrées d'un modèle, dans l'ordre. Un modèle appris lit un préfixe de cette liste :
-/// les indicateurs ajoutés après lui (en fin de liste) ne le gênent pas.
+/// les indicateurs ajoutés après lui (en fin de liste) ne le gênent pas. Ainsi les cases des peuples
+/// et pouvoirs des extensions viennent tout à la fin, après celles du jeu de base : les modèles appris
+/// sans extension ne les lisent pas, et évaluent les parties du jeu de base comme avant.
 #[derive(Debug)]
 pub struct Layout {
     pub names: Vec<String>,
+    one_hots: bool,
 }
 
 impl Layout {
     fn new(head: &[&str], one_hots: bool, tail: &[&str]) -> Layout {
+        let races = |range: &[Race]| range.iter().map(|r| format!("race:{}", r.key())).collect::<Vec<_>>();
+        let powers = |range: &[Power]| range.iter().map(|p| format!("power:{}", p.key())).collect::<Vec<_>>();
         let mut names: Vec<String> = head.iter().map(|s| s.to_string()).collect();
         if one_hots {
-            names.extend(Race::ALL.iter().map(|r| format!("race:{}", r.key())));
-            names.extend(Power::ALL.iter().map(|p| format!("power:{}", p.key())));
+            names.extend(races(&Race::ALL[..Race::BASE_COUNT]));
+            names.extend(powers(&Power::ALL[..Power::BASE_COUNT]));
         }
         names.extend(tail.iter().map(|s| s.to_string()));
+        if one_hots {
+            names.extend(races(&Race::ALL[Race::BASE_COUNT..]));
+            names.extend(powers(&Power::ALL[Power::BASE_COUNT..]));
+        }
         assert!(names.len() <= MAX_INPUTS);
-        Layout { names }
+        Layout { names, one_hots }
     }
 
     /// Les entrées du modèle sont-elles le début de cette liste ?
@@ -259,11 +268,14 @@ pub struct Row {
     layout: &'static Layout,
     x: [f64; MAX_INPUTS],
     at: usize,
+    /// Le peuple et le pouvoir des cases à 1, écrites en fin de liste pour les extensions (`finish`).
+    race: Option<Race>,
+    power: Option<Power>,
 }
 
 impl Row {
     pub fn new(layout: &'static Layout) -> Self {
-        Row { layout, x: [0.0; MAX_INPUTS], at: 0 }
+        Row { layout, x: [0.0; MAX_INPUTS], at: 0, race: None, power: None }
     }
 
     pub fn put(&mut self, name: &str, value: f64) -> &mut Self {
@@ -273,24 +285,26 @@ impl Row {
         self
     }
 
-    /// Une case par peuple, à 1 pour `race`.
+    /// Une case par peuple, à 1 pour `race` (celles des extensions : en fin de liste, par `finish`).
     pub fn races(&mut self, race: Race) -> &mut Self {
-        for &r in Race::ALL {
-            debug_assert_eq!(self.layout.names[self.at], format!("race:{}", r.key()));
-            self.x[self.at] = f64::from(r == race);
-            self.at += 1;
-        }
+        self.one_hot(&Race::ALL[..Race::BASE_COUNT], race, "race", Race::key);
+        self.race = Some(race);
         self
     }
 
-    /// Une case par pouvoir, à 1 pour `power`.
+    /// Une case par pouvoir, à 1 pour `power` (celles des extensions : en fin de liste, par `finish`).
     pub fn powers(&mut self, power: Power) -> &mut Self {
-        for &p in Power::ALL {
-            debug_assert_eq!(self.layout.names[self.at], format!("power:{}", p.key()));
-            self.x[self.at] = f64::from(p == power);
+        self.one_hot(&Power::ALL[..Power::BASE_COUNT], power, "power", Power::key);
+        self.power = Some(power);
+        self
+    }
+
+    fn one_hot<T: Copy + PartialEq>(&mut self, all: &[T], one: T, kind: &str, key: fn(T) -> &'static str) {
+        for &v in all {
+            debug_assert_eq!(self.layout.names[self.at], format!("{kind}:{}", key(v)));
+            self.x[self.at] = f64::from(v == one);
             self.at += 1;
         }
-        self
     }
 
     /// Laisse `n` entrées à 0.
@@ -299,7 +313,13 @@ impl Row {
         self
     }
 
-    pub fn finish(&self) -> Inputs {
+    pub fn finish(&mut self) -> Inputs {
+        if self.layout.one_hots {
+            let race = self.race.expect("entrées du peuple manquantes");
+            let power = self.power.expect("entrées du pouvoir manquantes");
+            self.one_hot(&Race::ALL[Race::BASE_COUNT..], race, "race", Race::key);
+            self.one_hot(&Power::ALL[Power::BASE_COUNT..], power, "power", Power::key);
+        }
         assert_eq!(self.at, self.layout.names.len(), "entrées manquantes");
         Inputs { x: self.x, len: self.at }
     }
@@ -626,7 +646,7 @@ impl Game<'_> {
             .put("soft", c.soft)
             .put("softEntry", c.soft_entry)
             .put("emptyCluster", c.empty_cluster)
-            .put("tokens", slot.race.starting_tokens(slot.power) as f64)
+            .put("tokens", slot.starting_tokens() as f64)
             .races(slot.race)
             .powers(slot.power);
         x.finish()
@@ -936,13 +956,13 @@ impl Game<'_> {
         let rs = s.race(army);
         let own = self.owned(army);
         let tokens = self.tokens_on_board(army) + rs.hand;
-        let affordable = || s.market.iter().enumerate().filter(|&(i, _)| i as i32 <= p.coins);
+        let affordable = || s.market.iter().enumerate().filter(|&(i, _)| self.pick_price(i) <= p.coins);
         let lost = self.declined_regions(pid, None);
         let market = affordable()
             .map(|(i, &slot)| value(self, slot, i))
             .fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))));
         let market = market.unwrap_or(-20.0);
-        let mine = value(self, Combo { race: army, power: rs.power, coins: 0 }, 0);
+        let mine = value(self, Combo { race: army, power: rs.power, coins: 0, tokens: 0 }, 0);
         let income = self.income(pid);
         let mut opp_attack = 0;
         for q in (0..s.player_count()).filter(|&q| q != pid) {
@@ -950,7 +970,7 @@ impl Game<'_> {
                 opp_attack = opp_attack.max(self.spare_tokens(race).0);
             }
         }
-        let fresh = affordable().map(|(_, c)| c.race.starting_tokens(c.power)).fold(0, i32::max);
+        let fresh = affordable().map(|(_, c)| c.starting_tokens()).fold(0, i32::max);
         let danger = if own.is_empty() {
             0.0
         } else {

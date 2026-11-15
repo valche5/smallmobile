@@ -82,6 +82,10 @@ fn decide(net: &Arc<Net>, cfg: Config, threads: usize, request: &[u32]) -> Resul
         return Err("demande trop courte".into());
     };
     let (map, state) = wire::decode_game(game).map_err(|e| format!("partie illisible : {}", e.0))?;
+    // le réseau et ses encodages ne connaissent que le jeu de base
+    if !state.expansions.is_empty() {
+        return Err("extensions non prises en charge : jeu de base seulement".into());
+    }
     let start = Instant::now();
     let expert = Expert::with_threads(net.clone(), Config { iterations: (*iterations as usize).max(1), ..cfg }, threads);
     let seed = *seed_lo as u64 | (*seed_hi as u64) << 32;

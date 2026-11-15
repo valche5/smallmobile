@@ -39,7 +39,7 @@ function rollFaces(result: number): number[] {
   return faces;
 }
 
-export function DieOverlay({ ev, auto }: { ev: DieEvent; auto: boolean }) {
+export function DieOverlay({ ev, auto, hire = false }: { ev: DieEvent; auto: boolean; hire?: boolean }) {
   const [step, setStep] = useState(0);
   // les faces qui défilent, puis le résultat, montré pendant le dernier demi-tour
   const [faces] = useState(() => [...rollFaces(ev.value), ev.value]);
@@ -92,7 +92,9 @@ export function DieOverlay({ ev, auto }: { ev: DieEvent; auto: boolean }) {
   const face = rolled ? ev.value : faces[step]!;
   let verdict = '';
   if (ev.berserk) verdict = ev.value ? `La prochaine conquête coûtera ${plural(ev.value, 'jeton')} de moins.` : 'Pas de chance : aucun bonus.';
-  else verdict = ev.success ? 'Réussite : la région est conquise !' : `Échec : il fallait ${ev.need} ou plus.`;
+  else if (ev.success) verdict = 'Réussite : la région est conquise !';
+  else if (hire) verdict = `Il fallait ${ev.need} ou plus. Mercenaires : payez 1 💰 pour la prendre quand même.`;
+  else verdict = `Échec : il fallait ${ev.need} ou plus.`;
   return (
     <div class="overlay die-overlay" onClick={() => rolled && dismissOverlay()}>
       {/* rotation continue (tick), puis un petit rebond sur le résultat */}

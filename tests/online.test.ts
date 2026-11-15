@@ -94,6 +94,20 @@ describe('serveur WebSocket', () => {
     bob.ws.close();
   });
 
+  test('une partie contre les IA avec les trois extensions, réglées dans le salon', async () => {
+    const alice = new Phone();
+    await alice.ready;
+    const joined = alice.next('joined');
+    alice.send({ t: 'create', name: 'Alice', color: '#d62839', size: 4, aiLevel: 'expert', mapSeed: 4044, opponent: 'human' });
+    await joined;
+    // l'hôte coche les extensions dans le salon : tout le monde le voit, l'Expert cède la place
+    const room = alice.next('room', (m) => m.room.expansions.length === 3);
+    alice.send({ t: 'lobby', expansions: ['beNotAfraid', 'cursed', 'grandDames'] });
+    const r = (await room).room;
+    expect(r.aiLevel).toBe('difficile');
+    expect(r.seats.filter((s) => s.kind === 'ai').map((s) => s.ai)).toEqual(['difficile', 'difficile']);
+  });
+
   test('un code inconnu est refusé', async () => {
     const p = new Phone();
     await p.ready;
@@ -126,6 +140,27 @@ describe('sauvegarde sur disque', () => {
       expect(again.some((m) => m.t === 'joined')).toBe(true);
       const st = again.find((m) => m.t === 'state') as Extract<ServerMsg, { t: 'state' }>;
       expect(st.game.players[1]!.name).toBe('Bob');
+      expect(st.game.expansions).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('les extensions survivent au redémarrage', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'smallmobile-'));
+    try {
+      const store = new FileRoomStore(dir);
+      const first = new RoomManager(store, { set: () => 0, clear: () => {} }, { firstSeat: () => 0 });
+      const inbox: ServerMsg[] = [];
+      const host: Client = { code: null, seat: null, send: (m) => inbox.push(m) };
+      first.handle(host, { t: 'create', name: 'Alice', color: '#d62839', size: 2, aiLevel: 'normal', mapSeed: 2024, expansions: ['cursed'] });
+      const joined = inbox.find((m) => m.t === 'joined') as Extract<ServerMsg, { t: 'joined' }>;
+      store.flush();
+      const second = new RoomManager(new FileRoomStore(dir), fast);
+      const again: ServerMsg[] = [];
+      second.handle({ code: null, seat: null, send: (m) => again.push(m) }, { t: 'resume', code: joined.code, token: joined.token });
+      const room = [...again].reverse().find((m) => m.t === 'room') as Extract<ServerMsg, { t: 'room' }>;
+      expect(room.room.expansions).toEqual(['cursed']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

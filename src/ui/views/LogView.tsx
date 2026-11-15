@@ -36,7 +36,8 @@ export function LogView({ g, me }: { g: GameState; me: number }) {
                 openRegion(l.region);
               }}
             >
-              <span class="li-icon">{LOG_ICONS[l.kind] ?? '•'}</span>
+              {/* pièces qui changent de main, dé des Pygmées : leur propre icône */}
+              <span class="li-icon">{l.pay ? '💰' : l.roll !== undefined ? '🎲' : (LOG_ICONS[l.kind] ?? '•')}</span>
               <span>{l.text}</span>
             </li>,
           ];

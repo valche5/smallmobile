@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { KIND_LABEL, KIND_ORDER, POWERS, RACES, type EffectKind } from '../../engine/data';
+import { FEATURE_ICONS, KIND_LABEL, KIND_ORDER, POWERS, RACES, type EffectKind } from '../../engine/data';
 import * as preview from '../../engine/preview';
 import { currentActor, regionsOf, scoreBreakdown } from '../../engine/rules';
 import type { GameState, PowerId, RaceId } from '../../engine/types';
@@ -122,6 +122,7 @@ function PlayerDetail({ g, pid, me }: { g: GameState; pid: number; me: number })
           </span>
         </div>
       ))}
+      {race && <Reserve g={g} race={race} />}
       {status && <div class="pstatus">{status}</div>}
       {income && (
         <details class="pmore">
@@ -155,6 +156,17 @@ function PlayerDetail({ g, pid, me }: { g: GameState; pid: number; me: number })
   );
 }
 
+/** Ce que le peuple actif garde hors de la carte : jetons mis de côté (Barbares, Fées), Chaudrons (Farfadets). */
+function Reserve({ g, race }: { g: GameState; race: RaceId }) {
+  const rs = g.races[race];
+  if (!rs || rs.declined) return null;
+  const parts: string[] = [];
+  if (rs.aside) parts.push(`⏸️ ${plural(rs.aside, 'jeton')} hors plateau jusqu'à son prochain tour`);
+  if (race === 'leprechauns') parts.push(`${FEATURE_ICONS.cauldron} ${plural(rs.cauldrons ?? 0, 'Chaudron')} en réserve`);
+  if (!parts.length) return null;
+  return <div class="pstatus">{parts.join(' · ')}</div>;
+}
+
 /** Nom de région coupé à 18 caractères. */
 function cut(name: string): string {
   const c = [...name];
@@ -172,5 +184,9 @@ function foeStatus(g: GameState, pid: number, me: number): string | null {
   if (dragon !== undefined) return `🐉 Dragon sur « ${cut(g.map.regions[dragon]!.name)} »`;
   const heroes = own.filter((i) => g.regions[i]!.hero).map((i) => `« ${cut(g.map.regions[i]!.name)} »`);
   if (heroes.length) return `🦸 Héros sur ${heroes.join(' et ')}`;
+  const catapult = own.find((i) => g.regions[i]!.catapult);
+  if (catapult !== undefined) return `${FEATURE_ICONS.catapult} Catapulte sur « ${cut(g.map.regions[catapult]!.name)} »`;
+  const cauldrons = own.filter((i) => g.regions[i]!.cauldron).length;
+  if (cauldrons) return `${FEATURE_ICONS.cauldron} ${plural(cauldrons, 'Chaudron')} à prendre (+1 💰 chacun)`;
   return null;
 }

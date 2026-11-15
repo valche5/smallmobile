@@ -1,7 +1,7 @@
 //! Le déroulement de la partie : chaque action est vérifiée, puis appliquée. Une action refusée ne
 //! change rien (ni l'état, ni le hasard).
 
-use crate::action::{Action, Event, How, Journal, Logged, Placement};
+use crate::action::{Action, Event, How, Journal, Logged, Payment, Placement};
 use crate::collections::ArrayVec;
 use crate::ids::{MAX_REGIONS, Phase, Power, Race};
 use crate::map::Map;
@@ -37,6 +37,10 @@ impl<'m> Game<'m> {
             return Err(Reason::GameOver);
         }
         let region_ok = |r: usize| ensure(r < self.map.len(), Reason::InvalidRegion);
+        // Mercenaires : après un dé raté, payer ou renoncer, rien d'autre
+        if self.state.turn.hire.is_some() && !matches!(action, Action::Hire { .. } | Action::EndConquest) {
+            return Err(Reason::HirePending);
+        }
         match *action {
             Action::Pick { index } => self.pick(index, journal),
             Action::SkipPick => self.skip_pick(journal),
@@ -64,6 +68,7 @@ impl<'m> Game<'m> {
             Action::Decline => self.decline(journal),
             Action::EndConquest => {
                 self.require_conquest()?;
+                self.state.turn.hire = None;
                 self.enter_redeploy(journal);
                 Ok(())
             }
@@ -72,7 +77,7 @@ impl<'m> Game<'m> {
                 self.deploy(region, delta)
             }
             Action::AutoDeploy { all } => self.auto_deploy(all),
-            Action::Place(placement) => self.place(&placement),
+            Action::Place(placement) => self.place(&placement, journal),
             Action::Camp { region, delta } => {
                 region_ok(region)?;
                 self.camp(region, delta)
@@ -87,6 +92,26 @@ impl<'m> Game<'m> {
             }
             Action::EndTurn { peace, stout } => self.end_turn(peace, stout, journal),
             Action::EndDefense => self.end_defense(journal),
+            Action::Catapult { from, region } => {
+                region_ok(from)?;
+                region_ok(region)?;
+                self.catapult(from, region, journal)
+            }
+            Action::Hire { region } => {
+                region_ok(region)?;
+                self.hire(region, journal)
+            }
+            Action::Regroup => self.regroup(),
+            Action::Cauldron { region } => {
+                region_ok(region)?;
+                self.cauldron(region)
+            }
+            Action::Tower { region } => {
+                region_ok(region)?;
+                self.can_tower(Some(region))?;
+                self.state.turn.tower = Some(region as u8);
+                Ok(())
+            }
         }
     }
 
@@ -109,18 +134,22 @@ impl<'m> Game<'m> {
         ensure(self.state.phase == Phase::Pick, Reason::NotPickPhase)?;
         let slot = *self.state.market.get(index).ok_or(Reason::ComboUnavailable)?;
         let pid = self.state.current;
-        let paid = index as i32;
+        let paid = self.pick_price(index);
         ensure(self.state.players[pid].coins >= paid, Reason::NotEnoughCoins { needed: paid })?;
         let s = &mut self.state;
         for earlier in &mut s.market.as_mut_slice()[..index] {
-            earlier.coins += 1;
+            // une combinaison Maudite coûte 3 pièces à passer ; les Homoncules grossissent
+            earlier.coins += if earlier.power == Power::Cursed { 3 } else { 1 };
+            if earlier.race == Race::Homunculi {
+                earlier.tokens = (earlier.tokens + 1).min(Race::Homunculi.max());
+            }
         }
         s.players[pid].coins += slot.coins - paid;
         s.market.remove(index);
         self.refill_market();
         let s = &mut self.state;
         let (race, power) = (slot.race, slot.power);
-        let tokens = race.starting_tokens(power);
+        let tokens = slot.starting_tokens();
         s.races[race.index()] = Some(RaceState {
             power,
             owner: pid,
@@ -128,6 +157,8 @@ impl<'m> Game<'m> {
             hand: tokens,
             holes_placed: 0,
             picked_round: s.round,
+            aside: 0,
+            cauldrons: if race == Race::Leprechauns { 16 } else { 0 },
         });
         s.players[pid].active = Some(race);
         s.turn.picked = true;
@@ -137,6 +168,10 @@ impl<'m> Game<'m> {
         self.state.phase = Phase::Conquest;
         let event = Event::Picked { player: pid, race, power, tokens, paid, gained: slot.coins };
         self.emit(journal, event);
+        if power == Power::Historian {
+            let declined = self.state.races.iter().flatten().filter(|r| r.declined).count() as i32;
+            self.pay(Payment::Historian, None, Some(pid), declined, journal);
+        }
         Ok(())
     }
 
@@ -173,7 +208,8 @@ impl<'m> Game<'m> {
         ensure(t.kind != TargetKind::Normal, Reason::EnoughTokensForNormal)?;
         ensure(t.kind == TargetKind::Die, Reason::DieCannotSucceed)?;
         let roll = rng::roll_die(&mut self.state.rng);
-        let hand = self.state.race(army).hand;
+        let rs = *self.state.race(army);
+        let hand = rs.hand;
         let success = hand + roll >= t.cost;
         self.state.turn.die_rolled = true;
         let player = self.state.current;
@@ -192,9 +228,115 @@ impl<'m> Game<'m> {
         if success {
             self.state.race_mut(army).hand = 0;
             self.occupy(region, army, hand, How::Die, journal);
+        } else if rs.has(Power::Mercenary)
+            && self.state.players[rs.owner].coins >= 1
+            && hand + roll >= (t.cost - 2).max(self.floor(army))
+        {
+            // les Mercenaires choisiront : payer 1 pièce pour la prendre, ou renoncer
+            self.state.turn.hire = Some(region as u8);
+            return Ok(());
         }
         self.enter_redeploy(journal);
         Ok(())
+    }
+
+    fn hire(&mut self, region: usize, journal: &mut impl Journal) -> Result<(), Reason> {
+        let army = self.require_conquest()?;
+        let pid = self.state.race(army).owner;
+        if let Some(pending) = self.state.turn.hire {
+            ensure(usize::from(pending) == region, Reason::HirePending)?;
+            self.pay(Payment::Hire, Some(pid), None, 1, journal);
+            self.state.turn.hire = None;
+            let hand = self.state.race(army).hand;
+            self.state.race_mut(army).hand = 0;
+            if let Some(d) = self.state.last_die.as_mut() {
+                d.success = Some(true);
+            }
+            self.occupy(region, army, hand, How::Die, journal);
+            self.enter_redeploy(journal);
+            return Ok(());
+        }
+        let t = self.target(region, self.foothold(army));
+        let (hire, hired) = self.hire_target(&t);
+        match hire {
+            Special::Allowed => {}
+            Special::Denied(reason) => return Err(reason),
+            Special::NotApplicable => return Err(t.block.unwrap_or(Reason::MissingPower)),
+        }
+        self.pay(Payment::Hire, Some(pid), None, 1, journal);
+        self.state.race_mut(army).hand -= hired;
+        self.occupy(region, army, hired, How::Conquer, journal);
+        self.state.turn.berserk_die = None;
+        Ok(())
+    }
+
+    fn catapult(&mut self, from: usize, region: usize, journal: &mut impl Journal) -> Result<(), Reason> {
+        let army = self.require_conquest()?;
+        let cost = self.catapult_target(from, region)?;
+        self.state.race_mut(army).hand -= cost;
+        for r in &mut self.state.regions {
+            r.mark(RegionState::CATAPULT, false);
+        }
+        self.occupy(region, army, cost, How::Catapult, journal);
+        self.state.regions[from].mark(RegionState::CATAPULT, true);
+        self.state.turn.catapult_used = true;
+        self.state.turn.berserk_die = None;
+        Ok(())
+    }
+
+    /// Intrépides : les jetons repris en main, sauf ce qui doit rester par région.
+    fn regroup(&mut self) -> Result<(), Reason> {
+        self.can_regroup()?;
+        let race = self.state.turn.army.expect("peuple en action");
+        let floor = self.floor(race);
+        let mut hand = 0;
+        for i in self.owned(race).iter() {
+            let r = &mut self.state.regions[i];
+            if r.tokens > floor {
+                self.state.turn.readied[i] += r.tokens - floor;
+                hand += r.tokens - floor;
+                r.tokens = floor;
+            }
+        }
+        self.state.race_mut(race).hand += hand;
+        self.state.turn.regrouped = true;
+        Ok(())
+    }
+
+    /// Farfadets : pose un Chaudron, ou retire celui posé.
+    fn cauldron(&mut self, region: usize) -> Result<(), Reason> {
+        let s = &self.state;
+        ensure(s.phase == Phase::Redeploy && s.turn.stage == Stage::Active, Reason::NotActiveRedeploy)?;
+        let race = s.turn.army.expect("peuple en action");
+        ensure(race == Race::Leprechauns && !s.race(race).declined, Reason::MissingPower)?;
+        let r = s.regions[region];
+        ensure(r.occupant == Occupant::Race(race), Reason::NotYourRegion)?;
+        if r.cauldron() {
+            self.state.race_mut(race).cauldrons += 1;
+        } else {
+            ensure(s.race(race).cauldrons > 0, Reason::AllCauldronsPlaced)?;
+            self.state.race_mut(race).cauldrons -= 1;
+        }
+        self.state.regions[region].mark(RegionState::CAULDRON, !r.cauldron());
+        Ok(())
+    }
+
+    /// Des pièces changent de main (au plus ce que `from` possède) ; rien si le montant est nul.
+    fn pay(&mut self, kind: Payment, from: Option<usize>, to: Option<usize>, coins: i32, journal: &mut impl Journal) {
+        let coins = match from {
+            Some(p) => coins.min(self.state.players[p].coins),
+            None => coins,
+        };
+        if coins <= 0 {
+            return;
+        }
+        if let Some(p) = from {
+            self.state.players[p].coins -= coins;
+        }
+        if let Some(p) = to {
+            self.state.players[p].coins += coins;
+        }
+        self.emit(journal, Event::Paid { kind, from, to, coins });
     }
 
     fn berserk_roll(&mut self, journal: &mut impl Journal) -> Result<(), Reason> {
@@ -226,8 +368,9 @@ impl<'m> Game<'m> {
             Special::Denied(reason) => return Err(reason),
             Special::NotApplicable => return Err(Reason::DragonImpossible),
         }
-        self.state.race_mut(army).hand -= 1;
-        self.occupy(region, army, 1, How::Dragon, journal);
+        let cost = self.floor(army);
+        self.state.race_mut(army).hand -= cost;
+        self.occupy(region, army, cost, How::Dragon, journal);
         Ok(())
     }
 
@@ -250,6 +393,9 @@ impl<'m> Game<'m> {
         s.regions[region] = RegionState::default();
         s.turn.readied[region] = 0;
         s.last_region = Some(region);
+        if army == Race::Gypsies {
+            s.turn.abandoned.insert(region);
+        }
         let player = s.current;
         self.emit(journal, Event::Abandoned { player, region });
         Ok(())
@@ -272,14 +418,29 @@ impl<'m> Game<'m> {
         }
     }
 
+    /// Barbares et Fées actifs : rien à redéployer à la fin de leur tour.
+    fn no_redeploy(&self, race: Race) -> bool {
+        self.state.phase == Phase::Redeploy
+            && self.state.turn.stage == Stage::Active
+            && matches!(race, Race::Barbarians | Race::Pixies)
+            && !self.state.race(race).declined
+    }
+
+    /// La raison de refuser moins de `floor` jetons dans une région.
+    fn keep_floor(floor: i32) -> Reason {
+        if floor == 1 { Reason::KeepOneToken } else { Reason::KeepTwoTokens }
+    }
+
     fn deploy(&mut self, region: usize, delta: i32) -> Result<(), Reason> {
         let race = self.deploy_race()?;
+        ensure(!self.no_redeploy(race), Reason::NoRedeploy)?;
         let r = self.state.regions[region];
         ensure(r.occupant == Occupant::Race(race), Reason::NotYourRegion)?;
         if delta > 0 {
             ensure(self.state.race(race).hand >= delta, Reason::NoTokenInHand)?;
         } else if delta < 0 {
-            ensure(r.tokens as i64 + delta as i64 >= 1, Reason::KeepOneToken)?;
+            let floor = self.floor(race);
+            ensure(r.tokens as i64 + delta as i64 >= floor as i64, Self::keep_floor(floor))?;
         }
         self.state.race_mut(race).hand -= delta;
         self.state.regions[region].tokens += delta;
@@ -288,6 +449,7 @@ impl<'m> Game<'m> {
 
     fn auto_deploy(&mut self, all: bool) -> Result<(), Reason> {
         let race = self.deploy_race()?;
+        ensure(!self.no_redeploy(race), Reason::NoRedeploy)?;
         if all {
             let target = self.full_deployment(race);
             self.set_tokens(race, &target);
@@ -297,19 +459,28 @@ impl<'m> Game<'m> {
         Ok(())
     }
 
-    fn place(&mut self, placement: &Placement) -> Result<(), Reason> {
+    fn place(&mut self, placement: &Placement, journal: &mut impl Journal) -> Result<(), Reason> {
         ensure(self.state.phase == Phase::Redeploy, Reason::NotRedeployPhase)?;
         let race = self.deploy_race()?;
+        ensure(!self.no_redeploy(race), Reason::NoRedeploy)?;
         let own = self.owned(race);
         let total = self.state.race(race).hand as i64 + self.tokens_on_board(race) as i64;
+        let floor = self.floor(race);
         let mut placed = 0i64;
         for r in own.iter() {
             let n = placement.0[r];
-            ensure(n >= 1, Reason::KeepOneToken)?;
+            // des Kobolds abandonnent la région qu'ils ne peuvent pas garder à 2 (0 jeton)
+            ensure(n >= floor || (floor > 1 && n == 0), Self::keep_floor(floor))?;
             placed += n as i64;
         }
         ensure(placed <= total, Reason::NotEnoughTokens)?;
         self.set_tokens(race, placement);
+        for r in own.iter().filter(|&r| placement.0[r] == 0) {
+            self.state.regions[r] = RegionState::default();
+            self.state.last_region = Some(r);
+            let player = self.state.race(race).owner;
+            self.emit(journal, Event::Abandoned { player, region: r });
+        }
         Ok(())
     }
 
@@ -392,6 +563,7 @@ impl<'m> Game<'m> {
             ensure(!self.state.turn.attacked.contains(target), Reason::AttackedThisTurn)?;
         }
         ensure(!stout || rs.has(Power::Stout), Reason::OnlyStout)?;
+        ensure(!stout || self.state.turn.abandoned.is_empty(), Reason::DeclineAfterAbandon)?;
         self.finish_turn(peace, stout, journal);
         Ok(())
     }
@@ -418,25 +590,29 @@ impl<'m> Game<'m> {
         while s.market.len() < 6 && !s.race_deck.is_empty() && !s.power_deck.is_empty() {
             let race = s.race_deck.remove(0);
             let power = s.power_deck.remove(0);
-            s.market.push(Combo { race, power, coins: 0 });
+            s.market.push(Combo { race, power, coins: 0, tokens: 0 });
         }
         s.race_tail = s.race_tail.min(s.race_deck.len() as u8);
         s.power_tail = s.power_tail.min(s.power_deck.len() as u8);
     }
 
-    /// Reprend en main les jetons du peuple, sauf un par région.
+    /// Reprend en main les jetons du peuple, sauf un par région (deux pour des Kobolds), et ceux mis
+    /// hors du plateau à son tour précédent (Barbares, Fées).
     fn ready_troops(&mut self, race: Race) {
         let mut readied = [0; MAX_REGIONS];
         let mut hand = 0;
+        let floor = self.floor(race);
         for i in self.owned(race).iter() {
             let r = &mut self.state.regions[i];
-            if r.tokens > 1 {
-                readied[i] = r.tokens - 1;
-                hand += r.tokens - 1;
-                r.tokens = 1;
+            if r.tokens > floor {
+                readied[i] = r.tokens - floor;
+                hand += r.tokens - floor;
+                r.tokens = floor;
             }
         }
-        self.state.race_mut(race).hand += hand;
+        let rs = self.state.race_mut(race);
+        rs.hand += hand + i32::from(rs.aside);
+        rs.aside = 0;
         self.state.turn.readied = readied;
     }
 
@@ -502,6 +678,15 @@ impl<'m> Game<'m> {
             amazon_bonus: self.state.turn.amazon_bonus,
         };
         self.emit(journal, event);
+        // Farfadets : chaque Chaudron resté en place rapporte 1 pièce et quitte le jeu
+        if race == Race::Leprechauns {
+            let mut cashed = 0;
+            for i in self.owned(race).iter() {
+                cashed += i32::from(self.state.regions[i].cauldron());
+                self.state.regions[i].mark(RegionState::CAULDRON, false);
+            }
+            self.pay(Payment::Cauldrons, None, Some(pid), cashed, journal);
+        }
     }
 
     /// Chasse l'occupant de la région ; ses jetons sont perdus ou rendus en main.
@@ -531,7 +716,8 @@ impl<'m> Game<'m> {
     }
 
     fn occupy(&mut self, region: usize, race: Race, tokens: i32, how: How, journal: &mut impl Journal) {
-        let was_occupied = !self.state.regions[region].occupant.is_empty();
+        let before = self.state.regions[region];
+        let was_occupied = !before.occupant.is_empty();
         let victim = self.evict(region, how == How::Sorcery);
         let s = &mut self.state;
         let rs = *s.race(race);
@@ -579,6 +765,37 @@ impl<'m> Game<'m> {
             returned: victim.returned,
         };
         self.emit(journal, event);
+        if !self.state.expansions.is_empty() {
+            self.conquest_effects(race, before, &victim, journal);
+        }
+    }
+
+    /// Ce que les extensions ajoutent à une conquête : renforts des Pygmées, pots-de-vin des
+    /// Corrompus, vol des Voleurs, Chaudron pris.
+    fn conquest_effects(&mut self, race: Race, before: RegionState, victim: &Eviction, journal: &mut impl Journal) {
+        let attacker = *self.state.race(race);
+        if let Occupant::Race(v) = victim.occupant {
+            let vs = *self.state.race(v);
+            if v == Race::Pygmies && !vs.declined {
+                for _ in 0..victim.lost {
+                    let value = rng::roll_die(&mut self.state.rng);
+                    let tokens = value.min(self.supply(v)).max(0);
+                    self.state.race_mut(v).hand += tokens;
+                    self.emit(journal, Event::PygmiesReturned { player: vs.owner, value, tokens });
+                }
+            }
+            if vs.owner != attacker.owner {
+                if vs.has(Power::Corrupt) {
+                    self.pay(Payment::Bribe, Some(attacker.owner), Some(vs.owner), 1, journal);
+                }
+                if attacker.has(Power::Ransacking) && !vs.declined {
+                    self.pay(Payment::Theft, Some(vs.owner), Some(attacker.owner), 1, journal);
+                }
+            }
+        }
+        if before.cauldron() {
+            self.pay(Payment::Cauldron, None, Some(attacker.owner), 1, journal);
+        }
     }
 
     fn enter_redeploy(&mut self, journal: &mut impl Journal) {
@@ -606,6 +823,21 @@ impl<'m> Game<'m> {
             }
             self.emit(journal, Event::AmazonsReturned { player, tokens: bonus });
             self.state.turn.amazon_bonus = 0;
+        }
+        if active_stage && matches!(race, Race::Barbarians | Race::Pixies) && !self.state.race(race).declined {
+            // pas de redéploiement : les jetons en main (et pour les Fées, tout ce qui dépasse un par
+            // région) quittent le plateau jusqu'à leur prochain tour
+            let mut aside = 0;
+            if race == Race::Pixies {
+                for i in self.owned(race).iter() {
+                    let r = &mut self.state.regions[i];
+                    aside += r.tokens - 1;
+                    r.tokens = 1;
+                }
+            }
+            let rs = self.state.race_mut(race);
+            rs.aside = u8::try_from(i32::from(rs.aside) + aside + rs.hand).expect("jetons hors du plateau");
+            rs.hand = 0;
         }
         if active_stage && race == Race::Skeletons && !self.state.race(race).declined {
             let raised = (self.state.turn.non_empty / 2).min(self.supply(race));
@@ -647,6 +879,16 @@ impl<'m> Game<'m> {
         let race = self.state.players[pid].active.expect("peuple actif");
         let own = self.owned(race);
         let readied = self.state.turn.readied;
+        // Historiens : +1 à chaque passage en déclin, tant qu'ils sont actifs (et pour le leur)
+        let historian = match self.state.expansions.is_empty() {
+            true => None,
+            false => Race::ALL.iter().copied().find(|&h| {
+                self.state.races[h.index()]
+                    .is_some_and(|hs| hs.power == Power::Historian && (!hs.declined || h == race))
+            }),
+        };
+        // Prêtresses : une seule région garde ses jetons, la Tour d'Ivoire
+        let tower = if race == Race::Priestesses { self.tower_region() } else { None };
         for i in own.iter() {
             let r = &mut self.state.regions[i];
             if race != Race::Ghouls {
@@ -658,9 +900,33 @@ impl<'m> Game<'m> {
             r.hero = false;
             r.dragon = false;
             r.hole = false;
+            r.marks = if race == Race::WhiteLadies { RegionState::LADIES } else { 0 };
+        }
+        if let Some(t) = tower {
+            for i in own.iter().filter(|&i| i != t) {
+                self.state.regions[i] = RegionState::default();
+            }
+            self.state.regions[t].tokens = own.len() as i32;
+        }
+        // de la Horde : les 2 jetons de plus disparaissent (sur les plus grosses piles des Goules, sinon
+        // avec leur région)
+        if self.state.race(race).power == Power::Hordes {
+            for _ in 0..self.tokens_on_board(race) - race.max() {
+                let own = self.owned(race);
+                let stack = own.iter().filter(|&i| self.state.regions[i].tokens > 1);
+                match stack.max_by_key(|&i| self.state.regions[i].tokens) {
+                    Some(i) => self.state.regions[i].tokens -= 1,
+                    None => {
+                        let last = own.iter().last().expect("région du peuple");
+                        self.state.regions[last] = RegionState::default();
+                    }
+                }
+            }
         }
         let rs = self.state.race_mut(race);
         rs.hand = 0;
+        rs.aside = 0;
+        rs.cauldrons = 0;
         rs.declined = true;
         let power = rs.power;
         let p = &mut self.state.players[pid];
@@ -677,6 +943,10 @@ impl<'m> Game<'m> {
             self.remove_race(r);
         }
         self.emit(journal, Event::Declined { player: pid, race, power, removed });
+        if let Some(h) = historian.filter(|&h| self.state.races[h.index()].is_some()) {
+            let owner = self.state.race(h).owner;
+            self.pay(Payment::Historian, None, Some(owner), 1, journal);
+        }
     }
 
     fn finish_turn(&mut self, peace: Option<usize>, stout: bool, journal: &mut impl Journal) {

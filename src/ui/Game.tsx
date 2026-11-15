@@ -42,7 +42,7 @@ export function GameScreen({ s }: { s: UIState }) {
     const common = { g, onClose: closeSheet };
     switch (s.sheet.kind) {
       case 'region':
-        sheet = <RegionSheet {...common} region={s.sheet.region} human={human} />;
+        sheet = <RegionSheet {...common} region={s.sheet.region} from={s.sheet.from} human={human} />;
         break;
       case 'decline':
         sheet = human && g.phase === 'conquest' && <DeclineSheet {...common} />;
@@ -51,7 +51,7 @@ export function GameScreen({ s }: { s: UIState }) {
         sheet = human && g.phase === 'redeploy' && <EndTurnSheet {...common} />;
         break;
       case 'legend':
-        sheet = <LegendSheet onClose={closeSheet} />;
+        sheet = <LegendSheet onClose={closeSheet} expansions={!!g.expansions?.length} />;
         break;
       case 'people':
         sheet = <PeopleSheet key={s.sheet.player} {...common} player={s.sheet.player} me={me} />;
@@ -63,7 +63,9 @@ export function GameScreen({ s }: { s: UIState }) {
   }
 
   let overlay = null;
-  if (s.overlay?.kind === 'die') overlay = <DieOverlay key={s.overlay.event.seq} ev={s.overlay.event} auto={s.overlay.auto} />;
+  if (s.overlay?.kind === 'die')
+    // Mercenaires : le dé raté se rattrape en payant 1 pièce (le choix attend dans la zone d'action)
+    overlay = <DieOverlay key={s.overlay.event.seq} ev={s.overlay.event} auto={s.overlay.auto} hire={g.turn.hire === s.overlay.event.region && g.turn.hire != null} />;
   else if (g.phase === 'gameOver' && s.podium)
     overlay = <GameOverOverlay g={g} me={viewerSeat(s)} onClose={() => setState({ podium: false })} />;
 
@@ -86,7 +88,7 @@ export function GameScreen({ s }: { s: UIState }) {
         </div>
         {s.tab === 'market' && <MarketView g={g} human={human} />}
         {s.tab === 'log' && <LogView g={g} me={me} />}
-        {s.tab === 'rules' && <RulesView />}
+        {s.tab === 'rules' && <RulesView expansions={g.expansions ?? []} />}
       </main>
       <ActionBar s={s} g={g} human={human} />
       <TabBar tab={s.tab} g={g} human={human} />

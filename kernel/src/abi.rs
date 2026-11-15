@@ -19,7 +19,7 @@ use crate::state::{Occupant, State};
 use crate::wire::{self, Malformed, Writer};
 
 /// Version du protocole : à changer à chaque modification incompatible.
-pub const ABI_VERSION: u32 = 4;
+pub const ABI_VERSION: u32 = 5;
 pub const CAPACITY: usize = 16 * 1024;
 
 pub const MALFORMED: i32 = -1;
@@ -158,7 +158,8 @@ pub extern "C" fn kernel_new_game(len: u32) -> i32 {
         let new = wire::decode_new_game(&mut r)?;
         r.done()?;
         let mut events: Vec<Logged> = Vec::new();
-        let state = Game::create(&new.map, new.lost, &new.levels, new.rounds, new.seed, &mut events).state;
+        let state =
+            Game::create(&new.map, new.lost, &new.levels, new.rounds, new.seed, new.expansions, &mut events).state;
         k.game = Some((new.map, state));
         wire::encode_events(&events, w);
         Ok(())
@@ -252,14 +253,28 @@ pub extern "C" fn kernel_income(player: u32) -> i32 {
     })
 }
 
-/// Ce qui est permis maintenant : raison de refuser le déclin (0 : permis), puis pour chaque région
+/// Ce qui est permis maintenant : raisons de refuser le déclin, la reprise des jetons des Intrépides
+/// (`Regroup`) et le choix de la Tour d'Ivoire des Prêtresses (0 : permis), puis pour chaque région
 /// la raison de refuser son abandon (chaque raison : code et paramètre).
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_permissions() -> i32 {
     query(|g, w| {
         wire::encode_reason(g.can_decline().err(), w);
+        wire::encode_reason(g.can_regroup().err(), w);
+        wire::encode_reason(g.can_tower(None).err(), w);
         for region in 0..g.map.len() {
             wire::encode_reason(g.can_abandon(region).err(), w);
+        }
+        Ok(())
+    })
+}
+
+/// Les tirs de Catapulte permis maintenant : pour chacun, région de tir, cible et coût.
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_catapults() -> i32 {
+    query(|g, w| {
+        for (from, region, cost) in g.catapult_options() {
+            w.word(from as u32).word(region as u32).int(cost);
         }
         Ok(())
     })

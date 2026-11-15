@@ -44,8 +44,9 @@ import seaTexture from '../assets/illustrations/texture-sea.webp';
 import lakeTexture from '../assets/illustrations/texture-lake.webp';
 import type { PowerId, RaceId, Terrain } from '../engine/types';
 
-/** Chaque peuple, pouvoir et terrain dispose d’une illustration. */
-export const RACE_ART: Record<RaceId, string> = {
+/** Les illustrations des peuples, pouvoirs et terrains. Les peuples et pouvoirs des extensions n'en ont
+ * pas : leur emoji les représente (`ArtIcon`). */
+export const RACE_ART: Partial<Record<RaceId, string>> = {
   amazons, dwarves, elves, ghouls, giants, halflings, humans,
   orcs, ratmen, skeletons, sorcerers, tritons, trolls, wizards,
 };
