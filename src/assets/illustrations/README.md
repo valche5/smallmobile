@@ -20,8 +20,11 @@ les générations originales. L'export conserve le canal alpha et les proportion
 
 Le marché, les fiches des peuples, la légende et les règles utilisent le
 composant `ArtIcon`. Les noms et les règles restent visibles en texte.
-Les petites pastilles des jetons et les symboles d'action gardent leurs
-repères habituels. La carte applique les textures à toute la surface des
+Les pastilles des jetons et leurs animations (déchirure, retour en main)
+utilisent le même portrait que le marché et les fiches, sélectionné par
+l'identifiant du peuple. Les portraits en déclin sont désaturés ; la couleur
+du joueur et le nombre de jetons restent visibles. Les symboles d'action
+gardent leurs repères habituels. La carte applique les textures à toute la surface des
 sept terrains. Chaque région reçoit une tuile carrée centrée sur elle, de la
 taille de la plus grande région texturée de la carte : l'image n'est jamais
 étirée, le grain est le même partout, et aucune répétition ne tombe à

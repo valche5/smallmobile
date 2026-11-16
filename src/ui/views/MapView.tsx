@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { FEATURE_ICONS, RACES, TERRAINS } from '../../engine/data';
-import { TERRAIN_TEXTURES } from '../art';
+import { FEATURE_ICONS, TERRAINS } from '../../engine/data';
+import { RACE_ART, TERRAIN_TEXTURES } from '../art';
 import { ownerOf } from '../../engine/rules';
 import type { GameState, RaceId, Terrain } from '../../engine/types';
 import { canAct, useStore, type Highlight } from '../store';
@@ -376,7 +376,14 @@ function TokensHome({ gRef, at, torn }: { gRef: { current: SVGGElement | null };
       const el = document.createElement('div');
       el.className = 'token-fly';
       el.style.background = torn.color;
-      el.textContent = RACES[torn.race].icon;
+      const portrait = document.createElement('img');
+      portrait.src = RACE_ART[torn.race];
+      portrait.className = 'art-icon';
+      portrait.width = portrait.height = 20;
+      portrait.alt = '';
+      portrait.setAttribute('aria-hidden', 'true');
+      portrait.draggable = false;
+      el.appendChild(portrait);
       layer.appendChild(el);
       const x0 = from.x + (i - (torn.back - 1) / 2) * 10;
       // une courbe (le compteur est tout en haut : on ne monte jamais au-dessus de lui, hors de l'écran)
@@ -410,9 +417,7 @@ function TornTokens({ at, torn, id }: { at: { cx: number; cy: number }; torn: { 
   const badge = (
     <>
       <circle r={13} fill={torn.color} stroke="#fff" stroke-width={2} />
-      <text y={4.5} class="emo" font-size={13}>
-        {RACES[torn.race].icon}
-      </text>
+      <image href={RACE_ART[torn.race]} x={-11} y={-11} width={22} height={22} />
     </>
   );
   const uid = `torn${Math.abs(id)}`;
@@ -477,9 +482,7 @@ function RegionMarks({ g, id, mark, s }: { g: GameState; id: number; mark?: Mark
     badge = (
       <g>
         <circle r={13} fill={declined ? '#77736c' : color} stroke={declined ? color : '#fff'} stroke-width={declined ? 3 : 2} filter="url(#shadow)" />
-        <text y={4.5} class="emo" font-size={13} filter={declined ? 'url(#gray)' : undefined}>
-          {RACES[r.race].icon}
-        </text>
+        <image href={RACE_ART[r.race]} x={-11} y={-11} width={22} height={22} filter={declined ? 'url(#gray)' : undefined} />
         <circle cx={12} cy={-10} r={7.5} fill="#fff" stroke={color} stroke-width={1.8} />
         <text x={12} y={-6.6} class="count">
           {r.tokens}
