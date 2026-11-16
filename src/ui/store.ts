@@ -1086,7 +1086,6 @@ export function onlineCreate(p: {
   color: string;
   size: number;
   aiLevel: AiLevel;
-  expertLab: string;
   mapSeed: number;
   opponent: 'human' | 'ai';
   expansions?: ExpansionId[];

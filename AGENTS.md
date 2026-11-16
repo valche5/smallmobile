@@ -14,8 +14,8 @@ sans délai peut bloquer la session indéfiniment.
   téléphones (`public/game-kernel.wasm`, hors git, généré par `bun run kernel:build`).
 - `labN/` : les labos de l'IA Expert, un par approche (règles communes : `labtools/README.md`).
   Chacun a son journal, ses données et son cerveau `labN/brain/` (recherche guidée par un réseau
-  `labN/nets/*.bin`), partagé par le labo et le jeu. Dans le jeu, l'Expert de chaque labo listé
-  dans `src/shared/experts.ts` tourne seulement sur le serveur : programme natif
+  `labN/nets/*.bin`), partagé par le labo et le jeu. Le jeu n'a qu'un Expert, celui du labo de
+  `src/shared/experts.ts` (lab17) ; il tourne seulement sur le serveur : programme natif
   `target/release/labN-expert` (construit aussi par `bun run kernel:build`), piloté par
   `src/server/expert.ts`. Un labo figé ne change plus ; les nouveaux travaux vont dans le dernier.
 - `labtools/` : outils communs aux labos (AWS, score des arènes, parties archivées).
@@ -36,7 +36,7 @@ Le service lance `bun server.ts` directement : il ne recompile pas le noyau, d'o
 Le dépôt de travail sur mini est aussi celui que sert la production (`smallmobile.service`, port
 3120, même utilisateur) : ne jamais arrêter un serveur de test par motif (`pkill -f "bun server.ts"`
 arrête aussi la production) ; tester sur un autre port et arrêter le processus par son numéro.
-Dans ce dépôt, `bun run test` et `bun run kernel:build` reconstruisent `target/release/labN-expert`,
+Dans ce dépôt, `bun run test` et `bun run kernel:build` reconstruisent `target/release/labN-expert` (le labo du jeu),
 que le serveur relance à la demande, et `public/game-kernel.wasm` : c'est déjà déployer le code en
 cours (`bun test` seul ne reconstruit rien). Pendant le développement, s'en tenir à `cargo test` et `cargo clippy` (dossier
 `target/debug`), ou construire ailleurs (`CARGO_TARGET_DIR`).

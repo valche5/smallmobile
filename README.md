@@ -39,7 +39,7 @@ automatiquement.
 | ------------------- | ----------------------------------------------------------------- |
 | `bun start`         | Serveur de jeu (`PORT=8080 bun start` pour changer de port)       |
 | `bun run dev`       | Développement avec rechargement à chaud                           |
-| `bun run kernel:build` | Noyau du jeu en WebAssembly (`public/game-kernel.wasm`) et IA Expert de chaque labo (`target/release/labN-expert`), fait par les autres commandes |
+| `bun run kernel:build` | Noyau du jeu en WebAssembly (`public/game-kernel.wasm`) et IA Expert du jeu (`target/release/labN-expert`, labo de `src/shared/experts.ts`), fait par les autres commandes |
 | `bun test`          | Tests : règles, pouvoirs, parties IA, serveur et WebSockets       |
 | `cargo test`        | Tests du noyau Rust (dont l'empreinte de non-régression de l'IA)  |
 | `bun run typecheck` | Vérification TypeScript                                           |

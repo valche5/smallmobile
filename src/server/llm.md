@@ -115,13 +115,12 @@ Les autres champs sont facultatifs :
 - `players` : de 2 à 5 (2 par défaut) ;
 - `opponents` : un niveau pour tous les adversaires, ou une liste d'un niveau par adversaire, parmi
   `facile`, `normal`, `difficile`, `expert` (`expert` par défaut) ;
-- `expert` : la version de l'IA Expert, un labo (`lab1`…) ; la plus récente par défaut ;
 - `seat` : votre place, de 0 (premier à jouer) à `players − 1` (au hasard par défaut) ;
 - `name` : votre nom dans la partie ;
 - `expansions` : les extensions à jouer, une liste parmi `beNotAfraid` (Même pas peur), `cursed`
   (Maauuudits) et `grandDames` (Honneur aux Dames) ; aucune par défaut. Leurs peuples et pouvoirs
   rejoignent les pioches (section 7, ou `GET /llm.md?extensions=…` pour ne lire que ceux de votre
-  partie). L'Expert ne connaît que le jeu de base : avec une extension, l'IA Difficile le remplace ;
+  partie) ;
 - `seed` : un entier positif, pour rejouer la même carte et le même hasard (pioches, dés). Avec les
   mêmes `players` et `seat`, on retrouve la même carte et le même marché de départ (les adversaires
   peuvent jouer autrement). La graine d'une partie finie est donnée dans sa vue (`seed`) ; avant,

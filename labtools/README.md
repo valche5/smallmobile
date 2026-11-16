@@ -15,17 +15,17 @@ Chaque approche de l'IA Expert a son labo, un dossier complet et autonome :
 d'approche) : on part d'une copie élaguée du dernier labo, avec un journal propre et ses propres
 données ; rien n'est converti d'un labo à l'autre, hormis les poids d'un réseau de départ.
 L'ancien labo est alors **figé** : il ne change plus, mais reste compilé tant qu'il sert, comme
-variante de l'Expert dans le jeu (`src/shared/experts.ts`) ou comme adversaire témoin dans
-l'arène d'un labo plus récent (qui dépend alors de son `brain`). Quand il ne sert plus, on le
-supprime (Git le garde) et on le retire de `src/shared/experts.ts`.
+Expert du jeu (`src/shared/experts.ts`, un seul labo) ou comme adversaire témoin dans l'arène
+d'un labo plus récent (qui dépend alors de son `brain`). Quand il ne sert plus, on le supprime
+(Git le garde).
 
 Labos :
 
 | Labo | Approche | État |
 | --- | --- | --- |
-| `lab1` | Recherche AlphaZero sur mondes possibles (boucle ouverte), fins simulées de 3 tours, coups regroupés ; réseaux gen0 à gen11 | Figé le 21 octobre 2026 ; Expert `lab1/gen11` du jeu |
-| `lab2` | Gumbel AlphaZero, nœuds de hasard, coups jeton après jeton, départ de zéro (`lab2/journal.md`) | Figé le 22 octobre 2026 après sa troisième boucle ; Expert `lab2/c060` du jeu, témoin de l'arène de lab3 |
-| `lab3` | Spécialisation puis reprise généraliste, c130 en 128×7 (`lab3/journal.md`) | Figé le 24 octobre 2026 ; Expert `lab3/c130` du jeu |
+| `lab1` | Recherche AlphaZero sur mondes possibles (boucle ouverte), fins simulées de 3 tours, coups regroupés ; réseaux gen0 à gen11 | Figé le 21 octobre 2026 ; ancien Expert `lab1/gen11` du jeu |
+| `lab2` | Gumbel AlphaZero, nœuds de hasard, coups jeton après jeton, départ de zéro (`lab2/journal.md`) | Figé le 22 octobre 2026 après sa troisième boucle ; ancien Expert `lab2/c060` du jeu, témoin de l'arène de lab3 |
+| `lab3` | Spécialisation puis reprise généraliste, c130 en 128×7 (`lab3/journal.md`) | Figé le 24 octobre 2026 ; ancien Expert `lab3/c130` du jeu |
 | `lab4` | Budget, largeur, horizon et cibles de valeur depuis c130 ; essais sans progrès net de l'apprentissage | Figé le 25 octobre 2026 ; résultats dans `lab4/journal.md` |
 | `lab5` | Coups manqués par c130 : alternatives évaluées jusqu'à la fin, sélection et confirmation indépendantes ; reprise directe de lab3 | Figé le 25 octobre 2026 ; **résultats invalides** : calculés en Vulkan bf16 sur NVIDIA, qui calcule faux (erratum de `lab5/journal.md`) |
 | `lab6` | La marge de c130 face à une recherche beaucoup plus longue (arène 16× et 64× les simulations) ; moteur CUDA | Figé le 26 octobre 2026 : 16× = +1,8 ± 2,2, indécis (`lab6/journal.md`) |
@@ -35,9 +35,9 @@ Labos :
 | `lab10` | L'ancrage piKL de la recherche de c130 sur sa politique (`anchor=fixed`, `anchor=raw`), à poids fixes, depuis lab7 ; arènes sur vast.ai | Figé le 30 octobre 2026 : à 16×, ancrage +2,9 ± 1,4 sur mctx ; avec les fins simulées, rien d'établi (+1,7 ± 1,8 à n = 400) ; `lab10/journal.md` |
 | `lab11` | Une boucle d'apprentissage depuis c130 dont le professeur est la meilleure recherche de lab10 (fins simulées à n = 400 et ancrage piKL), sur le PC ; boucle de lab7 | Figé le 30 octobre 2026 : rien en neuf pas de professeur (duels de −0,8 à −2,7, c010 −0,7 ± 2,2) ; `lab11/journal.md` |
 | `lab12` | La riposte du rival dans les fins simulées (`reply=K`, d'après Best Reply Search), à poids fixes, depuis lab10 ; arènes sur vast.ai | Figé le 30 octobre 2026 : `reply=4` −0,4 ± 2,8 sur les fins simulées à n = 100, pour deux fois le calcul ; `lab12/journal.md` |
-| `lab13` | Diagnostic : pourquoi c130 n'apprend pas du professeur de lab11 (D1 à D15 : ni la recette, ni les cibles, ni les entrées, ni les têtes, ni la valeur) ; puis le coût de la recherche au jeu (D16 : `place=1`, évaluations sur plusieurs fils) | Ouvert le 30 octobre 2026 ; plan `lab13/lab.md` ; Expert `lab13/c130` du jeu (fins simulées, n = 100, `light=1,place=1`, fils = cœurs moins un) |
+| `lab13` | Diagnostic : pourquoi c130 n'apprend pas du professeur de lab11 (D1 à D15 : ni la recette, ni les cibles, ni les entrées, ni les têtes, ni la valeur) ; puis le coût de la recherche au jeu (D16 : `place=1`, évaluations sur plusieurs fils) | Ouvert le 30 octobre 2026 ; plan `lab13/lab.md` ; ancien Expert `lab13/c130` du jeu, jusqu'au 16 novembre 2026 (fins simulées, n = 100, `light=1,place=1`, fils = cœurs moins un) |
 | `lab14` | La menace des adversaires en entrée du réseau (16 entrées par région), depuis lab13 ; c130x | Ouvert le 30 octobre 2026 ; plan `lab14/lab.md` |
-| `lab17` | L'Expert des extensions : c130 élargi (poids nuls) aux peuples, pouvoirs et coups des extensions, puis boucle d'auto-jeu avec extensions ; depuis lab13 | Ouvert le 15 novembre 2026 ; Expert `lab17/x1-c036` du jeu pour les parties avec extensions : +35,2 ± 2,3 contre la Difficile, +39,9 ± 3,4 contre c130w (`lab17/journal.md`) |
+| `lab17` | L'Expert des extensions : c130 élargi (poids nuls) aux peuples, pouvoirs et coups des extensions, puis boucle d'auto-jeu avec extensions ; depuis lab13 | Ouvert le 15 novembre 2026 ; seul Expert `lab17/x1-c036` du jeu depuis le 16 novembre 2026 (avant : parties avec extensions seulement) : +35,2 ± 2,3 contre la Difficile, +39,9 ± 3,4 contre c130w (`lab17/journal.md`) |
 
 Outils communs (ce dossier) :
 
@@ -53,8 +53,8 @@ Outils communs (ce dossier) :
 - `bilan.md` : bilan des labos 1 à 9 au 29 octobre 2026 (ce qui a marché ou non, pistes
   inexplorées, recommandation pour reprendre l'apprentissage).
 
-Le jeu propose l'Expert de chaque labo listé dans `src/shared/experts.ts` (le dernier par
-défaut) ; `bun run kernel:build` construit le programme `labN-expert` de chaque labo.
+Le jeu n'a qu'un Expert, celui du labo de `src/shared/experts.ts` ; `bun run kernel:build`
+construit le programme `labN-expert` de ce labo seulement.
 
 ## Protocole de mesure
 

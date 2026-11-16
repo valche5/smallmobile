@@ -1,5 +1,4 @@
 import type { Action, AiLevel, ExpansionId, GameState, LogEntry, MapDef } from '../engine/types';
-import { EXPANSIONS_EXPERT_LAB } from './experts';
 
 /** Messages échangés entre les téléphones et le serveur (JSON sur WebSocket). */
 
@@ -23,9 +22,7 @@ export interface RoomView {
   size: number;
   mapSeed: number;
   aiLevel: AiLevel;
-  /** Le labo dont l'Expert joue les sièges de niveau `expert` (`experts.ts`). */
-  expertLab: string;
-  /** Extensions jouées (vide : jeu de base). L'Expert ne connaît que le jeu de base. */
+  /** Extensions jouées (vide : jeu de base). */
   expansions: ExpansionId[];
   speed: AiSpeed;
   /** Siège qui a réglé la vitesse en dernier (null : réglage d'origine). */
@@ -63,7 +60,6 @@ export type ClientMsg =
       color: string;
       size: number;
       aiLevel: AiLevel;
-      expertLab?: string;
       mapSeed: number;
       opponent?: 'human' | 'ai';
       /** Extensions à jouer (absent : aucune). */
@@ -72,7 +68,7 @@ export type ClientMsg =
   | { t: 'join'; code: string; name: string; color: string }
   /** `shown` : numéro de journal de la dernière trame affichée sur ce téléphone. */
   | { t: 'resume'; code: string; token: string; shown?: number }
-  | { t: 'lobby'; size?: number; aiLevel?: AiLevel; expertLab?: string; mapSeed?: number; name?: string; color?: string; expansions?: ExpansionId[] }
+  | { t: 'lobby'; size?: number; aiLevel?: AiLevel; mapSeed?: number; name?: string; color?: string; expansions?: ExpansionId[] }
   | { t: 'start' }
   | { t: 'action'; id: number; action: Action }
   | { t: 'undo' }
@@ -97,10 +93,4 @@ export function normalizeCode(raw: string): string {
     .toUpperCase()
     .replace(/[^A-Z]/g, '')
     .slice(0, CODE_LENGTH);
-}
-
-/** Le niveau d'IA permis avec ces extensions : sans Expert qui les connaisse (`src/shared/experts.ts`), l'Expert
- * cède la place à Difficile. */
-export function levelFor(level: AiLevel, expansions: readonly ExpansionId[]): AiLevel {
-  return level === 'expert' && expansions.length && !EXPANSIONS_EXPERT_LAB ? 'difficile' : level;
 }

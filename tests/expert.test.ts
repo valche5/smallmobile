@@ -8,7 +8,7 @@ import { currentActor } from '../src/engine/rules';
 import type { Action, GameState, MapDef } from '../src/engine/types';
 import type { ArchivedGame, GameArchive } from '../src/server/archive';
 import { expertOptions, ExpertProcess, type Expert, type ExpertMove } from '../src/server/expert';
-import { DEFAULT_EXPERT_LAB, EXPANSIONS_EXPERT_LAB, EXPERT_LABS } from '../src/shared/experts';
+import { EXPERT_LAB } from '../src/shared/experts';
 import { RoomManager, type Client, type Scheduler } from '../src/server/rooms';
 import type { ServerMsg } from '../src/shared/protocol';
 
@@ -88,7 +88,7 @@ async function playOut(sched: ManualScheduler, host: Phone, rooms: RoomManager, 
 function soloRoom(size: number, aiLevel: 'difficile' | 'expert', expert: Expert | null) {
   const sched = new ManualScheduler();
   const archive = new MemoryArchive();
-  const rooms = new RoomManager(null, sched, { experts: new Map(expert ? [[DEFAULT_EXPERT_LAB, expert]] : []), archive, log: () => {}, firstSeat: () => 0 });
+  const rooms = new RoomManager(null, sched, { expert: expert ?? undefined, archive, log: () => {}, firstSeat: () => 0 });
   const host = new Phone();
   rooms.handle(host, { t: 'create', name: 'Alice', color: PLAYER_COLORS[0]!.color, size, aiLevel, mapSeed: 2024, opponent: 'ai' });
   return { sched, archive, rooms, host };
@@ -99,7 +99,6 @@ describe('seul contre l’IA, sur le serveur', () => {
     const { host } = soloRoom(3, 'difficile', null);
     const room = host.last('room')!.room;
     expect(room.started).toBe(true);
-    expect(room.expertLab).toBe(DEFAULT_EXPERT_LAB);
     expect(room.seats.map((s) => s.kind)).toEqual(['human', 'ai', 'ai']);
     const g = host.game();
     expect(g.players.map((p) => p.ai)).toEqual(['difficile', 'difficile', 'difficile']);
@@ -165,7 +164,7 @@ describe('seul contre l’IA, sur le serveur', () => {
 
 describe('le processus natif de l’Expert', () => {
   test('il répond avec des actions jouables, et se relance après un arrêt', async () => {
-    const opts = expertOptions(EXPERT_LABS.find((l) => l.id === DEFAULT_EXPERT_LAB)!);
+    const opts = expertOptions(EXPERT_LAB);
     expect(ExpertProcess.available(opts)).toBeNull();
     const expert = new ExpertProcess({ ...opts, iterations: 10 });
     try {
@@ -181,7 +180,7 @@ describe('le processus natif de l’Expert', () => {
       for (let decision = 0; decision < 12; decision++) {
         const move = await expert.decide(g);
         expect(move.actions.length).toBeGreaterThan(0);
-        expect(move.net).toBe(`${DEFAULT_EXPERT_LAB}/${basename(opts.net, '.bin')}`);
+        expect(move.net).toBe(`${EXPERT_LAB.id}/${basename(opts.net, '.bin')}`);
         for (const a of move.actions) g = applyAction(g, a);
         if (decision === 5) expert.close();
       }
@@ -192,8 +191,8 @@ describe('le processus natif de l’Expert', () => {
     }
   });
 
-  test('l’Expert des extensions joue une partie entière avec les trois extensions', async () => {
-    const opts = expertOptions(EXPERT_LABS.find((l) => l.id === EXPANSIONS_EXPERT_LAB)!);
+  test('l’Expert joue une partie entière avec les trois extensions', async () => {
+    const opts = expertOptions(EXPERT_LAB);
     expect(ExpertProcess.available(opts)).toBeNull();
     const expert = new ExpertProcess({ ...opts, iterations: 4 });
     try {

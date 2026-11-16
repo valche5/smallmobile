@@ -1,6 +1,5 @@
 import { AI_LEVELS, EXPANSION_IDS, EXPANSIONS, expansionBlurb } from '../../engine/data';
 import type { AiLevel, ExpansionId } from '../../engine/types';
-import { EXPANSIONS_EXPERT_LAB, EXPERT_LABS } from '../../shared/experts';
 
 /** La liste `value` avec l'extension `x` cochée ou non, dans l'ordre du noyau. */
 export function toggleExpansion(value: readonly ExpansionId[], x: ExpansionId, on: boolean): ExpansionId[] {
@@ -29,32 +28,15 @@ export function ExpansionChoice({ value, onToggle }: { value: readonly Expansion
   );
 }
 
-/** Les niveaux d'IA ; avec des extensions et sans Expert qui les connaisse, l'Expert est grisé. */
-export function LevelChoice({ level, expansions, onPick }: { level: AiLevel; expansions: readonly ExpansionId[]; onPick?: (l: AiLevel) => void }) {
-  const noExpert = expansions.length > 0 && !EXPANSIONS_EXPERT_LAB;
-  const expansionsExpert = EXPERT_LABS.find((l) => l.id === EXPANSIONS_EXPERT_LAB);
+/** Les niveaux d'IA. */
+export function LevelChoice({ level, onPick }: { level: AiLevel; onPick?: (l: AiLevel) => void }) {
   return (
-    <>
-      <div class="seg">
-        {AI_LEVELS.map((l) => {
-          const off = noExpert && l.id === 'expert';
-          return (
-            <button
-              key={l.id}
-              class={`${level === l.id ? 'on' : ''} ${off ? 'off' : ''}`}
-              disabled={off || !onPick}
-              title={off ? 'Jeu de base seulement' : undefined}
-              onClick={() => onPick?.(l.id)}
-            >
-              {l.label}
-            </button>
-          );
-        })}
-      </div>
-      {noExpert && <p class="muted small">L'IA Expert ne connaît que le jeu de base : pas d'Expert avec une extension.</p>}
-      {expansions.length > 0 && level === 'expert' && expansionsExpert && (
-        <p class="muted small">Avec des extensions, l'Expert du {expansionsExpert.label} joue.</p>
-      )}
-    </>
+    <div class="seg">
+      {AI_LEVELS.map((l) => (
+        <button key={l.id} class={level === l.id ? 'on' : ''} disabled={!onPick} onClick={() => onPick?.(l.id)}>
+          {l.label}
+        </button>
+      ))}
+    </div>
   );
 }

@@ -9,7 +9,6 @@ import { FACTOR, isShown, newEvents, playbackMs, REDEPLOY_MS, splitFrames, think
 import {
   CODE_ALPHABET,
   CODE_LENGTH,
-  levelFor,
   normalizeCode,
   type AiSpeed,
   type ClientMsg,
@@ -19,9 +18,8 @@ import {
   type ServerMsg,
   type Snapshot,
 } from '../shared/protocol';
-import { EXPERT_LABS, expertFor, expertLab } from '../shared/experts';
 import { expertNets, gameId, type GameArchive } from './archive';
-import type { Expert, Experts } from './expert';
+import type { Expert } from './expert';
 
 /** Un téléphone connecté. */
 export interface Client {
@@ -49,8 +47,6 @@ export interface RoomData {
   size: number;
   mapSeed: number;
   aiLevel: AiLevel;
-  /** Le labo dont l'Expert joue les sièges de niveau `expert` (`src/shared/experts.ts`). */
-  expertLab: string;
   /** Extensions jouées (absent dans les salles d'avant les extensions : aucune). */
   expansions?: ExpansionId[];
   speed: AiSpeed;
@@ -118,7 +114,7 @@ function toWire(game: GameState): GameWire {
 
 /** Ce que le serveur peut confier à d'autres : l'IA Expert, l'archive des parties jouées, le journal. */
 export interface RoomServices {
-  experts?: Experts;
+  expert?: Expert;
   archive?: GameArchive | null;
   /** Le journal du serveur (temps de décision de l'Expert). */
   log?: (line: string) => void;
@@ -128,7 +124,7 @@ export interface RoomServices {
 
 export class RoomManager {
   private rooms = new Map<string, Room>();
-  private experts: Experts;
+  private expert: Expert | undefined;
   private archive: GameArchive | null;
   private log: (line: string) => void;
   private firstSeat: (players: number) => number;
@@ -138,16 +134,15 @@ export class RoomManager {
     private scheduler: Scheduler = realScheduler,
     services: RoomServices = {},
   ) {
-    this.experts = services.experts ?? new Map();
+    this.expert = services.expert;
     this.archive = services.archive ?? null;
     this.log = services.log ?? ((line) => console.log(line));
     this.firstSeat = services.firstSeat ?? ((players) => Math.floor(Math.random() * players));
     for (const data of store?.loadAll() ?? []) {
-      // salles sauvegardées avant les variantes de l'Expert : celle par défaut ; avant les extensions : aucune
+      // salles sauvegardées avant les extensions : aucune
       const expansions = cleanExpansions(data.expansions ?? data.game?.expansions);
       const room: Room = {
         ...data,
-        expertLab: expertLab(data.expertLab),
         expansions,
         clients: new Set(),
         undo: [],
@@ -157,8 +152,6 @@ export class RoomManager {
         history: [],
         plan: null,
       };
-      // salle incohérente (Expert et extensions) : l'IA Difficile tient les sièges de l'Expert
-      this.fitLevels(room);
       this.rooms.set(room.code, room);
       this.scheduleAi(room);
     }
@@ -232,7 +225,7 @@ export class RoomManager {
   private create(client: Client, msg: Extract<ClientMsg, { t: 'create' }>) {
     const size = PRESETS[msg.size] ? msg.size : 2;
     const expansions = cleanExpansions(msg.expansions);
-    const aiLevel = levelFor(LEVELS.includes(msg.aiLevel) ? msg.aiLevel : 'normal', expansions);
+    const aiLevel = LEVELS.includes(msg.aiLevel) ? msg.aiLevel : 'normal';
     const solo = msg.opponent === 'ai';
     const code = this.newCode();
     const token = crypto.randomUUID();
@@ -244,7 +237,6 @@ export class RoomManager {
       size,
       mapSeed: Number.isInteger(msg.mapSeed) ? msg.mapSeed : PRESETS[size]!.seed,
       aiLevel,
-      expertLab: expertLab(msg.expertLab),
       expansions,
       speed: 'normal',
       seats: [
@@ -341,9 +333,6 @@ export class RoomManager {
         room.aiLevel = msg.aiLevel;
         room.seats.forEach((s) => (s.ai = msg.aiLevel!));
       }
-      // des extensions cochées sans Expert qui les connaisse : l'Expert retombe sur Difficile
-      this.fitLevels(room);
-      if (EXPERT_LABS.some((l) => l.id === msg.expertLab)) room.expertLab = msg.expertLab!;
       if (msg.mapSeed !== undefined && Number.isInteger(msg.mapSeed)) room.mapSeed = msg.mapSeed;
     }
     this.fixColors(room, client.seat);
@@ -494,10 +483,7 @@ export class RoomManager {
       const planned = room.plan?.seq === cur.seq ? room.plan.actions[0] : undefined;
       room.plan = null;
       if (planned && this.play(room, cur, planned)) return;
-      // avec des extensions, l'Expert d'un labo qui les connaît (`expertFor`), sinon l'IA Difficile
-      const lab = level === 'expert' ? expertFor(room.expertLab, cur.expansions ?? []) : undefined;
-      const expert = lab ? this.experts.get(lab) : undefined;
-      if (expert) return this.askExpert(room, cur, who, expert);
+      if (level === 'expert' && this.expert) return this.askExpert(room, cur, who, this.expert);
       const start = performance.now();
       let action: Action;
       try {
@@ -618,7 +604,6 @@ export class RoomManager {
       size: room.size,
       mapSeed: room.mapSeed,
       aiLevel: room.aiLevel,
-      expertLab: room.expertLab,
       expansions: room.expansions,
       speed: room.speed,
       speedBy: room.speedBy ?? null,
@@ -699,15 +684,6 @@ export class RoomManager {
       c.seat = (c.seat! - first + n) % n;
       c.send({ t: 'joined', code: room.code, token: room.seats[c.seat]!.token!, seat: c.seat });
     }
-  }
-
-  /** Avec des extensions et sans Expert qui les connaisse, l'Expert cède la place à l'IA Difficile : réglage de
-   * la salle, sièges, et joueurs d'une partie déjà lancée (salle sauvegardée incohérente). */
-  private fitLevels(room: Room) {
-    const xs = room.game ? (room.game.expansions ?? []) : room.expansions;
-    room.aiLevel = levelFor(room.aiLevel, xs);
-    for (const s of room.seats) s.ai = levelFor(s.ai, xs);
-    for (const p of room.game?.players ?? []) p.ai = levelFor(p.ai, xs);
   }
 
   private resizeSeats(room: Room) {

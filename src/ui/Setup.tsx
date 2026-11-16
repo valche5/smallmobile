@@ -2,7 +2,6 @@ import { useState } from 'preact/hooks';
 import { AI_NAMES, PLAYER_COLORS } from '../engine/data';
 import { otherMap, PRESETS } from '../engine/maps';
 import type { AiLevel, ExpansionId } from '../engine/types';
-import { DEFAULT_EXPERT_LAB, EXPERT_LABS } from '../shared/experts';
 import { normalizeCode } from '../shared/protocol';
 import { ExpansionChoice, LevelChoice, toggleExpansion } from './components/Expansions';
 import { MapPreview } from './components/MapPreview';
@@ -57,14 +56,11 @@ function OnlineSetup({ joinCode }: { joinCode: string }) {
   const [size, setSize] = useState(2);
   const [opponent, setOpponent] = useState<'human' | 'ai'>('ai');
   const [aiLevel, setAiLevel] = useState<AiLevel>('normal');
-  const [expertLab, setExpertLab] = useState(DEFAULT_EXPERT_LAB);
   const [customSeed, setCustomSeed] = useState<number | null>(null);
   const [expansions, setExpansions] = useState<ExpansionId[]>([]);
   const chooseExpansion = (x: ExpansionId, on: boolean) => {
     // deux touchers rapprochés : chacun part de la liste la plus récente
     setExpansions((prev) => toggleExpansion(prev, x, on));
-    // l'Expert ne connaît que le jeu de base
-    if (on) setAiLevel((l) => (l === 'expert' ? 'difficile' : l));
   };
   const [code, setCode] = useState(joinCode);
   const seed = customSeed ?? PRESETS[size]!.seed;
@@ -166,16 +162,7 @@ function OnlineSetup({ joinCode }: { joinCode: string }) {
                 ? `Vous contre ${AI_NAMES.slice(0, size - 1).join(', ')}.`
                 : `Carte pour ${size} joueurs : ${size - 2 === 1 ? 'une IA complète' : `${size - 2} IA complètent`} la table (${AI_NAMES.slice(0, size - 2).join(', ')}).`}
             </div>
-            <LevelChoice level={aiLevel} expansions={expansions} onPick={setAiLevel} />
-            {aiLevel === 'expert' && EXPERT_LABS.length > 1 && (
-              <div class="seg">
-                {EXPERT_LABS.map((l) => (
-                  <button key={l.id} class={expertLab === l.id ? 'on' : ''} onClick={() => setExpertLab(l.id)}>
-                    {l.label}
-                  </button>
-                ))}
-              </div>
-            )}
+            <LevelChoice level={aiLevel} onPick={setAiLevel} />
           </div>
         )}
         <MapPreview size={size} seed={seed}>
@@ -192,7 +179,7 @@ function OnlineSetup({ joinCode }: { joinCode: string }) {
         <ExpansionChoice value={expansions} onToggle={chooseExpansion} />
         <button
           class="btn primary big-btn wide"
-          onClick={() => !needName() && onlineCreate({ name: name(), color: me.color, size, aiLevel, expertLab, mapSeed: seed, opponent, expansions })}
+          onClick={() => !needName() && onlineCreate({ name: name(), color: me.color, size, aiLevel, mapSeed: seed, opponent, expansions })}
         >
           {opponent === 'ai' ? 'Jouer' : 'Créer la partie'}
         </button>

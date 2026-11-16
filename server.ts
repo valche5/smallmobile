@@ -4,7 +4,7 @@ import index from './src/index.html';
 import { initEngine } from './src/engine/engine';
 import { loadMaps, mapRecord, PRESETS } from './src/engine/maps';
 import { FileGameArchive } from './src/server/archive';
-import { startExperts, type ExpertProcess } from './src/server/expert';
+import { startExpert, type ExpertProcess } from './src/server/expert';
 import { LlmGames, llmRoutes, llmRules } from './src/server/llm';
 import { RoomManager } from './src/server/rooms';
 import { socketHandlers, upgradeSocket, type SocketData } from './src/server/socket';
@@ -26,20 +26,20 @@ const archive = new FileGameArchive(process.env.GAMES_DIR ?? './data/games');
 const shared = globalThis as {
   __sockets?: Set<ServerWebSocket<SocketData>>;
   __prune?: ReturnType<typeof setInterval>;
-  __experts?: Map<string, ExpertProcess>;
-  __llmExperts?: Map<string, ExpertProcess>;
+  __expert?: ExpertProcess;
+  __llmExpert?: ExpertProcess;
 };
 
-// l'IA Expert : un processus natif par labo ; sans lui, ses sièges jouent comme l'IA Difficile
-for (const e of shared.__experts?.values() ?? []) e.close();
-const experts = (shared.__experts = startExperts((why) => console.warn(`  ${why}`)));
-const rooms = new RoomManager(store, undefined, { experts, archive });
+// l'IA Expert : un processus natif ; sans lui, ses sièges jouent comme l'IA Difficile
+shared.__expert?.close();
+const expert = (shared.__expert = startExpert((why) => console.warn(`  ${why}`)));
+const rooms = new RoomManager(store, undefined, { expert, archive });
 
-// parties jouées par un LLM via l'API (src/server/llm.ts) : leurs propres Expert, pour ne pas retarder
+// parties jouées par un LLM via l'API (src/server/llm.ts) : leur propre Expert, pour ne pas retarder
 // les parties du jeu
-for (const e of shared.__llmExperts?.values() ?? []) e.close();
-const llmExperts = (shared.__llmExperts = startExperts(() => {}));
-const llm = new LlmGames({ experts: llmExperts, archive, dir: process.env.LLM_DIR ?? './data/llm' });
+shared.__llmExpert?.close();
+const llmExpert = (shared.__llmExpert = startExpert(() => {}));
+const llm = new LlmGames({ expert: llmExpert, archive, dir: process.env.LLM_DIR ?? './data/llm' });
 const llmTemplate = await Bun.file('./src/server/llm.md').text();
 
 const lan = Object.values(networkInterfaces())
@@ -85,7 +85,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     store.flush();
     archive.flush();
-    for (const e of [...experts.values(), ...llmExperts.values()]) e.close();
+    expert?.close();
+    llmExpert?.close();
     process.exit(0);
   });
 }

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { PLAYER_COLORS } from '../engine/data';
 import { otherMap, PRESETS } from '../engine/maps';
-import { EXPERT_LABS } from '../shared/experts';
 import type { ExpansionId } from '../engine/types';
 import { ExpansionChoice, LevelChoice, toggleExpansion } from './components/Expansions';
 import { MapPreview } from './components/MapPreview';
@@ -180,16 +179,7 @@ function Room({ s }: { s: UIState }) {
             {room.size > 2 && (
               <div class="extra-ai">
                 <div class="small">Niveau des IA qui complètent la table :</div>
-                <LevelChoice level={room.aiLevel} expansions={room.expansions ?? []} onPick={(l) => onlineSend({ t: 'lobby', aiLevel: l })} />
-                {room.aiLevel === 'expert' && EXPERT_LABS.length > 1 && (
-                  <div class="seg">
-                    {EXPERT_LABS.map((l) => (
-                      <button key={l.id} class={room.expertLab === l.id ? 'on' : ''} onClick={() => onlineSend({ t: 'lobby', expertLab: l.id })}>
-                        {l.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <LevelChoice level={room.aiLevel} onPick={(l) => onlineSend({ t: 'lobby', aiLevel: l })} />
               </div>
             )}
           </>

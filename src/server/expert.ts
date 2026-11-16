@@ -1,6 +1,6 @@
 /**
- * L'IA Expert, jouée par un processus natif à côté du serveur, un par labo (`labN/brain/src/bin/expert.rs`,
- * programme `labN-expert` construit par `bun run kernel:build` ; variantes : `src/shared/experts.ts`) :
+ * L'IA Expert, jouée par un processus natif à côté du serveur (`labN/brain/src/bin/expert.rs`, programme
+ * `labN-expert` construit par `bun run kernel:build` ; le labo : `src/shared/experts.ts`) :
  * le serveur lui envoie la partie, elle renvoie les actions de son coup. Un processus à part ne bloque
  * jamais le serveur ; s'il tombe, il est relancé à la demande suivante.
  */
@@ -10,7 +10,7 @@ import { availableParallelism } from 'node:os';
 import { basename } from 'node:path';
 import { gameWords, readAction } from '../engine/kernel';
 import type { Action, GameState } from '../engine/types';
-import { EXPERT_LABS, type ExpertLab } from '../shared/experts';
+import { EXPERT_LAB, type ExpertLab } from '../shared/experts';
 
 /** Un coup de l'Expert : ses actions, dans l'ordre, et ce qu'en pensait la recherche. */
 export interface ExpertMove {
@@ -27,9 +27,6 @@ export interface ExpertMove {
 export interface Expert {
   decide(g: GameState): Promise<ExpertMove>;
 }
-
-/** Les Expert disponibles, par labo. */
-export type Experts = ReadonlyMap<string, Expert>;
 
 export interface ExpertOptions {
   /** Le labo (`lab1`). */
@@ -60,16 +57,12 @@ export function expertOptions(lab: ExpertLab): ExpertOptions {
   };
 }
 
-/** Un processus par labo dont le programme et le réseau sont là ; `warn` signale les autres. */
-export function startExperts(warn: (why: string) => void): Map<string, ExpertProcess> {
-  const out = new Map<string, ExpertProcess>();
-  for (const lab of EXPERT_LABS) {
-    const opts = expertOptions(lab);
-    const missing = ExpertProcess.available(opts);
-    if (missing) warn(`IA Expert ${lab.id} indisponible : ${missing}`);
-    else out.set(lab.id, new ExpertProcess(opts));
-  }
-  return out;
+/** Le processus de l'Expert du jeu si son programme et son réseau sont là ; sinon `warn` le signale. */
+export function startExpert(warn: (why: string) => void): ExpertProcess | undefined {
+  const opts = expertOptions(EXPERT_LAB);
+  const missing = ExpertProcess.available(opts);
+  if (missing) warn(`IA Expert ${EXPERT_LAB.id} indisponible : ${missing}`);
+  else return new ExpertProcess(opts);
 }
 
 interface Pending {
