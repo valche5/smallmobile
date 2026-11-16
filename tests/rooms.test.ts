@@ -8,6 +8,8 @@ import type { GameState, MapDef } from '../src/engine/types';
 import type { ArchivedGame } from '../src/server/archive';
 import { RoomManager, type Client, type RoomData, type Scheduler } from '../src/server/rooms';
 import type { ClientMsg, ServerMsg } from '../src/shared/protocol';
+import { EXPANSIONS_EXPERT_LAB, EXPERT_LABS, expertFor } from '../src/shared/experts';
+import { levelFor } from '../src/shared/protocol';
 
 class Phone implements Client {
   code: string | null = null;
@@ -317,16 +319,22 @@ describe('parties en ligne', () => {
 });
 
 describe('extensions', () => {
-  /** Un Expert qui compte ses appels et joue comme l'IA du jeu. */
-  function countingExpert() {
-    const calls = { n: 0 };
-    const expert = {
-      decide: async (g: GameState) => {
-        calls.n++;
-        return { actions: [aiAction(g)], value: 0.5, iterations: 1, computeMs: 0, net: 'test/net' };
-      },
-    };
-    return { calls, experts: new Map([['lab13', expert]]) };
+  /** Des Experts (un par labo) qui comptent leurs appels et jouent comme l'IA du jeu. */
+  function countingExpert(labs = EXPERT_LABS.map((l) => l.id)) {
+    const calls = { n: 0, by: {} as Record<string, number> };
+    const experts = new Map(
+      labs.map((lab) => [
+        lab,
+        {
+          decide: async (g: GameState) => {
+            calls.n++;
+            calls.by[lab] = (calls.by[lab] ?? 0) + 1;
+            return { actions: [aiAction(g)], value: 0.5, iterations: 1, computeMs: 0, net: 'test/net' };
+          },
+        },
+      ]),
+    );
+    return { calls, experts };
   }
 
   test('la salle porte ses extensions, de la création à la partie', () => {
@@ -340,40 +348,45 @@ describe('extensions', () => {
     });
     const room = host.last('room')!.room;
     expect(room.expansions).toEqual(['cursed', 'grandDames']);
-    // l'Expert ne connaît que le jeu de base : Difficile à sa place
-    expect(room.aiLevel).toBe('difficile');
-    expect(room.seats.filter((s) => s.kind === 'ai').every((s) => s.ai === 'difficile')).toBe(true);
+    // un Expert connaît les extensions (lab17) : l'Expert reste
+    expect(EXPANSIONS_EXPERT_LAB).toBeDefined();
+    expect(room.aiLevel).toBe('expert');
+    expect(room.seats.filter((s) => s.kind === 'ai').every((s) => s.ai === 'expert')).toBe(true);
     expect(host.game().expansions).toEqual(['cursed', 'grandDames']);
   });
 
-  test("dans le salon : l'hôte coche, l'Expert retombe sur Difficile, les autres ne peuvent rien changer", () => {
+  test("dans le salon : l'hôte coche, l'Expert reste (un labo connaît les extensions), les autres ne peuvent rien changer", () => {
     const { host, guest, send } = setup(3);
     send(host, { t: 'lobby', aiLevel: 'expert' });
     expect(guest.last('room')!.room.aiLevel).toBe('expert');
     send(host, { t: 'lobby', expansions: ['beNotAfraid'] });
     let room = guest.last('room')!.room;
     expect(room.expansions).toEqual(['beNotAfraid']);
-    expect(room.aiLevel).toBe('difficile');
-    expect(room.seats[2]!.ai).toBe('difficile');
-    // Expert demandé avec une extension : refusé d'office
-    send(host, { t: 'lobby', aiLevel: 'expert' });
-    expect(guest.last('room')!.room.aiLevel).toBe('difficile');
+    expect(room.aiLevel).toBe('expert');
+    expect(room.seats[2]!.ai).toBe('expert');
     send(guest, { t: 'lobby', expansions: [] });
     expect(guest.last('room')!.room.expansions).toEqual(['beNotAfraid']);
-    // sans extension, l'Expert redevient possible
     send(host, { t: 'lobby', expansions: [] });
-    send(host, { t: 'lobby', aiLevel: 'expert' });
     room = guest.last('room')!.room;
     expect(room.expansions).toEqual([]);
     expect(room.aiLevel).toBe('expert');
     send(host, { t: 'lobby', expansions: ['beNotAfraid', 'cursed', 'grandDames'] });
     send(host, { t: 'start' });
     expect(host.game().expansions).toEqual(['beNotAfraid', 'cursed', 'grandDames']);
-    expect(host.game().players[2]!.ai).toBe('difficile');
+    expect(host.game().players[2]!.ai).toBe('expert');
   });
 
-  test("jamais d'Expert pour une partie avec extensions, même d'une salle sauvegardée incohérente", () => {
-    const { calls, experts } = countingExpert();
+  test("le labo de l'Expert : celui de la salle, ou avec des extensions le dernier qui les connaît", () => {
+    const lab = EXPANSIONS_EXPERT_LAB!;
+    expect(expertFor('lab13', [])).toBe('lab13');
+    expect(expertFor('lab13', ['cursed'])).toBe(lab);
+    expect(expertFor(lab, ['cursed'])).toBe(lab);
+    expect(expertFor(lab, [])).toBe(lab);
+    expect(levelFor('expert', ['cursed'])).toBe('expert');
+  });
+
+  test("avec extensions, l'Expert d'un labo qui les connaît joue à la place de celui de la salle", async () => {
+    const { calls, experts } = countingExpert(['lab13', EXPANSIONS_EXPERT_LAB!]);
     // une salle de 2 joueurs (humain + IA Expert) avec extensions, sauvegardée avant la règle
     const sched0 = new ManualScheduler();
     const saved: RoomData[] = [];
@@ -383,6 +396,7 @@ describe('extensions', () => {
     r0.handle(host, { t: 'create', name: 'Alice', color: PLAYER_COLORS[0]!.color, size: 2, aiLevel: 'normal', mapSeed: 3, opponent: 'ai', expansions: ['cursed'] });
     const data = structuredClone(saved.at(-1)!);
     data.aiLevel = 'expert';
+    data.expertLab = 'lab13';
     for (const s of data.seats) s.ai = 'expert';
     for (const p of data.game!.players) p.ai = 'expert';
     delete data.expansions; // seule la partie en garde la trace
@@ -391,16 +405,19 @@ describe('extensions', () => {
     const phone = new Phone();
     rooms.handle(phone, { t: 'resume', code: data.code, token: data.seats[0]!.token! });
     expect(phone.last('room')!.room.expansions).toEqual(['cursed']);
-    expect(phone.last('room')!.room.aiLevel).toBe('difficile');
+    expect(phone.last('room')!.room.aiLevel).toBe('expert');
     let id = 0;
     for (let k = 0; k < 400; k++) {
       sched.run();
+      // l'Expert répond plus tard (une promesse)
+      await Bun.sleep(0);
       const g = phone.game();
       if (g.phase === 'gameOver' || g.round > 3) break;
       if (currentActor(g) === 0) rooms.handle(phone, { t: 'action', id: ++id, action: aiAction(g) });
     }
     expect(phone.game().round).toBeGreaterThan(1);
-    expect(calls.n).toBe(0);
+    expect(calls.by['lab13']).toBeUndefined();
+    expect(calls.by[EXPANSIONS_EXPERT_LAB!]).toBeGreaterThan(0);
   });
 
   test("sans extension, l'Expert joue comme avant", () => {

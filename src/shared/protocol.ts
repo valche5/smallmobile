@@ -1,4 +1,5 @@
 import type { Action, AiLevel, ExpansionId, GameState, LogEntry, MapDef } from '../engine/types';
+import { EXPANSIONS_EXPERT_LAB } from './experts';
 
 /** Messages échangés entre les téléphones et le serveur (JSON sur WebSocket). */
 
@@ -98,7 +99,8 @@ export function normalizeCode(raw: string): string {
     .slice(0, CODE_LENGTH);
 }
 
-/** Le niveau d'IA permis avec ces extensions : l'Expert ne connaît que le jeu de base, il cède la place à Difficile. */
+/** Le niveau d'IA permis avec ces extensions : sans Expert qui les connaisse (`src/shared/experts.ts`), l'Expert
+ * cède la place à Difficile. */
 export function levelFor(level: AiLevel, expansions: readonly ExpansionId[]): AiLevel {
-  return level === 'expert' && expansions.length ? 'difficile' : level;
+  return level === 'expert' && expansions.length && !EXPANSIONS_EXPERT_LAB ? 'difficile' : level;
 }

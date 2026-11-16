@@ -8,7 +8,7 @@ import { currentActor } from '../src/engine/rules';
 import type { Action, GameState, MapDef } from '../src/engine/types';
 import type { ArchivedGame, GameArchive } from '../src/server/archive';
 import { expertOptions, ExpertProcess, type Expert, type ExpertMove } from '../src/server/expert';
-import { DEFAULT_EXPERT_LAB, EXPERT_LABS } from '../src/shared/experts';
+import { DEFAULT_EXPERT_LAB, EXPANSIONS_EXPERT_LAB, EXPERT_LABS } from '../src/shared/experts';
 import { RoomManager, type Client, type Scheduler } from '../src/server/rooms';
 import type { ServerMsg } from '../src/shared/protocol';
 
@@ -191,4 +191,26 @@ describe('le processus natif de l’Expert', () => {
       expert.close();
     }
   });
+
+  test('l’Expert des extensions joue une partie entière avec les trois extensions', async () => {
+    const opts = expertOptions(EXPERT_LABS.find((l) => l.id === EXPANSIONS_EXPERT_LAB)!);
+    expect(ExpertProcess.available(opts)).toBeNull();
+    const expert = new ExpertProcess({ ...opts, iterations: 4 });
+    try {
+      let g = createGame({
+        players: [0, 1, 2, 3].map((i) => ({ name: `J${i}`, color: PLAYER_COLORS[i]!.color, kind: 'ai' as const, ai: 'expert' as const })),
+        mapSeed: 7,
+        seed: 12,
+        expansions: ['beNotAfraid', 'cursed', 'grandDames'],
+      });
+      for (let decision = 0; decision < 3000 && g.phase !== 'gameOver'; decision++) {
+        const move = await expert.decide(g);
+        expect(move.actions.length).toBeGreaterThan(0);
+        for (const a of move.actions) g = applyAction(g, a);
+      }
+      expect(g.phase).toBe('gameOver');
+    } finally {
+      expert.close();
+    }
+  }, 120_000);
 });

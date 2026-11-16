@@ -9,7 +9,7 @@ import { currentActor } from '../src/engine/rules';
 import type { Action, GameState } from '../src/engine/types';
 import { FileGameArchive, type ArchivedGame, type GameArchive } from '../src/server/archive';
 import type { Expert, ExpertMove } from '../src/server/expert';
-import { DEFAULT_EXPERT_LAB } from '../src/shared/experts';
+import { DEFAULT_EXPERT_LAB, EXPANSIONS_EXPERT_LAB } from '../src/shared/experts';
 import { legalActions, LlmError, LlmGames, llmRoutes, llmRules, type LlmView } from '../src/server/llm';
 
 /** Un Expert de test : l'IA du noyau, qui joue d'un coup toute sa fin de tour (comme l'Expert). */
@@ -102,14 +102,15 @@ describe('parties pour un LLM', () => {
     expect(kept!.expert).toEqual(['test']);
   });
 
-  test('avec les extensions : prix réels, nouveaux coups proposés et acceptés, jamais d’Expert', async () => {
+  test('avec les extensions : prix réels, nouveaux coups proposés et acceptés, l’Expert des extensions', async () => {
     const expert = new FakeExpert();
-    const games = new LlmGames({ experts: new Map([[DEFAULT_EXPERT_LAB, expert]]), archive: null, dir: null });
+    // l'Expert des extensions joue les parties avec extensions, quel que soit le labo demandé
+    const games = new LlmGames({ experts: new Map([[EXPANSIONS_EXPERT_LAB!, expert]]), archive: null, dir: null });
     expect((await rejected(games.create({ model: 'm', expansions: ['nope'] }))).status).toBe(400);
     let v = await games.create({ model: 'claude-test', players: 3, seat: 0, seed: 9, expansions: ['beNotAfraid', 'cursed', 'grandDames'] });
     expect(v.text).toContain('Extensions : Même pas peur');
     expect(v.text).toContain('/llm.md?extensions=beNotAfraid,cursed,grandDames');
-    expect(games.game(v.id).players.map((p) => p.ai)).toEqual(['normal', 'difficile', 'difficile']);
+    expect(games.game(v.id).players.map((p) => p.ai)).toEqual(['normal', 'expert', 'expert']);
     // en tête du marché, une combinaison qui a des coups d'extension (Farfadets Mercenaires)
     const g0 = games.game(v.id);
     g0.raceDeck = g0.raceDeck.filter((r) => r !== 'leprechauns');
@@ -135,7 +136,8 @@ describe('parties pour un LLM', () => {
       v = await games.act(v.id, extra?.action ?? choose(v));
       expect(++moves).toBeLessThan(3000);
     }
-    expect(expert.calls).toBe(0);
+    // l'Expert par défaut connaît les extensions : c'est lui qui joue
+    expect(expert.calls).toBeGreaterThan(0);
     expect(games.game(v.id).expansions).toEqual(['beNotAfraid', 'cursed', 'grandDames']);
     expect(seen.has('hire')).toBe(true);
     expect(seen.has('cauldron')).toBe(true);

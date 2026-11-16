@@ -37,6 +37,7 @@ Labos :
 | `lab12` | La riposte du rival dans les fins simulées (`reply=K`, d'après Best Reply Search), à poids fixes, depuis lab10 ; arènes sur vast.ai | Figé le 30 octobre 2026 : `reply=4` −0,4 ± 2,8 sur les fins simulées à n = 100, pour deux fois le calcul ; `lab12/journal.md` |
 | `lab13` | Diagnostic : pourquoi c130 n'apprend pas du professeur de lab11 (D1 à D15 : ni la recette, ni les cibles, ni les entrées, ni les têtes, ni la valeur) ; puis le coût de la recherche au jeu (D16 : `place=1`, évaluations sur plusieurs fils) | Ouvert le 30 octobre 2026 ; plan `lab13/lab.md` ; Expert `lab13/c130` du jeu (fins simulées, n = 100, `light=1,place=1`, fils = cœurs moins un) |
 | `lab14` | La menace des adversaires en entrée du réseau (16 entrées par région), depuis lab13 ; c130x | Ouvert le 30 octobre 2026 ; plan `lab14/lab.md` |
+| `lab17` | L'Expert des extensions : c130 élargi (poids nuls) aux peuples, pouvoirs et coups des extensions, puis boucle d'auto-jeu avec extensions ; depuis lab13 | Ouvert le 15 novembre 2026 ; Expert `lab17/x1-c036` du jeu pour les parties avec extensions : +35,2 ± 2,3 contre la Difficile, +39,9 ± 3,4 contre c130w (`lab17/journal.md`) |
 
 Outils communs (ce dossier) :
 

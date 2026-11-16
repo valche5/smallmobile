@@ -19,7 +19,7 @@ import {
   type ServerMsg,
   type Snapshot,
 } from '../shared/protocol';
-import { EXPERT_LABS, expertLab } from '../shared/experts';
+import { EXPERT_LABS, expertFor, expertLab } from '../shared/experts';
 import { expertNets, gameId, type GameArchive } from './archive';
 import type { Expert, Experts } from './expert';
 
@@ -341,7 +341,7 @@ export class RoomManager {
         room.aiLevel = msg.aiLevel;
         room.seats.forEach((s) => (s.ai = msg.aiLevel!));
       }
-      // des extensions cochées : l'Expert retombe sur Difficile
+      // des extensions cochées sans Expert qui les connaisse : l'Expert retombe sur Difficile
       this.fitLevels(room);
       if (EXPERT_LABS.some((l) => l.id === msg.expertLab)) room.expertLab = msg.expertLab!;
       if (msg.mapSeed !== undefined && Number.isInteger(msg.mapSeed)) room.mapSeed = msg.mapSeed;
@@ -494,8 +494,9 @@ export class RoomManager {
       const planned = room.plan?.seq === cur.seq ? room.plan.actions[0] : undefined;
       room.plan = null;
       if (planned && this.play(room, cur, planned)) return;
-      // l'Expert ne connaît que le jeu de base : jamais appelé pour une partie avec extensions
-      const expert = level === 'expert' && !cur.expansions?.length ? this.experts.get(room.expertLab) : undefined;
+      // avec des extensions, l'Expert d'un labo qui les connaît (`expertFor`), sinon l'IA Difficile
+      const lab = level === 'expert' ? expertFor(room.expertLab, cur.expansions ?? []) : undefined;
+      const expert = lab ? this.experts.get(lab) : undefined;
       if (expert) return this.askExpert(room, cur, who, expert);
       const start = performance.now();
       let action: Action;
@@ -700,8 +701,8 @@ export class RoomManager {
     }
   }
 
-  /** Avec des extensions, l'Expert (jeu de base seulement) cède la place à l'IA Difficile : réglage de la salle,
-   * sièges, et joueurs d'une partie déjà lancée (salle sauvegardée incohérente). */
+  /** Avec des extensions et sans Expert qui les connaisse, l'Expert cède la place à l'IA Difficile : réglage de
+   * la salle, sièges, et joueurs d'une partie déjà lancée (salle sauvegardée incohérente). */
   private fitLevels(room: Room) {
     const xs = room.game ? (room.game.expansions ?? []) : room.expansions;
     room.aiLevel = levelFor(room.aiLevel, xs);

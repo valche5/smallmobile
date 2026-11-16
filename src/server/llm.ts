@@ -32,7 +32,7 @@ import { randomSeed } from '../engine/rng';
 import { allTargets, catapultShots, currentActor, pickCost, ranking, regionsOf, tokensOnBoard } from '../engine/rules';
 import type { Action, AiLevel, AiThought, ExpansionId, GameState, RaceId } from '../engine/types';
 import { levelFor } from '../shared/protocol';
-import { EXPERT_LABS, expertLab } from '../shared/experts';
+import { EXPERT_LABS, expertFor, expertLab } from '../shared/experts';
 import { expertNets, gameId, type ArchivedGame, type GameArchive } from './archive';
 import type { Experts } from './expert';
 
@@ -235,8 +235,9 @@ export class LlmGames {
       if (g.phase === 'gameOver' || who === null || who === entry.seat) return;
       const level = g.players[who]!.ai;
       const start = performance.now();
-      // l'Expert ne connaît que le jeu de base
-      const expert = level === 'expert' && !g.expansions?.length ? this.opts.experts.get(entry.expertLab) : undefined;
+      // avec des extensions, l'Expert d'un labo qui les connaît (`expertFor`), sinon l'IA Difficile
+      const lab = level === 'expert' ? expertFor(entry.expertLab, g.expansions ?? []) : undefined;
+      const expert = lab ? this.opts.experts.get(lab) : undefined;
       if (expert) {
         try {
           const move = await expert.decide(g);

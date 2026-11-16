@@ -100,12 +100,12 @@ describe('serveur WebSocket', () => {
     const joined = alice.next('joined');
     alice.send({ t: 'create', name: 'Alice', color: '#d62839', size: 4, aiLevel: 'expert', mapSeed: 4044, opponent: 'human' });
     await joined;
-    // l'hôte coche les extensions dans le salon : tout le monde le voit, l'Expert cède la place
+    // l'hôte coche les extensions dans le salon : tout le monde le voit, l'Expert reste (un labo les connaît)
     const room = alice.next('room', (m) => m.room.expansions.length === 3);
     alice.send({ t: 'lobby', expansions: ['beNotAfraid', 'cursed', 'grandDames'] });
     const r = (await room).room;
-    expect(r.aiLevel).toBe('difficile');
-    expect(r.seats.filter((s) => s.kind === 'ai').map((s) => s.ai)).toEqual(['difficile', 'difficile']);
+    expect(r.aiLevel).toBe('expert');
+    expect(r.seats.filter((s) => s.kind === 'ai').map((s) => s.ai)).toEqual(['expert', 'expert']);
   });
 
   test('un code inconnu est refusé', async () => {
